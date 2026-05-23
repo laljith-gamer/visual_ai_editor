@@ -38,9 +38,17 @@ DEFAULT_PROMPT = (
 RUNNING_PROCESSES: dict[str, subprocess.Popen] = {}
 
 app = FastAPI(title="Universal Video Shorts Editor")
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,https://visual-ai-editor-ten.vercel.app",
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
