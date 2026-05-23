@@ -6,11 +6,13 @@ import {
   Download,
   Film,
   FileVideo,
+  History,
   Loader2,
   ListVideo,
   MessageSquare,
   PanelRight,
   Play,
+  Plus,
   Send,
   Sparkles,
   Upload,
@@ -20,8 +22,11 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
-const DEFAULT_PROMPT =
-  "Make a 30 second short from the strongest visual moments. Keep the parts that best match my request and skip boring, static, blurry, or repeated footage.";
+const SESSION_STORAGE_KEY = "visual_ai_editor.sessions.v1";
+const ACTIVE_SESSION_KEY = "visual_ai_editor.active_session.v1";
+const MAX_LOCAL_SESSIONS = 12;
+const INITIAL_ASSISTANT_MESSAGE =
+  "Upload any video and tell me what kind of short you want. If details are missing, I'll ask before spending time on analysis.";
 
 type Highlight = {
   index: number;
@@ -75,6 +80,16 @@ type JobPayload = {
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+};
+
+type ChatSession = {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messages: ChatMessage[];
+  memory: EditorMemory;
+  conversationBrief: string;
+  jobSnapshot?: JobPayload | null;
 };
 
 type EditorMemory = {
@@ -149,6 +164,42 @@ function statusLabel(status?: JobPayload["status"]) {
   return status;
 }
 
+function initialMessages(): ChatMessage[] {
+  return [{ role: "assistant", content: INITIAL_ASSISTANT_MESSAGE }];
+}
+
+function createSessionId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function sessionTitle(messages: ChatMessage[], conversationBrief: string) {
+  const userMessage = messages.find((message) => message.role === "user")?.content || conversationBrief || "New edit";
+  const compact = userMessage.replace(/\s+/g, " ").trim();
+  return compact.length > 42 ? `${compact.slice(0, 39)}...` : compact || "New edit";
+}
+
+function readStoredSessions(): ChatSession[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SESSION_STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is ChatSession => Boolean(item?.id && Array.isArray(item.messages)))
+      .slice(0, MAX_LOCAL_SESSIONS);
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredSessions(sessions: ChatSession[], activeSessionId: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessions.slice(0, MAX_LOCAL_SESSIONS)));
+  window.localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId);
+}
+
 export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -158,13 +209,10 @@ export default function Home() {
   const [memory, setMemory] = useState<EditorMemory>({});
   const [conversationBrief, setConversationBrief] = useState("");
   const [timelineOpen, setTimelineOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      content:
-        "Upload any video and tell me what kind of short you want. If details are missing, I'll ask before spending time on analysis.",
-    },
-  ]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState("");
+  const [hydrated, setHydrated] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages());
 
   const progress = useMemo(() => progressFromLog(job ?? undefined), [job]);
   const previewSource =
@@ -180,31 +228,58 @@ export default function Home() {
   const isWorking = job?.status === "running" || isSubmitting;
 
   useEffect(() => {
-    async function loadLatestJob() {
-      const response = await fetch(`${API_BASE}/api/jobs`);
-      if (!response.ok) return;
-      const payload = (await response.json()) as { jobs: JobPayload[] };
-      const latest = payload.jobs?.[0];
-      if (!latest) return;
-      setJob(latest);
-      setPrompt("");
-      setMemory(latest.memory ?? {});
-      setConversationBrief(latest.resolved_prompt || latest.prompt || "");
-      setMessages([
-        {
-          role: "assistant",
-          content:
-            "I loaded the most recent edit job. You can ask for another version and I will reuse the saved video analysis instead of scanning the whole video again.",
-        },
-        {
-          role: "user",
-          content: latest.prompt || DEFAULT_PROMPT,
-        },
-      ]);
-    }
+    const storedSessions = readStoredSessions();
+    const activeId = window.localStorage.getItem(ACTIVE_SESSION_KEY);
+    const restored = storedSessions.find((item) => item.id === activeId) ?? storedSessions[0];
 
-    loadLatestJob().catch(() => undefined);
+    if (restored) {
+      setSessions(storedSessions);
+      setActiveSessionId(restored.id);
+      setMessages(restored.messages.length ? restored.messages : initialMessages());
+      setMemory(restored.memory ?? {});
+      setConversationBrief(restored.conversationBrief ?? "");
+      setJob(restored.jobSnapshot ?? null);
+    } else {
+      const newSession: ChatSession = {
+        id: createSessionId(),
+        title: "New edit",
+        updatedAt: Date.now(),
+        messages: initialMessages(),
+        memory: {},
+        conversationBrief: "",
+        jobSnapshot: null,
+      };
+      setSessions([newSession]);
+      setActiveSessionId(newSession.id);
+      writeStoredSessions([newSession], newSession.id);
+    }
+    setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated || !activeSessionId) return;
+
+    setSessions((current) => {
+      const existing = current.find((item) => item.id === activeSessionId);
+      const updated: ChatSession = {
+        id: activeSessionId,
+        title: sessionTitle(messages, conversationBrief),
+        updatedAt: Date.now(),
+        messages,
+        memory,
+        conversationBrief,
+        jobSnapshot: job,
+      };
+      const next = [updated, ...current.filter((item) => item.id !== activeSessionId)]
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, MAX_LOCAL_SESSIONS);
+      if (!existing && current.length >= MAX_LOCAL_SESSIONS) {
+        next.length = MAX_LOCAL_SESSIONS;
+      }
+      writeStoredSessions(next, activeSessionId);
+      return next;
+    });
+  }, [activeSessionId, conversationBrief, hydrated, job, memory, messages]);
 
   useEffect(() => {
     if (!job || job.status === "completed" || job.status === "failed") {
@@ -250,6 +325,43 @@ export default function Home() {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [timelineOpen]);
+
+  function startNewChat() {
+    const newSession: ChatSession = {
+      id: createSessionId(),
+      title: "New edit",
+      updatedAt: Date.now(),
+      messages: initialMessages(),
+      memory: {},
+      conversationBrief: "",
+      jobSnapshot: null,
+    };
+    const next = [newSession, ...sessions].slice(0, MAX_LOCAL_SESSIONS);
+    setSessions(next);
+    setActiveSessionId(newSession.id);
+    setPrompt("");
+    setFile(null);
+    setJob(null);
+    setActivePreview("");
+    setTimelineOpen(false);
+    setMemory({});
+    setConversationBrief("");
+    setMessages(newSession.messages);
+    writeStoredSessions(next, newSession.id);
+  }
+
+  function restoreSession(session: ChatSession) {
+    setActiveSessionId(session.id);
+    setPrompt("");
+    setFile(null);
+    setJob(session.jobSnapshot ?? null);
+    setActivePreview("");
+    setTimelineOpen(false);
+    setMemory(session.memory ?? {});
+    setConversationBrief(session.conversationBrief ?? "");
+    setMessages(session.messages.length ? session.messages : initialMessages());
+    writeStoredSessions(sessions, session.id);
+  }
 
   async function submitJob(event: FormEvent) {
     event.preventDefault();
@@ -385,6 +497,10 @@ export default function Home() {
           </div>
         </div>
         <div className="topbar-actions">
+          <button className="utility-button" type="button" onClick={startNewChat}>
+            <Plus size={15} />
+            New Chat
+          </button>
           <div className="metric-pill">
             <FileVideo size={15} />
             <span>{job?.predictions_count ?? 0} samples</span>
@@ -499,6 +615,26 @@ export default function Home() {
               {!memory.duration_seconds && !memory.format && !(memory.styles?.length) && !(memory.keep?.length) && !(memory.skip?.length) && (
                 <span>waiting for edit details</span>
               )}
+            </div>
+          </div>
+
+          <div className="history-panel">
+            <div className="history-title">
+              <History size={14} />
+              <span>Browser History</span>
+            </div>
+            <div className="history-list">
+              {sessions.map((session) => (
+                <button
+                  className={`history-item ${session.id === activeSessionId ? "active" : ""}`}
+                  type="button"
+                  key={session.id}
+                  onClick={() => restoreSession(session)}
+                >
+                  <span>{session.title}</span>
+                  <small>{session.memory.duration_seconds ? `${session.memory.duration_seconds}s` : "local"}</small>
+                </button>
+              ))}
             </div>
           </div>
 

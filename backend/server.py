@@ -91,11 +91,15 @@ def write_json(path: Path, data: Any) -> None:
 
 
 def read_memory() -> dict[str, Any]:
+    if os.getenv("ENABLE_SERVER_MEMORY") != "1":
+        return {}
     memory = read_json(MEMORY_PATH, {})
     return memory if isinstance(memory, dict) else {}
 
 
 def write_memory(memory: dict[str, Any]) -> None:
+    if os.getenv("ENABLE_SERVER_MEMORY") != "1":
+        return
     write_json(MEMORY_PATH, memory)
 
 
@@ -261,9 +265,7 @@ def agent_check_result(
     incoming_memory: dict[str, Any] | None = None,
     supplied_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    merged_memory = read_memory()
-    if incoming_memory:
-        merged_memory.update(incoming_memory)
+    merged_memory = dict(incoming_memory or {})
     candidate_memory = extract_memory(prompt, merged_memory)
     result = build_agent_plan(prompt, has_video, candidate_memory, DEFAULT_PROMPT, supplied_plan=supplied_plan)
     missing_questions = []

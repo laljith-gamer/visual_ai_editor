@@ -140,7 +140,8 @@ h2 {
 }
 
 .metric-pill,
-.status-pill {
+.status-pill,
+.utility-button {
   background: var(--panel-strong);
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -149,6 +150,23 @@ h2 {
   min-height: 34px;
   padding: 0 12px;
   white-space: nowrap;
+}
+
+.utility-button {
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 740;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.utility-button:hover {
+  background: #17291d;
+  border-color: rgba(87, 199, 133, 0.68);
+  color: var(--accent-strong);
 }
 
 .status-pill {
@@ -458,6 +476,75 @@ h2 {
   padding: 12px;
 }
 
+.history-panel {
+  background: #11140f;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  max-height: 180px;
+  min-height: 0;
+  padding: 12px;
+}
+
+.history-title {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 11px;
+  font-weight: 760;
+  gap: 7px;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.history-list {
+  display: grid;
+  gap: 7px;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.history-item {
+  align-items: center;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 36px;
+  min-width: 0;
+  padding: 0 9px;
+  text-align: left;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.history-item:hover,
+.history-item.active {
+  background: #17291d;
+  border-color: rgba(87, 199, 133, 0.62);
+}
+
+.history-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item small {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
 .memory-tags {
   display: flex;
   flex-wrap: wrap;
@@ -663,6 +750,7 @@ h2 {
   .side-panel .upload-zone,
   .side-panel .meter,
   .side-panel .memory-panel,
+  .side-panel .history-panel,
   .side-panel .timeline-button,
   .side-panel .export-button {
     grid-column: 2;
@@ -711,6 +799,7 @@ h2 {
   .side-panel .upload-zone,
   .side-panel .meter,
   .side-panel .memory-panel,
+  .side-panel .history-panel,
   .side-panel .timeline-button,
   .side-panel .export-button,
   .preview-frame {
