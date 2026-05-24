@@ -38,6 +38,19 @@ DEFAULT_PROMPT = (
 )
 
 RUNNING_PROCESSES: dict[str, subprocess.Popen] = {}
+ROBOFLOW_CLIENT: Any = None
+
+DEFAULT_BROWSER_SCENARIOS = [
+    "player hitting enemy successfully",
+    "enemy taking visible damage",
+    "enemy defeated death animation",
+    "boss fight major combat",
+    "cinematic cutscene story",
+    "exploration walking idle",
+    "menu loading screen inventory",
+    "static boring repeated gameplay",
+    "black blank blurry frame",
+]
 
 app = FastAPI(title="Universal Video Shorts Editor")
 allowed_origins = [
@@ -56,6 +69,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/media", StaticFiles(directory=JOBS_DIR), name="media")
+
+
+def get_roboflow_client() -> Any:
+    global ROBOFLOW_CLIENT
+    if ROBOFLOW_CLIENT is None:
+        api_key = os.getenv("ROBOFLOW_API_KEY")
+        if not api_key:
+            raise RuntimeError("ROBOFLOW_API_KEY is not configured")
+        from inference_sdk import InferenceHTTPClient
+
+        ROBOFLOW_CLIENT = InferenceHTTPClient.init(
+            api_url=os.getenv("ROBOFLOW_API_URL", "https://serverless.roboflow.com"),
+            api_key=api_key,
+        )
+    return ROBOFLOW_CLIENT
+
+
+def compact_scenarios(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return DEFAULT_BROWSER_SCENARIOS
+    scenarios = []
+    seen = set()
+    for item in value:
+        label = " ".join(str(item or "").replace("\n", " ").split()).strip()
+        key = label.lower()
+        if label and key not in seen:
+            scenarios.append(label[:70])
+            seen.add(key)
+    return scenarios[:12] or DEFAULT_BROWSER_SCENARIOS
+
+
+def fallback_frame_label(scenarios: list[str]) -> str:
+    for label in scenarios:
+        lowered = label.lower()
+        if not any(term in lowered for term in ("black", "blank", "blur", "boring", "static", "menu", "loading")):
+            return label
+    return scenarios[0]
 
 
 def read_json(path: Path, fallback: Any) -> Any:
@@ -450,6 +500,66 @@ def agent_check(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if result["ready"]:
         write_memory(result["memory"])
     return result
+
+
+@app.post("/api/browser/analyze")
+def analyze_browser_frames(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    frames = payload.get("frames")
+    if not isinstance(frames, list) or not frames:
+        raise HTTPException(status_code=400, detail="frames must be a non-empty list")
+    if len(frames) > 8:
+        raise HTTPException(status_code=400, detail="send at most 8 frames per request")
+
+    scenarios = compact_scenarios(payload.get("scenarios"))
+    workspace = os.getenv("ROBOFLOW_WORKSPACE", "games-workspace-nzhum")
+    workflow_id = os.getenv("ROBOFLOW_WORKFLOW_ID", "video-scene-classifier-1779475704669")
+    predictions = []
+
+    for index, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            continue
+        try:
+            second = float(frame.get("second") or 0)
+        except (TypeError, ValueError):
+            second = 0.0
+        image_value = str(frame.get("image") or "")
+        if "," in image_value:
+            image_value = image_value.split(",", 1)[1]
+        if not image_value:
+            continue
+
+        try:
+            result = get_roboflow_client().run_workflow(
+                workspace_name=workspace,
+                workflow_id=workflow_id,
+                images={"image": image_value},
+                parameters={"scenarios": scenarios},
+                use_cache=True,
+            )
+            frame_result = result[0] if result else {}
+            label = frame_result.get("scene_label") or fallback_frame_label(scenarios)
+            confidence = frame_result.get("confidence")
+            all_scores = frame_result.get("all_scores")
+        except Exception as exc:
+            label = fallback_frame_label(scenarios)
+            confidence = 0.35
+            all_scores = []
+            frame_result = {"fallback": True, "fallback_reason": f"{type(exc).__name__}: {exc}"}
+
+        predictions.append(
+            {
+                "second": second,
+                "frame": int(frame.get("frame") or index),
+                "scene": label,
+                "confidence": confidence if isinstance(confidence, (int, float)) else 0.35,
+                "all_scores": all_scores if isinstance(all_scores, list) else [],
+                "scenarios": scenarios,
+                "fallback": bool(frame_result.get("fallback")),
+                "fallback_reason": frame_result.get("fallback_reason"),
+            }
+        )
+
+    return {"predictions": predictions, "scenarios": scenarios}
 
 
 @app.post("/api/jobs")

@@ -25,7 +25,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 const SESSION_STORAGE_KEY = "visual_ai_editor.sessions.v1";
 const ACTIVE_SESSION_KEY = "visual_ai_editor.active_session.v1";
 const MAX_LOCAL_SESSIONS = 12;
-const MAX_DIRECT_UPLOAD_BYTES = 4 * 1024 * 1024;
+const MAX_BROWSER_SAMPLES = 120;
+const FRAME_BATCH_SIZE = 4;
 const INITIAL_ASSISTANT_MESSAGE =
   "Upload any video and tell me what kind of short you want. If details are missing, I'll ask before spending time on analysis.";
 
@@ -135,9 +136,24 @@ type AgentCheck = {
   plan?: EditPlan;
 };
 
+type BrowserPrediction = {
+  second: number;
+  frame?: number;
+  scene?: string;
+  confidence?: number;
+  all_scores?: number[];
+  scenarios?: string[];
+};
+
+type CapturedFrame = {
+  second: number;
+  frame: number;
+  image: string;
+};
+
 function absoluteUrl(path?: string) {
   if (!path) return "";
-  if (path.startsWith("http")) return path;
+  if (path.startsWith("http") || path.startsWith("blob:") || path.startsWith("data:")) return path;
   return `${API_BASE}${path}`;
 }
 
@@ -153,6 +169,114 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function labelIsLowValue(label: string | undefined, weights?: Record<string, number>) {
+  const lowered = (label ?? "").toLowerCase();
+  return (
+    (label ? (weights?.[label] ?? 0.75) <= 0.05 : false) ||
+    ["black", "blank", "blur", "unusable", "boring", "static", "menu", "loading", "idle"].some((term) =>
+      lowered.includes(term),
+    )
+  );
+}
+
+function predictionScore(prediction: BrowserPrediction, weights?: Record<string, number>) {
+  const label = prediction.scene ?? "";
+  const base = weights?.[label] ?? (labelIsLowValue(label, weights) ? 0 : 0.75);
+  const confidence = typeof prediction.confidence === "number" ? prediction.confidence : 0.35;
+  return base * (0.75 + confidence);
+}
+
+function buildBrowserHighlights(predictions: BrowserPrediction[], duration: number, plan?: EditPlan): Highlight[] {
+  const weights = plan?.label_weights ?? {};
+  const strategy = plan?.selection_strategy ?? {};
+  const targetSeconds = Number(plan?.target_short_seconds || 30);
+  const minClip = Number(strategy.minimum_clip_seconds || 4);
+  const maxClip = Number(strategy.maximum_clip_seconds || 45);
+  const before = Number(strategy.context_before_seconds || 1);
+  const after = Number(strategy.context_after_seconds || 1.5);
+  const sorted = [...predictions]
+    .map((item) => ({ ...item, score: predictionScore(item, weights) }))
+    .sort((left, right) => left.second - right.second);
+
+  const useful = sorted.filter((item) => !labelIsLowValue(item.scene, weights) && item.score > 0.1);
+  if (!useful.length) return [];
+
+  const sampleGap = Math.max(2, sorted[1] ? sorted[1].second - sorted[0].second : 2);
+  const boundaryGap = Math.max(sampleGap * 2.5, 3);
+  const events: BrowserPrediction[][] = [];
+  let current: BrowserPrediction[] = [];
+
+  for (const item of useful) {
+    const previous = current.at(-1);
+    if (previous && item.second - previous.second > boundaryGap) {
+      events.push(current);
+      current = [];
+    }
+    current.push(item);
+  }
+  if (current.length) events.push(current);
+
+  const candidates: Highlight[] = [];
+  for (const event of events) {
+    const eventStart = Math.max(0, Math.min(...event.map((item) => item.second)) - before);
+    const eventEnd = Math.min(duration, Math.max(...event.map((item) => item.second)) + sampleGap + after);
+    let cursor = eventStart;
+    while (cursor < eventEnd) {
+      let end = Math.min(eventEnd, cursor + maxClip);
+      if (end - cursor < minClip) end = Math.min(duration, cursor + minClip);
+      const inside = event.filter((item) => item.second >= cursor && item.second < end);
+      if (!inside.length) break;
+      const labels = [...new Set(inside.map((item) => item.scene).filter(Boolean) as string[])].slice(0, 4);
+      const score =
+        inside.reduce((total, item) => total + predictionScore(item, weights), 0) / Math.max(inside.length, 1);
+      candidates.push({
+        index: candidates.length + 1,
+        start: cursor,
+        end,
+        duration: end - cursor,
+        score: Number(score.toFixed(4)),
+        labels,
+        matched_labels: labels.slice(0, 3),
+        reason: `Kept because ${labels[0] ?? "this moment"} matched the edit request near ${formatTime(inside[0].second)}.`,
+        why_not_longer: "Bounded by nearby low-value samples or the requested target length.",
+        transition: { type: candidates.length ? "fade" : "cut", duration_seconds: candidates.length ? 0.3 : 0 },
+      });
+      cursor = end;
+    }
+  }
+
+  const selected: Highlight[] = [];
+  let total = 0;
+  for (const candidate of candidates.sort((left, right) => right.score - left.score)) {
+    if (total >= targetSeconds) break;
+    if (selected.some((clip) => candidate.start < clip.end && candidate.end > clip.start)) continue;
+    const remaining = targetSeconds - total;
+    const clip = { ...candidate };
+    if (clip.duration > remaining && remaining >= minClip) {
+      clip.end = clip.start + remaining;
+      clip.duration = remaining;
+      clip.why_not_longer = "Trimmed to match the requested final duration.";
+    } else if (clip.duration > remaining && selected.length) {
+      continue;
+    }
+    selected.push(clip);
+    total += clip.duration;
+  }
+
+  return selected
+    .sort((left, right) => left.start - right.start)
+    .map((clip, index) => ({
+      ...clip,
+      index: index + 1,
+      score: Number(clip.score.toFixed(4)),
+      transition: { type: index ? "fade" : "cut", duration_seconds: index ? 0.3 : 0 },
+    }));
+}
+
 function progressFromLog(job?: JobPayload) {
   if (!job) return 0;
   if (typeof job.progress?.percent === "number") {
@@ -162,6 +286,36 @@ function progressFromLog(job?: JobPayload) {
   const last = matches.at(-1);
   if (!last) return job.status === "completed" ? 100 : 0;
   return Math.min(100, Math.round((Number(last[1]) / Number(last[2])) * 100));
+}
+
+function progressJob(
+  jobId: string,
+  prompt: string,
+  inputUrl: string,
+  memory: EditorMemory,
+  plan: EditPlan | undefined,
+  stage: string,
+  percent: number,
+  message: string,
+  predictionsCount = 0,
+  highlights: Highlight[] = [],
+  files: JobPayload["files"] = {},
+): JobPayload {
+  return {
+    job_id: jobId,
+    status: percent >= 100 ? "completed" : "running",
+    prompt,
+    resolved_prompt: plan?.request || prompt,
+    memory,
+    files: { input: inputUrl, ...files },
+    highlights,
+    edit_plan: plan,
+    predictions_count: predictionsCount,
+    report: "",
+    stdout: "",
+    stderr: "",
+    progress: { stage, percent, message },
+  };
 }
 
 function statusLabel(status?: JobPayload["status"]) {
@@ -206,6 +360,122 @@ function writeStoredSessions(sessions: ChatSession[], activeSessionId: string) {
   window.localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId);
 }
 
+async function loadVideoElement(file: File) {
+  const video = document.createElement("video");
+  video.src = URL.createObjectURL(file);
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "metadata";
+  await new Promise<void>((resolve, reject) => {
+    video.onloadedmetadata = () => resolve();
+    video.onerror = () => reject(new Error("Could not read video metadata in the browser."));
+  });
+  return video;
+}
+
+async function seekVideo(video: HTMLVideoElement, second: number) {
+  await new Promise<void>((resolve) => {
+    const done = () => resolve();
+    video.addEventListener("seeked", done, { once: true });
+    video.currentTime = Math.min(Math.max(second, 0), Math.max(video.duration - 0.05, 0));
+  });
+}
+
+function drawCoverFrame(
+  context: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  width: number,
+  height: number,
+  fade = 0,
+) {
+  context.fillStyle = "#000";
+  context.fillRect(0, 0, width, height);
+  const scale = Math.max(width / video.videoWidth, height / video.videoHeight);
+  const drawWidth = video.videoWidth * scale;
+  const drawHeight = video.videoHeight * scale;
+  context.drawImage(video, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+  if (fade > 0) {
+    context.fillStyle = `rgba(0,0,0,${Math.min(1, Math.max(0, fade))})`;
+    context.fillRect(0, 0, width, height);
+  }
+}
+
+async function captureFrame(video: HTMLVideoElement, second: number, frame: number): Promise<CapturedFrame> {
+  await seekVideo(video, second);
+  await delay(30);
+  const canvas = document.createElement("canvas");
+  const targetWidth = 512;
+  canvas.width = targetWidth;
+  canvas.height = Math.max(288, Math.round((video.videoHeight / video.videoWidth) * targetWidth));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is not available in this browser.");
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const image = canvas.toDataURL("image/jpeg", 0.72).split(",", 2)[1];
+  return { second, frame, image };
+}
+
+async function renderBrowserShort(file: File, highlights: Highlight[], format: string | undefined) {
+  const video = await loadVideoElement(file);
+  video.muted = false;
+  const vertical = format !== "horizontal";
+  const width = vertical ? 720 : 1280;
+  const height = vertical ? 1280 : 720;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is not available in this browser.");
+
+  const stream = canvas.captureStream(30);
+  const capture = (video as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream;
+  if (capture) {
+    try {
+      capture.call(video)
+        .getAudioTracks()
+        .forEach((track) => stream.addTrack(track));
+    } catch {
+      // Browser audio capture is best-effort; silent export is still useful.
+    }
+  }
+
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+    ? "video/webm;codecs=vp9,opus"
+    : "video/webm";
+  const chunks: Blob[] = [];
+  const recorder = new MediaRecorder(stream, { mimeType });
+  recorder.ondataavailable = (event) => {
+    if (event.data.size) chunks.push(event.data);
+  };
+  recorder.start(1000);
+
+  for (const clip of highlights) {
+    await seekVideo(video, clip.start);
+    await video.play();
+    await new Promise<void>((resolve) => {
+      const draw = () => {
+        const remainingStart = Math.max(0, video.currentTime - clip.start);
+        const remainingEnd = Math.max(0, clip.end - video.currentTime);
+        const fade = Math.max(0, 1 - remainingStart / 0.3, 1 - remainingEnd / 0.3);
+        drawCoverFrame(context, video, width, height, fade);
+        if (video.currentTime >= clip.end || video.ended) {
+          video.pause();
+          resolve();
+          return;
+        }
+        requestAnimationFrame(draw);
+      };
+      requestAnimationFrame(draw);
+    });
+  }
+
+  await new Promise<void>((resolve) => {
+    recorder.onstop = () => resolve();
+    recorder.stop();
+  });
+  URL.revokeObjectURL(video.src);
+  return URL.createObjectURL(new Blob(chunks, { type: mimeType }));
+}
+
 export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -225,6 +495,7 @@ export default function Home() {
     activePreview ||
     absoluteUrl(job?.files.vertical) ||
     absoluteUrl(job?.files.horizontal) ||
+    absoluteUrl(job?.files.input) ||
     "";
   const selectedDuration = useMemo(
     () => (job?.highlights ?? []).reduce((total, item) => total + Number(item.duration || 0), 0),
@@ -369,6 +640,131 @@ export default function Home() {
     writeStoredSessions(sessions, session.id);
   }
 
+  async function runBrowserWorkflow(fileToProcess: File, userText: string, check: AgentCheck) {
+    const jobId = `browser-${Date.now()}`;
+    const inputUrl = URL.createObjectURL(fileToProcess);
+    const plan = check.plan;
+    const memoryForJob = check.memory ?? {};
+    const scenarios = plan?.roboflow_scenarios?.length
+      ? plan.roboflow_scenarios
+      : [
+          "player hitting enemy successfully",
+          "enemy taking visible damage",
+          "enemy defeated death animation",
+          "boss fight major combat",
+          "cinematic cutscene story",
+          "exploration walking idle",
+          "menu loading screen inventory",
+          "static boring repeated gameplay",
+          "black blank blurry frame",
+        ];
+
+    setJob(progressJob(jobId, userText, inputUrl, memoryForJob, plan, "preparing", 5, "Reading the video locally in your browser."));
+
+    const video = await loadVideoElement(fileToProcess);
+    const duration = video.duration || 0;
+    const sampleEvery = Math.max(2, Math.ceil(duration / MAX_BROWSER_SAMPLES));
+    const sampleTimes: number[] = [];
+    for (let second = 0; second < duration; second += sampleEvery) {
+      sampleTimes.push(Math.min(second, Math.max(duration - 0.1, 0)));
+    }
+
+    const predictions: BrowserPrediction[] = [];
+    let frameBatch: CapturedFrame[] = [];
+
+    for (let index = 0; index < sampleTimes.length; index += 1) {
+      const frame = await captureFrame(video, sampleTimes[index], index);
+      frameBatch.push(frame);
+
+      if (frameBatch.length === FRAME_BATCH_SIZE || index === sampleTimes.length - 1) {
+        const response = await fetch(`${API_BASE}/api/browser/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ frames: frameBatch, scenarios }),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const payload = (await response.json()) as { predictions: BrowserPrediction[] };
+        predictions.push(...(payload.predictions ?? []));
+        frameBatch = [];
+
+        const percent = 8 + Math.round((index / Math.max(sampleTimes.length - 1, 1)) * 52);
+        setJob(
+          progressJob(
+            jobId,
+            userText,
+            inputUrl,
+            memoryForJob,
+            plan,
+            "analyzing",
+            percent,
+            `Analyzed ${Math.min(index + 1, sampleTimes.length)}/${sampleTimes.length} browser samples.`,
+            predictions.length,
+          ),
+        );
+      }
+    }
+    URL.revokeObjectURL(video.src);
+
+    const highlights = buildBrowserHighlights(predictions, duration, plan);
+    if (!highlights.length) {
+      setJob(
+        progressJob(
+          jobId,
+          userText,
+          inputUrl,
+          memoryForJob,
+          plan,
+          "completed",
+          100,
+          "Analysis finished, but no strong matching clips were found.",
+          predictions.length,
+        ),
+      );
+      return;
+    }
+
+    setJob(
+      progressJob(
+        jobId,
+        userText,
+        inputUrl,
+        memoryForJob,
+        plan,
+        "rendering",
+        72,
+        "Rendering selected clips locally in your browser.",
+        predictions.length,
+        highlights,
+      ),
+    );
+
+    const outputUrl = await renderBrowserShort(fileToProcess, highlights, plan?.export_format);
+    const selectedSeconds = highlights.reduce((total, clip) => total + clip.duration, 0);
+    setJob({
+      ...progressJob(
+        jobId,
+        userText,
+        inputUrl,
+        memoryForJob,
+        plan,
+        "completed",
+        100,
+        "Browser export completed. The output is WebM because it was rendered locally.",
+        predictions.length,
+        highlights.map((clip) => ({ ...clip, preview_url: inputUrl })),
+        { vertical: outputUrl, horizontal: outputUrl },
+      ),
+      report:
+        `Browser Video Shorts Report\n\n` +
+        `The original ${formatBytes(fileToProcess.size)} video stayed in this browser. ` +
+        `Only ${predictions.length} small frame samples were sent to the backend for scene scoring.\n\n` +
+        `Selected ${highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
+        `Export format: browser-rendered WebM.\n`,
+    });
+  }
+
   async function submitJob(event: FormEvent) {
     event.preventDefault();
     if (isSubmitting) return;
@@ -380,20 +776,6 @@ export default function Home() {
         {
           role: "assistant",
           content: "Tell me what you want from this edit first: length, style, and what to keep or skip.",
-        },
-      ]);
-      return;
-    }
-
-    if (file && file.size > MAX_DIRECT_UPLOAD_BYTES) {
-      setMessages((current) => [
-        ...current,
-        { role: "user", content: userText },
-        {
-          role: "assistant",
-          content:
-            `This video is ${formatBytes(file.size)}, but the Vercel backend can only receive about ${formatBytes(MAX_DIRECT_UPLOAD_BYTES)} per upload. ` +
-            "Trim or compress the clip first, then upload the smaller file. For full-size videos, this needs direct object storage or a non-Vercel worker backend.",
         },
       ]);
       return;
@@ -444,21 +826,15 @@ export default function Home() {
       ]);
 
       if (file) {
-        const body = new FormData();
-        body.append("video", file);
-        body.append("prompt", check.resolved_prompt);
-        body.append("memory_json", JSON.stringify(check.memory ?? {}));
-        body.append("plan_json", JSON.stringify(check.plan ?? {}));
-        const response = await fetch(`${API_BASE}/api/jobs`, {
-          method: "POST",
-          body,
-        });
-        if (!response.ok) {
-          throw new Error(await response.text());
-        }
-        const payload = (await response.json()) as JobPayload;
-        setJob(payload);
-        setFile(null);
+        setMessages((current) => [
+          ...current,
+          {
+            role: "assistant",
+            content:
+              `I will keep the ${formatBytes(file.size)} video in your browser, send only small frame samples for scoring, and render the short locally.`,
+          },
+        ]);
+        await runBrowserWorkflow(file, userText, check);
       } else if (job) {
         const response = await fetch(`${API_BASE}/api/jobs/${job.job_id}/edits`, {
           method: "POST",
@@ -493,6 +869,14 @@ export default function Home() {
 
   async function exportShort() {
     if (!job) return;
+    const browserOutput = job.files.vertical || job.files.horizontal;
+    if (browserOutput?.startsWith("blob:")) {
+      const link = document.createElement("a");
+      link.href = browserOutput;
+      link.download = "browser-short.webm";
+      link.click();
+      return;
+    }
     const response = await fetch(`${API_BASE}/api/jobs/${job.job_id}/export`, {
       method: "POST",
     });
