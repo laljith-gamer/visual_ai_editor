@@ -25,6 +25,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 const SESSION_STORAGE_KEY = "visual_ai_editor.sessions.v1";
 const ACTIVE_SESSION_KEY = "visual_ai_editor.active_session.v1";
 const MAX_LOCAL_SESSIONS = 12;
+const MAX_DIRECT_UPLOAD_BYTES = 4 * 1024 * 1024;
 const INITIAL_ASSISTANT_MESSAGE =
   "Upload any video and tell me what kind of short you want. If details are missing, I'll ask before spending time on analysis.";
 
@@ -145,6 +146,11 @@ function formatTime(seconds: number) {
   const minutes = Math.floor(total / 60);
   const rest = total % 60;
   return `${minutes}:${rest.toString().padStart(2, "0")}`;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function progressFromLog(job?: JobPayload) {
@@ -374,6 +380,20 @@ export default function Home() {
         {
           role: "assistant",
           content: "Tell me what you want from this edit first: length, style, and what to keep or skip.",
+        },
+      ]);
+      return;
+    }
+
+    if (file && file.size > MAX_DIRECT_UPLOAD_BYTES) {
+      setMessages((current) => [
+        ...current,
+        { role: "user", content: userText },
+        {
+          role: "assistant",
+          content:
+            `This video is ${formatBytes(file.size)}, but the Vercel backend can only receive about ${formatBytes(MAX_DIRECT_UPLOAD_BYTES)} per upload. ` +
+            "Trim or compress the clip first, then upload the smaller file. For full-size videos, this needs direct object storage or a non-Vercel worker backend.",
         },
       ]);
       return;
