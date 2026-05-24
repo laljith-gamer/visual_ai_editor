@@ -38,6 +38,9 @@ const FRAME_BATCH_SIZE = 4;
 const MAX_EVENT_WINDOWS = 12;
 const CONTACT_SHEET_FRAMES = 12;
 const EVENT_KEEP_THRESHOLD = 0.55;
+const MAX_BROWSER_RENDER_SECONDS = 120;
+const MAX_BROWSER_HEAVY_RENDER_SECONDS = 60;
+const HEAVY_SOURCE_BYTES = 1500 * 1024 * 1024;
 const INITIAL_ASSISTANT_MESSAGE =
   "Upload any video and tell me what kind of short you want. If details are missing, I'll ask before spending time on analysis.";
 
@@ -217,6 +220,21 @@ function formatTime(seconds: number) {
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function totalHighlightSeconds(highlights: Highlight[]) {
+  return highlights.reduce((total, clip) => total + Number(clip.duration || 0), 0);
+}
+
+function browserRenderRisk(fileToRender: File, highlights: Highlight[]) {
+  const seconds = totalHighlightSeconds(highlights);
+  if (seconds > MAX_BROWSER_RENDER_SECONDS) {
+    return `This cut is ${seconds.toFixed(1)}s. Browser WebM export is reliable for short cuts only; long renders can stretch, stutter, or desync.`;
+  }
+  if (fileToRender.size > HEAVY_SOURCE_BYTES && seconds > MAX_BROWSER_HEAVY_RENDER_SECONDS) {
+    return `The source is ${formatBytes(fileToRender.size)} and the cut is ${seconds.toFixed(1)}s. Chrome cannot reliably decode and record that much video in real time.`;
+  }
+  return "";
 }
 
 function delay(ms: number) {
@@ -609,6 +627,10 @@ function clipIdentity(clip: Highlight) {
   return clip.clip_id || `${clip.start}-${clip.end}-${clip.labels.join("|")}`;
 }
 
+function isBrowserJobId(jobId?: string) {
+  return Boolean(jobId?.startsWith("browser-"));
+}
+
 function statusLabel(status?: JobPayload["status"]) {
   if (!status) return "Ready";
   if (status === "created") return "Queued";
@@ -799,19 +821,9 @@ async function renderBrowserShort(file: File, highlights: Highlight[], format: s
   if (!context) throw new Error("Canvas is not available in this browser.");
 
   const stream = canvas.captureStream(30);
-  const capture = (video as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream;
-  if (capture) {
-    try {
-      capture.call(video)
-        .getAudioTracks()
-        .forEach((track) => stream.addTrack(track));
-    } catch {
-      // Browser audio capture is best-effort; silent export is still useful.
-    }
-  }
 
-  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-    ? "video/webm;codecs=vp9,opus"
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+    ? "video/webm;codecs=vp9"
     : "video/webm";
   const chunks: Blob[] = [];
   const recorder = new MediaRecorder(stream, { mimeType });
@@ -885,6 +897,7 @@ export default function Home() {
   const selectedClip = job?.highlights?.[selectedClipIndex] ?? null;
   const activeFileName = file?.name ?? (job?.files.input ? "Source video loaded" : "No video selected");
   const isWorking = job?.status === "running" || isSubmitting;
+  const hasRenderedOutput = Boolean(job?.files.vertical || job?.files.horizontal);
 
   useEffect(() => {
     const storedSessions = readStoredSessions();
@@ -951,6 +964,9 @@ export default function Home() {
 
   useEffect(() => {
     if (!job || job.status === "completed" || job.status === "failed") {
+      return;
+    }
+    if (isBrowserJobId(job.job_id)) {
       return;
     }
 
@@ -1261,8 +1277,29 @@ export default function Home() {
     });
 
     try {
+      const risk = browserRenderRisk(file, currentJob.highlights);
+      if (risk) {
+        setJob({
+          ...currentJob,
+          status: "completed",
+          progress: {
+            stage: "manual",
+            percent: 100,
+            message: `Manual clips are saved, but browser export was paused: ${risk}`,
+          },
+        });
+        setMessages((current) => [
+          ...current,
+          {
+            role: "assistant",
+            content:
+              `I paused the browser render because it would likely create a broken WebM: ${risk} Shorten the cut, or export with a local/server FFmpeg worker for this size.`,
+          },
+        ]);
+        return;
+      }
       const outputUrl = await renderBrowserShort(file, currentJob.highlights, currentJob.edit_plan?.export_format);
-      const selectedSeconds = currentJob.highlights.reduce((total, clip) => total + clip.duration, 0);
+      const selectedSeconds = totalHighlightSeconds(currentJob.highlights);
       const nextJob: JobPayload = {
         ...currentJob,
         status: "completed",
@@ -1275,7 +1312,8 @@ export default function Home() {
         report:
           `Manual Browser Edit\n\n` +
           `Selected ${currentJob.highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
-          `Clip order and trim points were saved to the backend project state.\n`,
+          `Clip order and trim points were saved to the backend project state.\n` +
+          `Browser export is silent to avoid audio crackle while jumping between source clips.\n`,
       };
       setJob(nextJob);
       void syncManualState(nextJob);
@@ -1540,6 +1578,34 @@ export default function Home() {
       return;
     }
 
+    const selectedSeconds = totalHighlightSeconds(highlights);
+    const risk = browserRenderRisk(fileToProcess, highlights);
+    if (risk) {
+      const clippedJob: JobPayload = {
+        ...progressJob(
+          jobId,
+          userText,
+          inputUrl,
+          memoryForJob,
+          plan,
+          "completed",
+          100,
+          `Clips selected, but browser export was paused: ${risk}`,
+          predictions.length,
+          highlights.map((clip) => ({ ...clip, preview_url: inputUrl })),
+        ),
+        report:
+          `Browser Video Shorts Report\n\n` +
+          `The original ${formatBytes(fileToProcess.size)} video stayed in this browser. ` +
+          `${predictions.length} small frame samples and ${eventAnalyses.length} contact sheets were sent to the backend for scoring.\n\n` +
+          `Selected ${highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
+          `No WebM was rendered because this edit is too large for reliable browser recording. ${risk}\n`,
+      };
+      setJob(clippedJob);
+      void syncManualState(clippedJob);
+      return;
+    }
+
     setJob(
       progressJob(
         jobId,
@@ -1558,7 +1624,6 @@ export default function Home() {
     );
 
     const outputUrl = await renderBrowserShort(fileToProcess, highlights, plan?.export_format);
-    const selectedSeconds = highlights.reduce((total, clip) => total + clip.duration, 0);
     const completedJob: JobPayload = {
       ...progressJob(
         jobId,
@@ -1579,7 +1644,7 @@ export default function Home() {
         `${predictions.length} small frame samples and ${eventAnalyses.length} contact sheets were sent to the backend for scoring.\n\n` +
         (usedBroadFallback ? `Workflow B fallback: ${temporalFailureReason.slice(0, 220)}\n\n` : "") +
         `Selected ${highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
-        `Export format: browser-rendered WebM.\n`,
+        `Export format: browser-rendered silent WebM.\n`,
     };
     setJob(completedJob);
     void syncManualState(completedJob);
@@ -1656,6 +1721,17 @@ export default function Home() {
         ]);
         await runBrowserWorkflow(file, userText, check);
       } else if (job) {
+        if (isBrowserJobId(job.job_id)) {
+          setMessages((current) => [
+            ...current,
+            {
+              role: "assistant",
+              content:
+                "This edit was created in your browser, so I need the original source video selected here before I can re-edit or render it again.",
+            },
+          ]);
+          return;
+        }
         const response = await fetch(`${API_BASE}/api/jobs/${job.job_id}/edits`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1695,6 +1771,17 @@ export default function Home() {
       link.href = browserOutput;
       link.download = "browser-short.webm";
       link.click();
+      return;
+    }
+    if (isBrowserJobId(job.job_id)) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content:
+            "There is no rendered browser output yet. Shorten the selected clips and press Render, or use a local/server FFmpeg export for long heavy videos.",
+        },
+      ]);
       return;
     }
     const response = await fetch(`${API_BASE}/api/jobs/${job.job_id}/export`, {
@@ -1841,7 +1928,7 @@ export default function Home() {
                   {isSubmitting ? <Loader2 size={15} className="spin" /> : <RotateCcw size={15} />}
                   Render
                 </button>
-                <button className="utility-button compact primary" type="button" disabled={job?.status !== "completed"} onClick={exportShort}>
+                <button className="utility-button compact primary" type="button" disabled={!hasRenderedOutput} onClick={exportShort}>
                   <Download size={15} />
                   Export
                 </button>
@@ -2073,11 +2160,11 @@ export default function Home() {
             <button
               className="export-button"
               type="button"
-              disabled={job?.status !== "completed"}
+              disabled={!hasRenderedOutput}
               onClick={exportShort}
             >
               {isWorking ? <Loader2 size={18} className="spin" /> : <Download size={18} />}
-              {job?.status === "completed" ? "Export Short" : "Export Pending"}
+              {hasRenderedOutput ? "Export Short" : "Export Pending"}
             </button>
           </div>
         </aside>
