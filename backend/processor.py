@@ -64,8 +64,8 @@ SHORT_HORIZONTAL_PATH = (BASE_DIR / "best_short_horizontal.mp4").resolve()
 SHORT_VERTICAL_PATH = (BASE_DIR / "best_short_vertical.mp4").resolve()
 SEGMENTS_DIR = (BASE_DIR / "short_segments").resolve()
 
-WORKSPACE = os.environ.get("ROBOFLOW_WORKSPACE", "games-workspace-nzhum")
-WORKFLOW_ID = os.environ.get("ROBOFLOW_WORKFLOW_ID", "video-scene-classifier-1779475704669")
+WORKSPACE = os.environ.get("ROBOFLOW_WORKSPACE")
+WORKFLOW_ID = os.environ.get("ROBOFLOW_WORKFLOW_ID")
 EDIT_REQUEST = os.environ.get("EDIT_REQUEST", "").strip()
 EXTERNAL_EDIT_PLAN = load_json_env("EDIT_PLAN_JSON")
 
@@ -354,6 +354,8 @@ def classify_frame(frame_bgr: np.ndarray) -> dict:
     original_frame = frame_bgr
     if roboflow_disabled:
         return local_frame_result(original_frame, "roboflow disabled after repeated failures")
+    if not WORKSPACE or not WORKFLOW_ID:
+        raise RuntimeError("ROBOFLOW_WORKSPACE and ROBOFLOW_WORKFLOW_ID are required")
 
     frame_bgr = resize_for_inference(frame_bgr)
     ok, buffer = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])

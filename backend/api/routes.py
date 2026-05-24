@@ -1,0 +1,254 @@
+import json
+import os
+import shutil
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
+
+from backend.core.config import DEFAULT_PROMPT, JOBS_DIR
+from backend.core.storage import read_json, write_json
+from backend.services.agent import agent_check_result
+from backend.services.jobs import (
+    RUNNING_PROCESSES,
+    build_job_payload,
+    job_dir,
+    start_processor,
+)
+from backend.services.memory import write_memory
+from backend.services.roboflow import compact_scenarios, get_roboflow_client
+
+
+router = APIRouter()
+
+
+@router.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok", "default_prompt": DEFAULT_PROMPT}
+
+
+@router.post("/api/agent/check")
+def agent_check(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    prompt = str(payload.get("prompt") or "")
+    has_video = bool(payload.get("has_video") or payload.get("job_id"))
+    incoming_memory = payload.get("memory") if isinstance(payload.get("memory"), dict) else {}
+    supplied_plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else None
+    result = agent_check_result(prompt, has_video, incoming_memory, supplied_plan=supplied_plan)
+    if result["ready"]:
+        write_memory(result["memory"])
+    return result
+
+
+@router.post("/api/browser/analyze")
+def analyze_browser_frames(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    frames = payload.get("frames")
+    if not isinstance(frames, list) or not frames:
+        raise HTTPException(status_code=400, detail="frames must be a non-empty list")
+    if len(frames) > 8:
+        raise HTTPException(status_code=400, detail="send at most 8 frames per request")
+
+    try:
+        scenarios = compact_scenarios(payload.get("scenarios"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    workspace = payload.get("workspace") or os.getenv("ROBOFLOW_WORKSPACE")
+    workflow_id = payload.get("workflow_id") or os.getenv("ROBOFLOW_WORKFLOW_ID")
+    if not workspace or not workflow_id:
+        raise HTTPException(status_code=500, detail="Roboflow workspace/workflow is not configured")
+    predictions = []
+
+    for index, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            continue
+        try:
+            second = float(frame.get("second") or 0)
+        except (TypeError, ValueError):
+            second = 0.0
+        image_value = str(frame.get("image") or "")
+        if "," in image_value:
+            image_value = image_value.split(",", 1)[1]
+        if not image_value:
+            continue
+
+        try:
+            result = get_roboflow_client().run_workflow(
+                workspace_name=workspace,
+                workflow_id=workflow_id,
+                images={"image": image_value},
+                parameters={"scenarios": scenarios},
+                use_cache=True,
+            )
+            frame_result = result[0] if result else {}
+            label = frame_result.get("scene_label") or scenarios[0]
+            confidence = frame_result.get("confidence")
+            all_scores = frame_result.get("all_scores")
+        except Exception as exc:
+            label = scenarios[0]
+            confidence = 0.05
+            all_scores = []
+            frame_result = {"fallback": True, "fallback_reason": f"{type(exc).__name__}: {exc}"}
+
+        predictions.append(
+            {
+                "second": second,
+                "frame": int(frame.get("frame") or index),
+                "scene": label,
+                "confidence": confidence if isinstance(confidence, (int, float)) else 0.05,
+                "all_scores": all_scores if isinstance(all_scores, list) else [],
+                "scenarios": scenarios,
+                "fallback": bool(frame_result.get("fallback")),
+                "fallback_reason": frame_result.get("fallback_reason"),
+            }
+        )
+
+    return {"predictions": predictions, "scenarios": scenarios}
+
+
+@router.post("/api/jobs")
+async def create_job(
+    video: UploadFile = File(...),
+    prompt: str = Form(""),
+    memory_json: str = Form("{}"),
+    plan_json: str = Form("{}"),
+) -> JSONResponse:
+    if not video.filename:
+        raise HTTPException(status_code=400, detail="Video file is required")
+
+    try:
+        incoming_memory = json.loads(memory_json) if memory_json else {}
+    except json.JSONDecodeError:
+        incoming_memory = {}
+    try:
+        supplied_plan = json.loads(plan_json) if plan_json else {}
+    except json.JSONDecodeError:
+        supplied_plan = {}
+    check = agent_check_result(
+        prompt,
+        True,
+        incoming_memory,
+        supplied_plan=supplied_plan if isinstance(supplied_plan, dict) and supplied_plan else None,
+    )
+    if not check["ready"]:
+        raise HTTPException(status_code=409, detail=check)
+
+    job_id = uuid.uuid4().hex[:12]
+    directory = JOBS_DIR / job_id
+    directory.mkdir(parents=True, exist_ok=True)
+
+    suffix = Path(video.filename).suffix or ".mp4"
+    input_path = directory / f"input{suffix}"
+    with input_path.open("wb") as f:
+        while chunk := await video.read(1024 * 1024):
+            f.write(chunk)
+
+    canonical_input = directory / "input.mp4"
+    if input_path != canonical_input:
+        input_path.replace(canonical_input)
+
+    metadata = {
+        "job_id": job_id,
+        "prompt": prompt or DEFAULT_PROMPT,
+        "resolved_prompt": check["resolved_prompt"],
+        "memory": check["memory"],
+        "edit_plan": check["plan"],
+        "status": "running",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "filename": video.filename,
+        "kind": "analysis",
+    }
+    write_json(directory / "job.json", metadata)
+    write_memory(check["memory"])
+    start_processor(job_id, canonical_input, check["resolved_prompt"], edit_plan=check["plan"])
+
+    return JSONResponse(build_job_payload(job_id))
+
+
+@router.get("/api/jobs/{job_id}")
+def get_job(job_id: str) -> dict[str, Any]:
+    return build_job_payload(job_id)
+
+
+@router.post("/api/jobs/{job_id}/edits")
+def create_reedit(job_id: str, payload: dict[str, Any] = Body(...)) -> JSONResponse:
+    source_directory = job_dir(job_id)
+    source_metadata = read_json(source_directory / "job.json", {})
+
+    input_source_job_id = job_id
+    source_input = source_directory / "input.mp4"
+    if not source_input.exists() and source_metadata.get("source_job_id"):
+        input_source_job_id = str(source_metadata["source_job_id"])
+        source_input = JOBS_DIR / input_source_job_id / "input.mp4"
+    if not source_input.exists():
+        raise HTTPException(status_code=404, detail="Source video is missing")
+
+    source_predictions = source_directory / "predictions.json"
+    if not source_predictions.exists() and source_metadata.get("source_job_id"):
+        source_predictions = JOBS_DIR / str(source_metadata["source_job_id"]) / "predictions.json"
+
+    process = RUNNING_PROCESSES.get(job_id)
+    if process and process.poll() is None and not source_predictions.exists():
+        raise HTTPException(
+            status_code=409,
+            detail="Wait until at least the first video analysis samples are saved before re-editing.",
+        )
+
+    prompt = str(payload.get("prompt") or "")
+    incoming_memory = payload.get("memory") if isinstance(payload.get("memory"), dict) else {}
+    supplied_plan = payload.get("plan") if isinstance(payload.get("plan"), dict) else None
+    check = agent_check_result(prompt, True, incoming_memory, supplied_plan=supplied_plan)
+    if not check["ready"]:
+        raise HTTPException(status_code=409, detail=check)
+
+    new_job_id = uuid.uuid4().hex[:12]
+    directory = JOBS_DIR / new_job_id
+    directory.mkdir(parents=True, exist_ok=True)
+
+    if source_predictions.exists():
+        shutil.copy2(source_predictions, directory / "predictions.json")
+
+    metadata = {
+        "job_id": new_job_id,
+        "source_job_id": input_source_job_id,
+        "prompt": prompt or source_metadata.get("prompt") or DEFAULT_PROMPT,
+        "resolved_prompt": check["resolved_prompt"],
+        "memory": check["memory"],
+        "edit_plan": check["plan"],
+        "status": "running",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "filename": source_metadata.get("filename", source_input.name),
+        "kind": "reedit",
+    }
+    write_json(directory / "job.json", metadata)
+    write_memory(check["memory"])
+    start_processor(
+        new_job_id,
+        source_input,
+        check["resolved_prompt"],
+        edit_plan=check["plan"],
+        analysis_path=source_predictions if source_predictions.exists() else None,
+    )
+    return JSONResponse(build_job_payload(new_job_id))
+
+
+@router.post("/api/jobs/{job_id}/export")
+def export_job(job_id: str) -> dict[str, Any]:
+    payload = build_job_payload(job_id)
+    if payload["status"] != "completed":
+        raise HTTPException(status_code=409, detail="Export is not ready yet")
+    return payload
+
+
+@router.get("/api/jobs")
+def list_jobs() -> dict[str, list[dict[str, Any]]]:
+    jobs = []
+    for directory in sorted(JOBS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if directory.is_dir():
+            try:
+                jobs.append(build_job_payload(directory.name))
+            except HTTPException:
+                continue
+    return {"jobs": jobs}

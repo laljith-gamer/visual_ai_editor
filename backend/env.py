@@ -18,5 +18,10 @@ def load_env_file(path: Path) -> None:
 
 
 def load_project_env(current_file: str) -> None:
-    project_root = Path(current_file).resolve().parents[1]
+    current_path = Path(current_file).resolve()
+    project_root = current_path.parents[1]
+    for parent in current_path.parents:
+        if (parent / ".env").exists() or (parent / "requirements.txt").exists():
+            project_root = parent
+            break
     load_env_file(project_root / ".env")
