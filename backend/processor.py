@@ -2,7 +2,6 @@ import base64
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -28,70 +27,11 @@ def make_unique(items: list[str]) -> list[str]:
     return unique
 
 
-LABEL_ALIASES = {
-    "clear important moment with the main subject or event": "high energy action",
-    "visually dynamic motion change reveal or result": "high energy action",
-    "expressive reaction emotion or memorable human moment": "emotional reaction surprise",
-    "useful explanation demonstration or key detail being shown": "tutorial demonstration",
-    "funny surprising unusual or memorable moment": "emotional reaction surprise",
-    "static low motion waiting or boring filler footage": "repetitive static footage",
-    "black screen blank frame blurry unusable footage or transition": "black blank blurry frame",
-    "black screen blank frame frozen video or no visible content": "black blank blurry frame",
-    "blurry dark obstructed low quality unusable footage": "black blank blurry frame",
-    "unimportant transition loading screen title card credits or repeated section": "menu loading screen",
-    "intense gameplay combat boss fight or skilled action moment": "boss fight major combat",
-    "dramatic game result win fail reaction or cinematic moment": "cinematic cutscene story",
-    "player successfully hitting enemy with high damage or critical strike": "player hitting enemy successfully",
-    "enemy defeated or dying animation after player attack": "enemy defeated death animation",
-    "black screen blank frame blurry unusable footage or loading menu": "black blank blurry frame",
-    "player missing attack taking damage or static idle gameplay": "player taking damage failed attack",
-}
-
-
 def compact_label(label: str, max_words: int = 6) -> str:
     text = " ".join(str(label or "").replace("\n", " ").split()).strip()
     if not text:
         return ""
-    lowered = text.lower()
-    if lowered in LABEL_ALIASES:
-        return LABEL_ALIASES[lowered]
-    if lowered.startswith("best moment matching") or lowered.startswith("best visual moment"):
-        return "best requested moment"
-    if len(text.split()) <= max_words and len(text) <= 60:
-        return text
-
-    words = re.findall(r"[a-zA-Z0-9]+", lowered)
-    stopwords = {
-        "a",
-        "an",
-        "and",
-        "are",
-        "as",
-        "at",
-        "be",
-        "being",
-        "for",
-        "from",
-        "in",
-        "into",
-        "is",
-        "of",
-        "or",
-        "that",
-        "the",
-        "this",
-        "to",
-        "with",
-        "without",
-        "your",
-        "user",
-        "request",
-        "video",
-        "scene",
-        "moment",
-    }
-    keywords = [word for word in words if word not in stopwords][:max_words]
-    return " ".join(keywords) or "best requested moment"
+    return text[:80]
 
 
 def load_json_env(name: str) -> dict:
@@ -126,134 +66,12 @@ SEGMENTS_DIR = (BASE_DIR / "short_segments").resolve()
 
 WORKSPACE = os.environ.get("ROBOFLOW_WORKSPACE", "games-workspace-nzhum")
 WORKFLOW_ID = os.environ.get("ROBOFLOW_WORKFLOW_ID", "video-scene-classifier-1779475704669")
-DEFAULT_EDIT_REQUEST = (
-    "Make a 30 second short from the strongest visual moments. "
-    "Keep the parts that best match my request and skip boring, static, blurry, or repeated footage."
-)
-EDIT_REQUEST = os.environ.get("EDIT_REQUEST", DEFAULT_EDIT_REQUEST)
+EDIT_REQUEST = os.environ.get("EDIT_REQUEST", "").strip()
 EXTERNAL_EDIT_PLAN = load_json_env("EDIT_PLAN_JSON")
 
-BASE_ANALYSIS_SCENARIOS = [
-    "high energy action",
-    "person talking narration",
-    "cinematic b-roll shot",
-    "conversation dialogue",
-    "tutorial demonstration",
-    "emotional reaction surprise",
-    "walking transition filler",
-    "menu loading screen",
-    "repetitive static footage",
-    "black blank blurry frame",
-]
-
 ANALYSIS_SCENARIOS = make_unique(
-    [compact_label(str(item)) for item in EXTERNAL_EDIT_PLAN.get("roboflow_scenarios", []) if str(item).strip()][:9]
-    + BASE_ANALYSIS_SCENARIOS
+    [compact_label(str(item)) for item in EXTERNAL_EDIT_PLAN.get("roboflow_scenarios", []) if str(item).strip()]
 )
-DEFAULT_SCENARIOS = ANALYSIS_SCENARIOS
-
-GENERAL_POSITIVE_SCENARIOS = [
-    "high energy action",
-    "person talking narration",
-    "cinematic b-roll shot",
-    "conversation dialogue",
-    "tutorial demonstration",
-    "emotional reaction surprise",
-]
-
-GENERAL_NEGATIVE_SCENARIOS = [
-    "walking transition filler",
-    "menu loading screen",
-    "repetitive static footage",
-    "black blank blurry frame",
-]
-
-DOMAIN_SCENARIOS = [
-    (
-        ("game", "gameplay", "boss", "combat", "fight", "combo", "kill"),
-        [
-            "player hitting enemy successfully",
-            "enemy taking visible damage",
-            "enemy defeated death animation",
-            "boss fight major combat",
-            "cinematic cutscene story",
-            "exploration walking idle",
-            "menu loading screen inventory",
-            "player taking damage failed attack",
-            "static boring repeated gameplay",
-        ],
-    ),
-    (
-        ("sport", "goal", "score", "match", "race", "basketball", "football", "cricket"),
-        [
-            "decisive sports play",
-            "athlete celebration reaction",
-        ],
-    ),
-    (
-        ("lecture", "class", "tutorial", "teach", "explain", "lesson", "course"),
-        [
-            "key teaching moment",
-            "clear slide detail",
-        ],
-    ),
-    (
-        ("cook", "recipe", "food", "bake", "kitchen"),
-        [
-            "important cooking step",
-            "finished food reveal",
-        ],
-    ),
-    (
-        ("vlog", "travel", "trip", "street", "nature", "place"),
-        [
-            "scenic travel moment",
-            "candid reaction interaction",
-        ],
-    ),
-    (
-        ("product", "review", "unbox", "demo", "showcase"),
-        [
-            "product feature demo",
-            "close up product detail",
-        ],
-    ),
-    (
-        ("dance", "music", "song", "performance", "stage"),
-        [
-            "peak performance moment",
-            "crowd performer reaction",
-        ],
-    ),
-    (
-        ("interview", "podcast", "talk", "speaker", "conversation"),
-        [
-            "speaker reaction gesture",
-            "important conversation beat",
-        ],
-    ),
-    (
-        ("screen", "software", "app", "website", "code", "coding", "computer"),
-        [
-            "screen recording key step",
-            "interface result change",
-        ],
-    ),
-    (
-        ("silent", "muted", "no audio", "without audio"),
-        [
-            "visual action reveal",
-            "silent understandable moment",
-        ],
-    ),
-    (
-        ("funny", "comedy", "laugh", "meme", "fail", "unexpected"),
-        [
-            "funny surprise reaction",
-            "memorable comedy beat",
-        ],
-    ),
-]
 
 SAMPLE_EVERY_SECONDS = float(os.environ.get("SAMPLE_EVERY_SECONDS") or 1)
 MAX_SAMPLES = int(os.environ.get("MAX_SAMPLES") or 0)
@@ -279,63 +97,6 @@ def get_roboflow_client() -> InferenceHTTPClient:
             api_key=api_key,
         )
     return client
-
-
-def clean_prompt_for_label(text: str, limit: int = 155) -> str:
-    cleaned = " ".join(text.replace("\n", " ").split())
-    if not cleaned:
-        return "the user's edit request"
-    if len(cleaned) <= limit:
-        return cleaned
-    return cleaned[: limit - 3].rstrip() + "..."
-
-
-def parse_requested_seconds(text: str, fallback: float) -> float:
-    for match in re.finditer(
-        r"\b(\d{1,3})\s*(seconds?|secs?|sec|s|minutes?|mins?|min|m)\b",
-        text,
-    ):
-        amount = int(match.group(1))
-        unit = match.group(2)
-        seconds = amount * 60 if unit.startswith("m") else amount
-        if 5 <= seconds <= 300:
-            return float(seconds)
-
-    for match in re.finditer(r"\b(15|20|30|45|60|90|120)\b", text):
-        return float(match.group(1))
-
-    return fallback
-
-
-def label_is_bad(label: str | None) -> bool:
-    lowered = (label or "").lower()
-    if lowered.startswith("best moment matching") or lowered.startswith("best visual moment"):
-        return False
-    return any(
-        term in lowered
-        for term in (
-            "black",
-            "blank",
-            "blur",
-            "unusable",
-            "low quality",
-            "obstructed",
-            "static",
-            "boring",
-            "loading",
-            "menu",
-            "repeated",
-            "filler",
-            "idle",
-            "failed",
-            "taking damage",
-            "no visible",
-        )
-    )
-
-
-def default_label_weight(label: str | None) -> float:
-    return 0.0 if label_is_bad(label) else 0.85
 
 
 def clamp_number(value: object, fallback: float, minimum: float, maximum: float) -> float:
@@ -394,40 +155,35 @@ def normalize_transition_policy(raw: object) -> dict:
     }
 
 
-def build_plan_from_ai(user_request: str) -> dict | None:
+def build_plan_from_ai(user_request: str) -> dict:
     if not EXTERNAL_EDIT_PLAN:
-        return None
+        raise RuntimeError("EDIT_PLAN_JSON is required. The processor no longer creates rule-based edit plans.")
+    if len(ANALYSIS_SCENARIOS) < 2:
+        raise RuntimeError("AI edit plan must include at least two roboflow_scenarios.")
 
     raw_weights = EXTERNAL_EDIT_PLAN.get("label_weights")
-    weights = {label: default_label_weight(label) for label in ANALYSIS_SCENARIOS}
-    if isinstance(raw_weights, dict):
-        for label, weight in raw_weights.items():
-            label_text = compact_label(str(label).strip())
-            if not label_text:
-                continue
-            try:
-                weights[label_text] = max(0.0, min(1.0, float(weight)))
-            except (TypeError, ValueError):
-                weights[label_text] = default_label_weight(label_text)
+    if not isinstance(raw_weights, dict):
+        raise RuntimeError("AI edit plan must include label_weights.")
 
+    weights = {}
     for label in ANALYSIS_SCENARIOS:
-        if label_is_bad(label):
-            weights[label] = 0.0
-        else:
-            weights.setdefault(label, 0.85)
+        try:
+            weights[label] = max(0.0, min(1.0, float(raw_weights[label])))
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeError(f"AI edit plan missing numeric label weight for: {label}") from None
 
-    target_seconds = clamp_number(
-        EXTERNAL_EDIT_PLAN.get("target_short_seconds") or parse_requested_seconds(user_request, 30),
-        parse_requested_seconds(user_request, 30),
-        5.0,
-        300.0,
-    )
+    target_seconds = clamp_number(EXTERNAL_EDIT_PLAN.get("target_short_seconds"), 30.0, 5.0, 300.0)
+    if EXTERNAL_EDIT_PLAN.get("target_short_seconds") in (None, "", 0):
+        raise RuntimeError("AI edit plan must include target_short_seconds.")
     clip_seconds = clamp_number(
-        EXTERNAL_EDIT_PLAN.get("clip_seconds") or os.environ.get("CLIP_SECONDS"),
+        EXTERNAL_EDIT_PLAN.get("clip_seconds"),
         8.0,
         4.0,
         30.0,
     )
+    raw_export_format = str(EXTERNAL_EDIT_PLAN.get("export_format") or "").strip().lower()
+    if raw_export_format not in EXPORT_FORMATS:
+        raise RuntimeError("AI edit plan must include export_format: vertical, horizontal, both, or auto.")
     request_scenarios = make_unique(
         [str(item) for item in EXTERNAL_EDIT_PLAN.get("request_scenarios", []) if str(item).strip()]
     )
@@ -447,7 +203,7 @@ def build_plan_from_ai(user_request: str) -> dict | None:
         },
         "target_short_seconds": target_seconds,
         "clip_seconds": clip_seconds,
-        "export_format": normalize_export_format(EXTERNAL_EDIT_PLAN.get("export_format")),
+        "export_format": raw_export_format,
         "selection_strategy": selection_strategy,
         "preview_policy": preview_policy,
         "transition_policy": transition_policy,
@@ -457,172 +213,7 @@ def build_plan_from_ai(user_request: str) -> dict | None:
 
 
 def build_edit_plan(user_request: str) -> dict:
-    ai_plan = build_plan_from_ai(user_request)
-    if ai_plan:
-        return ai_plan
-
-    text = user_request.lower()
-    positive = ["best requested moment"]
-    negative = []
-    target_seconds = float(os.environ.get("TARGET_SHORT_SECONDS") or 30)
-    clip_seconds = float(os.environ.get("CLIP_SECONDS") or 8)
-
-    for keywords, labels in DOMAIN_SCENARIOS:
-        if any(keyword in text for keyword in keywords):
-            positive.extend(labels)
-
-    positive.extend(GENERAL_POSITIVE_SCENARIOS)
-
-    if any(word in text for word in ("skip", "avoid", "remove", "without", "no ")):
-        skip_scenarios = [
-            (
-                ("intro", "outro", "credit", "title", "loading", "transition"),
-                "menu loading screen",
-            ),
-            (
-                ("boring", "idle", "waiting", "static", "repeated", "repeat"),
-                "repetitive static footage",
-            ),
-            (
-                ("blur", "dark", "bad quality", "low quality", "obstructed"),
-                "black blank blurry frame",
-            ),
-            (
-                ("blank", "black", "empty", "frozen"),
-                "black blank blurry frame",
-            ),
-            (
-                ("talking", "speech", "speaker", "face"),
-                "person talking narration",
-            ),
-        ]
-        for keywords, label in skip_scenarios:
-            if any(keyword in text for keyword in keywords):
-                negative.append(label)
-
-    negative_text = " ".join(negative)
-    for label in GENERAL_NEGATIVE_SCENARIOS:
-        if "static low motion" in label and "static low motion" in negative_text:
-            continue
-        negative.append(label)
-
-    requested_seconds = parse_requested_seconds(text, 0)
-    explicit_duration = bool(requested_seconds)
-    if requested_seconds:
-        target_seconds = requested_seconds
-    if not explicit_duration and ("shorter" in text or "quick" in text or "fast" in text):
-        target_seconds = min(target_seconds, 30.0)
-        clip_seconds = min(clip_seconds, 6.0)
-    if "detailed" in text or "longer" in text:
-        target_seconds = max(target_seconds, 75.0)
-        clip_seconds = max(clip_seconds, 10.0)
-
-    scenarios = ANALYSIS_SCENARIOS
-    weights = {label: default_label_weight(label) for label in ANALYSIS_SCENARIOS}
-    weights.update({
-        "best requested moment": 1.0,
-        "high energy action": 0.9,
-        "person talking narration": 0.7,
-        "cinematic b-roll shot": 0.75,
-        "conversation dialogue": 0.75,
-        "tutorial demonstration": 0.75,
-        "emotional reaction surprise": 0.75,
-        "walking transition filler": 0.25,
-        "menu loading screen": 0.0,
-        "repetitive static footage": 0.0,
-        "black blank blurry frame": 0.0,
-    })
-
-    topic_weights = [
-        (
-            ("talk", "talking", "speech", "speaker", "interview", "podcast", "dialogue", "conversation", "moment"),
-            {
-                "person talking narration": 1.0,
-                "conversation dialogue": 0.9,
-                "emotional reaction surprise": 0.85,
-                "tutorial demonstration": 0.65,
-                "high energy action": 0.35,
-            },
-        ),
-        (
-            ("lecture", "class", "tutorial", "teach", "explain", "lesson", "course", "diagram", "slide"),
-            {
-                "tutorial demonstration": 1.0,
-                "clear slide detail": 0.9,
-                "screen recording key step": 0.85,
-                "person talking narration": 0.45,
-            },
-        ),
-        (
-            ("action", "fight", "combat", "game", "gameplay", "sport", "goal", "race", "dance", "performance"),
-            {
-                "high energy action": 1.0,
-                "player hitting enemy successfully": 1.0,
-                "enemy taking visible damage": 1.0,
-                "enemy defeated death animation": 1.0,
-                "boss fight major combat": 1.0,
-                "emotional reaction surprise": 0.55,
-            },
-        ),
-        (
-            ("cook", "recipe", "food", "product", "review", "unbox", "demo", "screen", "software", "code"),
-            {
-                "tutorial demonstration": 1.0,
-                "screen recording key step": 1.0,
-                "product feature demo": 1.0,
-                "important cooking step": 1.0,
-                "high energy action": 0.7,
-            },
-        ),
-        (
-            ("funny", "comedy", "laugh", "meme", "fail", "unexpected", "surprise"),
-            {
-                "funny surprise reaction": 1.0,
-                "memorable comedy beat": 1.0,
-                "emotional reaction surprise": 0.9,
-                "high energy action": 0.75,
-            },
-        ),
-        (
-            ("silent", "muted", "no audio", "without audio"),
-            {
-                "visual action reveal": 1.0,
-                "silent understandable moment": 0.95,
-                "high energy action": 0.9,
-                "emotional reaction surprise": 0.8,
-            },
-        ),
-    ]
-    for keywords, updates in topic_weights:
-        if any(keyword in text for keyword in keywords):
-            weights.update(updates)
-
-    if any(term in text for term in ("skip talking", "avoid talking", "no talking", "without talking")):
-        weights["person talking narration"] = 0.15
-        weights["conversation dialogue"] = 0.15
-    if any(term in text for term in ("skip boring", "avoid boring", "remove boring", "no boring")):
-        weights["repetitive static footage"] = 0.0
-    if any(term in text for term in ("skip blurry", "avoid blurry", "no blurry", "skip blank", "avoid blank")):
-        weights["black blank blurry frame"] = 0.0
-
-    return {
-        "request": user_request,
-        "scenarios": scenarios,
-        "request_scenarios": make_unique(positive + negative)[:10],
-        "label_weights": weights,
-        "label_groups": {
-            "keep": [label for label in scenarios if weights.get(label, 0) >= 0.8],
-            "skip": [label for label in scenarios if weights.get(label, 0) <= 0.05],
-            "neutral": [label for label in scenarios if 0.05 < weights.get(label, 0) < 0.8],
-        },
-        "target_short_seconds": target_seconds,
-        "clip_seconds": clip_seconds,
-        "export_format": normalize_export_format(os.environ.get("EXPORT_FORMAT") or EXTERNAL_EDIT_PLAN.get("export_format")),
-        "selection_strategy": normalize_selection_strategy(EXTERNAL_EDIT_PLAN.get("selection_strategy")),
-        "preview_policy": normalize_preview_policy(EXTERNAL_EDIT_PLAN.get("preview_policy")),
-        "transition_policy": normalize_transition_policy(EXTERNAL_EDIT_PLAN.get("transition_policy")),
-        "cross_check_required": True,
-    }
+    return build_plan_from_ai(user_request)
 
 
 EDIT_PLAN = build_edit_plan(EDIT_REQUEST)
@@ -645,49 +236,6 @@ def run_command(command: list[str]) -> None:
         raise RuntimeError(result.stderr[-3000:] or "Command failed")
 
 
-def map_legacy_label(label: str | None) -> str:
-    lowered = (label or "").lower()
-    if label in ANALYSIS_SCENARIOS:
-        return label
-    compacted = compact_label(label or "")
-    if compacted in ANALYSIS_SCENARIOS:
-        return compacted
-    if "best moment matching" in lowered:
-        return "best requested moment"
-    if any(term in lowered for term in ("black", "blank", "frozen", "blur", "unusable", "low quality", "loading")):
-        return "black blank blurry frame"
-    if any(term in lowered for term in ("static", "idle", "boring", "waiting", "repeated", "little action")):
-        return "repetitive static footage"
-    if any(term in lowered for term in ("funny", "comedy", "laugh", "meme", "unexpected", "fail")):
-        return "funny surprise reaction" if "funny surprise reaction" in ANALYSIS_SCENARIOS else "emotional reaction surprise"
-    if any(term in lowered for term in ("talk", "dialogue", "conversation", "interview", "podcast", "reaction", "human")):
-        return "person talking narration" if "person talking narration" in ANALYSIS_SCENARIOS else "emotional reaction surprise"
-    if any(term in lowered for term in ("explain", "lecture", "demo", "screen", "slide", "detail", "product", "cook", "recipe")):
-        return "tutorial demonstration"
-    if any(term in lowered for term in ("action", "combat", "fight", "sport", "race", "dance", "motion", "goal", "game")):
-        return "high energy action"
-    return "high energy action"
-
-
-def migrate_legacy_predictions(data: list[dict]) -> list[dict]:
-    migrated = []
-    for item in data:
-        if not isinstance(item, dict) or "frame" not in item or "second" not in item:
-            continue
-        mapped_scene = map_legacy_label(item.get("scene"))
-        migrated.append(
-            {
-                **item,
-                "scene": mapped_scene,
-                "scenarios": ANALYSIS_SCENARIOS,
-                "analysis_signature": ANALYSIS_SIGNATURE,
-                "migrated_from_legacy": True,
-                "legacy_scene": item.get("scene"),
-            }
-        )
-    return migrated
-
-
 def load_predictions() -> list[dict]:
     if not ANALYSIS_SOURCE_PATH.exists():
         return []
@@ -704,7 +252,7 @@ def load_predictions() -> list[dict]:
             reusable.append(item)
     if reusable:
         return reusable
-    return migrate_legacy_predictions(data)
+    return []
 
 
 def save_json(path: Path, data: object) -> None:
@@ -768,22 +316,23 @@ def local_frame_result(frame_bgr: np.ndarray, reason: str) -> dict:
     contrast = float(np.std(gray))
     blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
-    bad_label = "black blank blurry frame"
+    ordered_by_weight = sorted(
+        EDIT_PLAN["label_weights"].items(),
+        key=lambda item: item[1],
+    )
+    lowest_label = ordered_by_weight[0][0]
+    highest_label = ordered_by_weight[-1][0]
     if brightness < 12 or contrast < 7 or blur_score < 18:
-        label = bad_label
+        label = lowest_label
         confidence = 0.62
     else:
         preferred = EDIT_PLAN.get("label_groups", {}).get("keep") or []
-        label = preferred[0] if preferred else "high energy action"
-        if label_is_bad(label):
-            label = "high energy action"
+        label = preferred[0] if preferred else highest_label
         confidence = 0.38
 
     all_scores = [0.05 for _ in ANALYSIS_SCENARIOS]
     if label in ANALYSIS_SCENARIOS:
         all_scores[ANALYSIS_SCENARIOS.index(label)] = confidence
-    elif bad_label in ANALYSIS_SCENARIOS and label == bad_label:
-        all_scores[ANALYSIS_SCENARIOS.index(bad_label)] = confidence
 
     return {
         "scene_label": label,
@@ -873,10 +422,7 @@ def classify_video(info: dict) -> list[dict]:
     sample_frames = list(range(0, total_frames, stride))
     total_samples = len(sample_frames)
 
-    if predictions and (
-        ANALYSIS_SOURCE_PATH != PREDICTIONS_PATH
-        or any(item.get("migrated_from_legacy") for item in predictions[:5])
-    ):
+    if predictions and ANALYSIS_SOURCE_PATH != PREDICTIONS_PATH:
         save_json(PREDICTIONS_PATH, predictions)
         print(f"Reusing analysis index from {ANALYSIS_SOURCE_PATH}", flush=True)
     if len(predictions_by_frame) >= total_samples and total_samples:
@@ -974,37 +520,18 @@ def classify_video(info: dict) -> list[dict]:
 def prediction_score(prediction: dict) -> float:
     label = prediction.get("scene")
     confidence = prediction.get("confidence")
-    base = EDIT_PLAN["label_weights"].get(label, 0.1)
+    base = EDIT_PLAN["label_weights"].get(label, 0.0)
     if isinstance(confidence, (int, float)):
         return base * (0.75 + confidence)
     return base
 
 
 def is_bad_label(label: str | None) -> bool:
-    lowered = (label or "").lower()
-    return (
-        EDIT_PLAN["label_weights"].get(label, 0.1) <= 0.05
-        or "black" in lowered
-        or "blank frame" in lowered
-        or "blur" in lowered
-        or "unusable" in lowered
-        or "boring" in lowered
-        or "static" in lowered
-        or "menu" in lowered
-        or "loading" in lowered
-        or "failed attack" in lowered
-        or "taking damage failed" in lowered
-    )
+    return EDIT_PLAN["label_weights"].get(label, 0.0) <= 0.05
 
 
 def is_strong_bad_label(label: str | None) -> bool:
-    lowered = (label or "").lower()
-    return (
-        "black" in lowered
-        or "blank frame" in lowered
-        or "blur" in lowered
-        or "unusable" in lowered
-    )
+    return EDIT_PLAN["label_weights"].get(label, 0.0) <= 0.01
 
 
 def has_bad_sample(samples: list[dict], start: float, end: float) -> bool:
@@ -1030,7 +557,7 @@ def build_highlights(predictions: list[dict], duration: float) -> list[dict]:
 
     def is_keep_sample(item: dict) -> bool:
         label = item.get("scene")
-        weight = label_weights.get(label, default_label_weight(label))
+        weight = label_weights.get(label, 0.0)
         return not is_bad_label(label) and weight > 0.05 and float(item.get("score") or 0) >= MIN_CLIP_SCORE
 
     def label_summary(samples: list[dict]) -> list[str]:

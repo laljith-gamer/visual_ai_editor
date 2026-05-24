@@ -1,286 +1,25 @@
 import json
 import os
 import re
+import urllib.request
 from typing import Any
-
-
-GOOD_SCENARIOS = [
-    "high energy action",
-    "person talking narration",
-    "cinematic b-roll shot",
-    "conversation dialogue",
-    "tutorial demonstration",
-    "emotional reaction surprise",
-]
-
-BAD_SCENARIOS = [
-    "walking transition filler",
-    "menu loading screen",
-    "repetitive static footage",
-    "black blank blurry frame",
-]
-
-UNIVERSAL_SCENARIOS = GOOD_SCENARIOS + BAD_SCENARIOS
-EXPORT_FORMATS = {"vertical", "horizontal", "both", "auto"}
-
-DOMAIN_SCENARIOS = [
-    (
-        ("game", "gameplay", "boss", "combat", "fight", "combo", "kill", "cutscene"),
-        [
-            "player hitting enemy successfully",
-            "enemy taking visible damage",
-            "enemy defeated death animation",
-            "boss fight major combat",
-            "cinematic cutscene story",
-            "exploration walking idle",
-            "menu loading screen inventory",
-            "player taking damage failed attack",
-            "static boring repeated gameplay",
-        ],
-    ),
-    (
-        ("sport", "goal", "score", "match", "race", "basketball", "football", "cricket"),
-        [
-            "decisive sports play",
-            "athlete celebration reaction",
-        ],
-    ),
-    (
-        ("lecture", "class", "tutorial", "teach", "explain", "lesson", "course"),
-        [
-            "key teaching moment",
-            "clear slide detail",
-        ],
-    ),
-    (
-        ("cook", "recipe", "food", "bake", "kitchen"),
-        [
-            "important cooking step",
-            "finished food reveal",
-        ],
-    ),
-    (
-        ("vlog", "travel", "trip", "street", "nature", "place"),
-        [
-            "scenic travel moment",
-            "candid reaction interaction",
-        ],
-    ),
-    (
-        ("product", "review", "unbox", "demo", "showcase"),
-        [
-            "product feature demo",
-            "close up product detail",
-        ],
-    ),
-    (
-        ("dance", "music", "song", "performance", "stage"),
-        [
-            "peak performance moment",
-            "crowd performer reaction",
-        ],
-    ),
-    (
-        ("interview", "podcast", "talk", "speaker", "conversation"),
-        [
-            "speaker reaction gesture",
-            "important conversation beat",
-        ],
-    ),
-    (
-        ("screen", "software", "app", "website", "code", "coding", "computer"),
-        [
-            "screen recording key step",
-            "interface result change",
-        ],
-    ),
-    (
-        ("silent", "muted", "no audio", "without audio"),
-        [
-            "visual action reveal",
-            "silent understandable moment",
-        ],
-    ),
-    (
-        ("funny", "comedy", "laugh", "meme", "fail", "unexpected"),
-        [
-            "funny surprise reaction",
-            "memorable comedy beat",
-        ],
-    ),
-]
-
-LABEL_ALIASES = {
-    "clear important moment with the main subject or event": "high energy action",
-    "visually dynamic motion change reveal or result": "high energy action",
-    "expressive reaction emotion or memorable human moment": "emotional reaction surprise",
-    "useful explanation demonstration or key detail being shown": "tutorial demonstration",
-    "funny surprising unusual or memorable moment": "emotional reaction surprise",
-    "static low motion waiting or boring filler footage": "repetitive static footage",
-    "black screen blank frame blurry unusable footage or transition": "black blank blurry frame",
-    "intense gameplay combat boss fight or skilled action moment": "boss fight major combat",
-    "cinematic game story cutscene dialogue or major reveal": "cinematic cutscene story",
-    "game menu loading respawn inventory map or repeated walking filler": "menu loading screen inventory",
-}
 
 
 def make_unique(items: list[str]) -> list[str]:
     unique = []
     seen = set()
     for item in items:
-        text = str(item or "").strip()
-        normalized = text.lower()
-        if normalized and normalized not in seen:
+        text = " ".join(str(item or "").replace("\n", " ").split()).strip()
+        key = text.lower()
+        if text and key not in seen:
             unique.append(text)
-            seen.add(normalized)
+            seen.add(key)
     return unique
 
 
-def compact_label(label: str, max_words: int = 6) -> str:
+def clean_label(label: Any) -> str:
     text = " ".join(str(label or "").replace("\n", " ").split()).strip()
-    if not text:
-        return ""
-    lowered = text.lower()
-    if lowered in LABEL_ALIASES:
-        return LABEL_ALIASES[lowered]
-    if lowered.startswith("best moment matching") or lowered.startswith("best visual moment"):
-        return "best requested moment"
-    if len(text.split()) <= max_words and len(text) <= 60:
-        return text
-
-    words = re.findall(r"[a-zA-Z0-9]+", lowered)
-    stopwords = {
-        "a",
-        "an",
-        "and",
-        "are",
-        "as",
-        "at",
-        "be",
-        "being",
-        "for",
-        "from",
-        "in",
-        "into",
-        "is",
-        "of",
-        "or",
-        "that",
-        "the",
-        "this",
-        "to",
-        "with",
-        "without",
-        "your",
-        "user",
-        "request",
-        "video",
-        "scene",
-        "moment",
-    }
-    keywords = [word for word in words if word not in stopwords][:max_words]
-    return " ".join(keywords) or "best requested moment"
-
-
-def clamp_number(value: Any, fallback: float, minimum: float, maximum: float) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return fallback
-    return max(minimum, min(maximum, number))
-
-
-def normalize_string_list(value: Any, limit: int = 12) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item).strip() for item in value if str(item).strip()][:limit]
-
-
-def normalize_export_format(value: Any, memory: dict[str, Any]) -> str:
-    text = str(value or memory.get("format") or "auto").strip().lower()
-    return text if text in EXPORT_FORMATS else "auto"
-
-
-def normalize_selection_strategy(raw: Any) -> dict[str, Any]:
-    strategy = raw if isinstance(raw, dict) else {}
-    min_clip = clamp_number(strategy.get("minimum_clip_seconds"), 4.0, 1.0, 30.0)
-    max_clip = clamp_number(strategy.get("maximum_clip_seconds"), 45.0, min_clip, 120.0)
-    return {
-        "search_scope": "full_video",
-        "spread_across_timeline": bool(strategy.get("spread_across_timeline", True)),
-        "avoid_single_start_chunk": bool(strategy.get("avoid_single_start_chunk", True)),
-        "allow_single_long_clip": bool(strategy.get("allow_single_long_clip", False)),
-        "prefer_diverse_labels": bool(strategy.get("prefer_diverse_labels", True)),
-        "minimum_clip_seconds": min_clip,
-        "maximum_clip_seconds": max_clip,
-        "context_before_seconds": clamp_number(strategy.get("context_before_seconds"), 1.0, 0.0, 6.0),
-        "context_after_seconds": clamp_number(strategy.get("context_after_seconds"), 1.5, 0.0, 8.0),
-        "boundary_gap_seconds": clamp_number(strategy.get("boundary_gap_seconds"), 2.5, 0.5, 10.0),
-        "target_clip_count": int(clamp_number(strategy.get("target_clip_count"), 0.0, 0.0, 30.0)),
-    }
-
-
-def normalize_preview_policy(raw: Any) -> dict[str, Any]:
-    policy = raw if isinstance(raw, dict) else {}
-    return {
-        "preview_source": str(policy.get("preview_source") or "selected_clip").strip() or "selected_clip",
-        "hover_preview": bool(policy.get("hover_preview", True)),
-        "show_review_before_export": bool(policy.get("show_review_before_export", True)),
-    }
-
-
-def normalize_transition_policy(raw: Any) -> dict[str, Any]:
-    policy = raw if isinstance(raw, dict) else {}
-    transition_type = str(policy.get("type") or "fade").strip().lower()
-    if transition_type not in {"fade", "none"}:
-        transition_type = "fade"
-    duration = clamp_number(policy.get("duration_seconds"), 0.3, 0.0, 1.5)
-    enabled = bool(policy.get("enabled", transition_type != "none" and duration > 0))
-    return {
-        "enabled": enabled and transition_type != "none" and duration > 0,
-        "type": transition_type,
-        "duration_seconds": duration,
-        "audio_fade": bool(policy.get("audio_fade", True)),
-    }
-
-
-def label_is_bad(label: str) -> bool:
-    text = label.lower()
-    if text.startswith("best moment matching") or text.startswith("best visual moment"):
-        return False
-    return any(
-        term in text
-        for term in (
-            "black",
-            "blank",
-            "blur",
-            "unusable",
-            "static",
-            "boring",
-            "loading",
-            "menu",
-            "repeated",
-            "filler",
-            "idle",
-            "failed",
-            "taking damage",
-            "low quality",
-            "no visible",
-        )
-    )
-
-
-def default_weight(label: str) -> float:
-    return 0.0 if label_is_bad(label) else 0.85
-
-
-def clean_prompt_for_label(text: str, limit: int = 120) -> str:
-    cleaned = " ".join(str(text or "").replace("\n", " ").split())
-    if not cleaned:
-        return "the user's edit request"
-    if len(cleaned) <= limit:
-        return cleaned
-    return cleaned[: limit - 3].rstrip() + "..."
+    return text[:80]
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:
@@ -307,14 +46,43 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def local_scenarios(prompt: str) -> list[str]:
-    text = prompt.lower()
-    scenarios = ["best requested moment"]
-    for keywords, labels in DOMAIN_SCENARIOS:
-        if any(keyword in text for keyword in keywords):
-            scenarios.extend(labels)
-    scenarios.extend(UNIVERSAL_SCENARIOS)
-    return make_unique([compact_label(label) for label in scenarios])[:14]
+def load_json_env(name: str) -> Any:
+    raw = os.getenv(name)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def load_remote_planner_context() -> Any:
+    inline_context = load_json_env("AI_PLANNER_CONTEXT_JSON")
+    url = os.getenv("AI_PLANNER_CONTEXT_URL")
+    if not url:
+        return inline_context
+
+    request = urllib.request.Request(url, headers={"Accept": "application/json,text/plain"})
+    token = os.getenv("AI_PLANNER_CONTEXT_BEARER_TOKEN")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+
+    try:
+        with urllib.request.urlopen(request, timeout=float(os.getenv("AI_PLANNER_CONTEXT_TIMEOUT_SECONDS", "8"))) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        return {
+            "inline_context": inline_context,
+            "remote_context_error": f"{type(exc).__name__}: {exc}",
+        }
+
+    try:
+        remote_context: Any = json.loads(body)
+    except json.JSONDecodeError:
+        remote_context = body
+    if inline_context is None:
+        return remote_context
+    return {"inline_context": inline_context, "remote_context": remote_context}
 
 
 def normalize_plan(
@@ -324,79 +92,76 @@ def normalize_plan(
     memory: dict[str, Any],
     default_prompt: str,
 ) -> dict[str, Any]:
-    raw_memory = raw.get("memory_updates") or raw.get("memory") or {}
     merged_memory = dict(memory)
+    raw_memory = raw.get("memory_updates") or raw.get("memory") or {}
     if isinstance(raw_memory, dict):
-        for key in ("duration_seconds", "format", "styles", "keep", "skip", "last_prompt", "selection_strategy"):
-            if key in raw_memory and raw_memory[key] not in (None, "", [], {}):
-                merged_memory[key] = raw_memory[key]
+        for key, value in raw_memory.items():
+            if value not in (None, "", [], {}):
+                merged_memory[str(key)] = value
 
-    scenarios = make_unique([compact_label(label) for label in (raw.get("roboflow_scenarios") or raw.get("scenarios") or [])])
-    if len(scenarios) < 4:
-        scenarios = local_scenarios(prompt)
-    scenarios = make_unique(scenarios[:9] + [compact_label(label) for label in UNIVERSAL_SCENARIOS])
+    scenarios = make_unique([clean_label(item) for item in raw.get("roboflow_scenarios") or raw.get("scenarios") or []])
+    request_scenarios = make_unique([clean_label(item) for item in raw.get("request_scenarios") or []])
 
     raw_weights = raw.get("label_weights") if isinstance(raw.get("label_weights"), dict) else {}
-    weights: dict[str, float] = {label: default_weight(label) for label in scenarios}
+    label_weights: dict[str, float] = {}
     for label, weight in raw_weights.items():
-        label_text = compact_label(str(label).strip())
-        if label_text:
-            weights[label_text] = clamp_number(weight, default_weight(label_text), 0.0, 1.0)
-    for label in scenarios:
-        if label_is_bad(label):
-            weights[label] = 0.0
+        label_text = clean_label(label)
+        if not label_text:
+            continue
+        try:
+            label_weights[label_text] = max(0.0, min(1.0, float(weight)))
+        except (TypeError, ValueError):
+            continue
 
-    duration = merged_memory.get("duration_seconds") or raw.get("target_short_seconds")
-    target_seconds = clamp_number(duration, 30.0, 5.0, 300.0)
-    clip_seconds = clamp_number(raw.get("clip_seconds"), 8.0, 4.0, 30.0)
-    if target_seconds >= 90:
-        clip_seconds = max(clip_seconds, 8.0)
-    export_format = normalize_export_format(raw.get("export_format"), merged_memory)
-    if export_format != "auto":
-        merged_memory["format"] = export_format
-    selection_strategy = normalize_selection_strategy(raw.get("selection_strategy"))
-    preview_policy = normalize_preview_policy(raw.get("preview_policy"))
-    transition_policy = normalize_transition_policy(raw.get("transition_policy"))
-    merged_memory["selection_strategy"] = selection_strategy
+    validation_errors = []
+    if has_video and bool(raw.get("ready", True)):
+        if len(scenarios) < 2:
+            validation_errors.append("AI did not return enough Roboflow scenario labels.")
+        if not label_weights:
+            validation_errors.append("AI did not return label_weights.")
+        missing_weight_labels = [label for label in scenarios if label not in label_weights]
+        if missing_weight_labels:
+            validation_errors.append(
+                "AI did not return weights for: " + ", ".join(missing_weight_labels[:4]) + "."
+            )
+        if raw.get("target_short_seconds") in (None, "", 0):
+            validation_errors.append("AI did not choose target_short_seconds.")
+        if raw.get("export_format") in (None, ""):
+            validation_errors.append("AI did not choose export_format.")
 
-    questions = raw.get("questions") if isinstance(raw.get("questions"), list) else []
-    questions = [str(question).strip() for question in questions if str(question).strip()][:2]
-    if not has_video:
-        questions.insert(0, "Upload a video first so I can analyze the actual footage.")
-    if not prompt.strip():
-        questions.append("Tell me what kind of edit you want.")
-    ready = bool(raw.get("ready", True)) and not questions
+    questions = [str(item).strip() for item in raw.get("questions", []) if str(item).strip()] if isinstance(raw.get("questions"), list) else []
+    ready = bool(raw.get("ready", False)) and not questions and not validation_errors
+    message = str(raw.get("message") or "").strip()
+    if validation_errors and not message:
+        message = "I need to regenerate the AI edit plan: " + " ".join(validation_errors)
+    if not message:
+        message = "I have the edit plan." if ready else "Tell me what you want from this video."
 
     resolved_prompt = str(raw.get("resolved_prompt") or prompt or default_prompt).strip()
-    message = str(raw.get("message") or "").strip()
-    if not message:
-        message = (
-            "I have enough detail. I will build a fresh edit plan from your request and reuse saved analysis when possible."
-            if ready
-            else "Before I run it, I need this: " + " ".join(questions)
-        )
+    plan = {}
+    if ready:
+        plan = {
+            "request": resolved_prompt,
+            "roboflow_scenarios": scenarios,
+            "request_scenarios": request_scenarios or scenarios,
+            "label_weights": label_weights,
+            "target_short_seconds": raw.get("target_short_seconds"),
+            "clip_seconds": raw.get("clip_seconds"),
+            "export_format": raw.get("export_format"),
+            "selection_strategy": raw.get("selection_strategy") if isinstance(raw.get("selection_strategy"), dict) else {},
+            "preview_policy": raw.get("preview_policy") if isinstance(raw.get("preview_policy"), dict) else {},
+            "transition_policy": raw.get("transition_policy") if isinstance(raw.get("transition_policy"), dict) else {},
+            "cross_check_required": bool(raw.get("cross_check_required", True)),
+            "planner_source": raw.get("planner_source", "qwen"),
+        }
 
-    request_scenarios = make_unique(raw.get("request_scenarios") or scenarios)
     return {
         "ready": ready,
         "message": message,
-        "questions": questions,
+        "questions": questions[:2],
         "memory": merged_memory,
         "resolved_prompt": resolved_prompt,
-        "plan": {
-            "request": resolved_prompt,
-            "roboflow_scenarios": scenarios,
-            "request_scenarios": request_scenarios[:12],
-            "label_weights": weights,
-            "target_short_seconds": target_seconds,
-            "clip_seconds": clip_seconds,
-            "export_format": export_format,
-            "selection_strategy": selection_strategy,
-            "preview_policy": preview_policy,
-            "transition_policy": transition_policy,
-            "cross_check_required": True,
-            "planner_source": raw.get("planner_source", "ai"),
-        },
+        "plan": plan,
     }
 
 
@@ -422,79 +187,48 @@ def build_ai_plan(
     )
     model = os.getenv("DASHSCOPE_MODEL", "qwen3.7-max")
     system = (
-        "You are the planning brain for a universal video shorts editor. "
-        "Talk like a helpful human editor, then turn natural user chat into a precise edit plan. "
-        "If the user only greets you or gives no edit intent, reply naturally and ask what they want from the uploaded video. "
-        "Use sensible defaults when the request is clear enough: 30 seconds, vertical shorts format, strongest visual moments, "
-        "and skip boring, static, blurry, menu, loading, or repeated footage. "
-        "Ask at most two short clarification questions only when required. "
-        "Create Roboflow CLIP scenario labels that match this user's request and include negative labels for bad footage. "
-        "Every Roboflow scenario label must be 2 to 6 words, plain visual language, no sentences, no punctuation. "
-        "Clip duration is not fixed: choose boundary and transition settings that fit the request and full video. "
-        "Return pure JSON only. Do not include markdown."
+        "You are the only planning brain for a universal video shorts editor. "
+        "Do not rely on hidden rule-based defaults. If a default is useful, choose it yourself and explain it naturally. "
+        "For greetings or unclear requests, respond like a human editor and ask concise follow-up questions. "
+        "When ready, return a complete edit plan that the backend can execute without adding content assumptions. "
+        "Roboflow scenario labels must be short visual labels. Include positive labels to keep and negative labels to skip. "
+        "Return strict JSON only, no markdown."
     )
-    schema = {
-        "ready": True,
-        "message": "Natural one or two sentence response for the user.",
-        "questions": [],
-        "memory_updates": {
-            "duration_seconds": 30,
-            "format": "vertical",
-            "styles": ["fast"],
-            "keep": ["important action"],
-            "skip": ["boring"],
-            "selection_strategy": {
-                "search_scope": "full_video",
-                "spread_across_timeline": True,
-                "avoid_single_start_chunk": True,
-            },
-        },
-        "resolved_prompt": "The user's request rewritten with remembered preferences.",
-        "roboflow_scenarios": [
-            "best requested moment",
-            "specific positive scene",
-            "black blank blurry frame",
-            "repetitive static footage",
-        ],
-        "label_weights": {
-            "best requested moment": 1.0,
-            "black blank blurry frame": 0.0,
-        },
-        "target_short_seconds": 30,
-        "clip_seconds": 8,
-        "export_format": "vertical | horizontal | both | auto",
+    contract = {
+        "ready": "boolean; true only when enough detail exists to edit",
+        "message": "natural response to the user",
+        "questions": "array of at most two follow-up questions",
+        "memory_updates": "object with any useful user preferences to remember",
+        "resolved_prompt": "complete edit request after applying memory",
+        "roboflow_scenarios": "array of short visual labels generated for this request",
+        "label_weights": "object mapping each scenario label to a number from 0.0 skip to 1.0 keep",
+        "target_short_seconds": "number chosen by AI when ready",
+        "clip_seconds": "number or null chosen by AI when ready",
+        "export_format": "vertical, horizontal, both, or auto",
         "selection_strategy": {
             "search_scope": "full_video",
-            "spread_across_timeline": True,
-            "avoid_single_start_chunk": True,
-            "allow_single_long_clip": False,
-            "prefer_diverse_labels": True,
-            "minimum_clip_seconds": 4,
-            "maximum_clip_seconds": 45,
-            "context_before_seconds": 1,
-            "context_after_seconds": 1.5,
-            "boundary_gap_seconds": 2.5,
-            "target_clip_count": 0,
+            "spread_across_timeline": "boolean",
+            "avoid_single_start_chunk": "boolean",
+            "allow_single_long_clip": "boolean",
+            "prefer_diverse_labels": "boolean",
+            "minimum_clip_seconds": "number",
+            "maximum_clip_seconds": "number",
+            "context_before_seconds": "number",
+            "context_after_seconds": "number",
+            "boundary_gap_seconds": "number",
+            "target_clip_count": "number or 0 for AI/backend to infer",
         },
-        "preview_policy": {
-            "preview_source": "selected_clip",
-            "hover_preview": True,
-            "show_review_before_export": True,
-        },
-        "transition_policy": {
-            "enabled": True,
-            "type": "fade | none",
-            "duration_seconds": 0.3,
-            "audio_fade": True,
-        },
-        "request_scenarios": ["short intent notes for the report"],
+        "preview_policy": "object",
+        "transition_policy": "object",
+        "request_scenarios": "array of human-readable intent notes",
     }
     user = {
         "user_prompt": prompt,
         "has_video": has_video,
         "current_memory": memory,
         "default_prompt": default_prompt,
-        "required_json_shape": schema,
+        "online_planner_context": load_remote_planner_context(),
+        "required_json_contract": contract,
     }
     completion = client.chat.completions.create(
         model=model,
