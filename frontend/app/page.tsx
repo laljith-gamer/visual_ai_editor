@@ -256,10 +256,30 @@ function buildBrowserHighlights(predictions: BrowserPrediction[], duration: numb
   }
 
   const selected: Highlight[] = [];
+  const usedCandidateIds = new Set<number>();
+  const plannedClipSeconds = Number(plan?.clip_seconds || 10);
+  const desiredClipCount = Math.max(
+    1,
+    Math.min(
+      candidates.length,
+      Number(strategy.target_clip_count || 0) > 0
+        ? Math.round(Number(strategy.target_clip_count))
+        : Math.ceil(targetSeconds / Math.max(minClip, Math.min(maxClip, plannedClipSeconds || 10))),
+    ),
+  );
+  const spreadAcrossTimeline = strategy.spread_across_timeline !== false && duration > targetSeconds;
   let total = 0;
-  for (const candidate of candidates.sort((left, right) => right.score - left.score)) {
-    if (total >= targetSeconds) break;
-    if (selected.some((clip) => candidate.start < clip.end && candidate.end > clip.start)) continue;
+
+  function centerOf(clip: Highlight) {
+    return (clip.start + clip.end) / 2;
+  }
+
+  function overlapsSelected(candidate: Highlight) {
+    return selected.some((clip) => candidate.start < clip.end && candidate.end > clip.start);
+  }
+
+  function addCandidate(candidate: Highlight) {
+    if (total >= targetSeconds || overlapsSelected(candidate)) return false;
     const remaining = targetSeconds - total;
     const clip = { ...candidate };
     if (clip.duration > remaining && remaining >= minClip) {
@@ -267,10 +287,80 @@ function buildBrowserHighlights(predictions: BrowserPrediction[], duration: numb
       clip.duration = remaining;
       clip.why_not_longer = "Trimmed to match the requested final duration.";
     } else if (clip.duration > remaining && selected.length) {
-      continue;
+      return false;
     }
     selected.push(clip);
     total += clip.duration;
+    return true;
+  }
+
+  const rankedCandidates = candidates.map((candidate, id) => ({
+    id,
+    candidate,
+    center: centerOf(candidate),
+  }));
+
+  function chooseBestNearAnchor(pool: typeof rankedCandidates, anchor: number) {
+    if (!pool.length) return undefined;
+    const bestScore = Math.max(...pool.map((item) => item.candidate.score));
+    const scoreSlack = Math.max(0.025, Math.abs(bestScore) * 0.03);
+    return pool
+      .filter((item) => item.candidate.score >= bestScore - scoreSlack)
+      .sort((left, right) => {
+        const anchorDistance = Math.abs(left.center - anchor) - Math.abs(right.center - anchor);
+        if (anchorDistance) return anchorDistance;
+        return right.candidate.score - left.candidate.score || left.candidate.start - right.candidate.start;
+      })[0];
+  }
+
+  if (spreadAcrossTimeline && desiredClipCount > 1) {
+    const bucketSize = duration / desiredClipCount;
+    for (let bucket = 0; bucket < desiredClipCount && total < targetSeconds; bucket += 1) {
+      const bucketStart = bucket * bucketSize;
+      const bucketEnd = bucket === desiredClipCount - 1 ? duration + 0.001 : bucketStart + bucketSize;
+      const anchor = bucketStart + bucketSize / 2;
+      const unused = rankedCandidates.filter(
+        (item) =>
+          !usedCandidateIds.has(item.id) &&
+          !overlapsSelected(item.candidate) &&
+          item.center >= bucketStart &&
+          item.center < bucketEnd,
+      );
+      const fallback = rankedCandidates.filter(
+        (item) => !usedCandidateIds.has(item.id) && !overlapsSelected(item.candidate),
+      );
+      const chosen = chooseBestNearAnchor(unused.length ? unused : fallback, anchor);
+      if (chosen) {
+        usedCandidateIds.add(chosen.id);
+        addCandidate(chosen.candidate);
+      }
+    }
+  }
+
+  while (total < targetSeconds) {
+    const available = rankedCandidates.filter(
+      (item) => !usedCandidateIds.has(item.id) && !overlapsSelected(item.candidate),
+    );
+    if (!available.length) break;
+
+    available.sort((left, right) => {
+      const leftDistance = selected.length
+        ? Math.min(...selected.map((clip) => Math.abs(centerOf(clip) - left.center)))
+        : duration;
+      const rightDistance = selected.length
+        ? Math.min(...selected.map((clip) => Math.abs(centerOf(clip) - right.center)))
+        : duration;
+      const leftSpreadBonus = duration ? Math.min(0.08, (leftDistance / duration) * 0.08) : 0;
+      const rightSpreadBonus = duration ? Math.min(0.08, (rightDistance / duration) * 0.08) : 0;
+      return (
+        right.candidate.score + rightSpreadBonus - (left.candidate.score + leftSpreadBonus) ||
+        left.candidate.start - right.candidate.start
+      );
+    });
+
+    const chosen = available[0];
+    usedCandidateIds.add(chosen.id);
+    if (!addCandidate(chosen.candidate)) break;
   }
 
   return selected
