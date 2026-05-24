@@ -459,6 +459,9 @@ def build_ai_plan(
     memory: dict[str, Any],
     default_prompt: str,
 ) -> dict[str, Any] | None:
+    if os.getenv("ENABLE_AI_PLANNER") != "1":
+        return None
+
     api_key = os.getenv("DASHSCOPE_API_KEY")
     if not api_key:
         return None
