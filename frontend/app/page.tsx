@@ -1506,7 +1506,20 @@ export default function Home() {
     }
     URL.revokeObjectURL(video.src);
 
-    const highlights = buildEventHighlights(eventAnalyses, duration, plan);
+    const temporalFailureReason =
+      eventAnalyses.find((event) => event.fallback && event.reason)?.reason ||
+      "Workflow B did not return usable temporal scores.";
+    const allTemporalCallsFailed = eventAnalyses.length > 0 && eventAnalyses.every((event) => event.fallback);
+    let usedBroadFallback = false;
+    let highlights = buildEventHighlights(eventAnalyses, duration, plan);
+    if (!highlights.length && allTemporalCallsFailed) {
+      usedBroadFallback = true;
+      highlights = buildBrowserHighlights(predictions, duration, plan).map((clip) => ({
+        ...clip,
+        reason: `Workflow B was unavailable, so this clip came from the broad frame scan. ${clip.reason ?? ""}`.trim(),
+        boundary_reason: temporalFailureReason.slice(0, 220),
+      }));
+    }
     if (!highlights.length) {
       const unavailable = eventAnalyses.some((event) => event.fallback);
       setJob(
@@ -1519,7 +1532,7 @@ export default function Home() {
           "completed",
           100,
           unavailable
-            ? "Temporal analysis could not score the candidate windows. Check Workflow B configuration."
+            ? `Temporal analysis could not score the candidate windows: ${temporalFailureReason.slice(0, 160)}`
             : "Temporal analysis finished, but no strong matching clips were found.",
           predictions.length,
         ),
@@ -1536,7 +1549,9 @@ export default function Home() {
         plan,
         "rendering",
         72,
-        "Rendering selected clips locally in your browser.",
+        usedBroadFallback
+          ? "Workflow B is unavailable, so I am rendering the best broad-scan clips instead."
+          : "Rendering selected clips locally in your browser.",
         predictions.length,
         highlights,
       ),
@@ -1562,6 +1577,7 @@ export default function Home() {
         `Browser Video Shorts Report\n\n` +
         `The original ${formatBytes(fileToProcess.size)} video stayed in this browser. ` +
         `${predictions.length} small frame samples and ${eventAnalyses.length} contact sheets were sent to the backend for scoring.\n\n` +
+        (usedBroadFallback ? `Workflow B fallback: ${temporalFailureReason.slice(0, 220)}\n\n` : "") +
         `Selected ${highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
         `Export format: browser-rendered WebM.\n`,
     };
