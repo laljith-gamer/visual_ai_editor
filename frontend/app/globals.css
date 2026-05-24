@@ -23,8 +23,10 @@
 
 html,
 body {
+  height: 100%;
   margin: 0;
   min-height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family:
@@ -61,7 +63,10 @@ p {
 .editor-shell {
   display: grid;
   gap: 14px;
-  min-height: 100dvh;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
   padding: 14px;
 }
 
@@ -232,7 +237,8 @@ h2 {
   display: grid;
   gap: 14px;
   grid-template-columns: 240px minmax(0, 1fr) 340px;
-  min-height: calc(100dvh - 98px);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .project-rail,
@@ -240,11 +246,13 @@ h2 {
   display: grid;
   gap: 12px;
   min-height: 0;
+  overflow: hidden;
   padding: 12px;
 }
 
 .project-rail {
   grid-auto-rows: min-content;
+  grid-template-rows: min-content min-content min-content minmax(0, 1fr);
 }
 
 .assistant-panel {
@@ -255,6 +263,7 @@ h2 {
   box-shadow: none;
   display: grid;
   gap: 10px;
+  min-height: 0;
   min-width: 0;
   padding: 12px;
 }
@@ -351,7 +360,7 @@ h2 {
 }
 
 .history-panel {
-  max-height: 260px;
+  max-height: none;
   min-height: 0;
 }
 
@@ -454,9 +463,10 @@ h2 {
 .editor-stage {
   box-shadow: none;
   display: grid;
-  gap: 14px;
-  grid-template-rows: minmax(360px, 1fr) auto;
+  gap: 10px;
+  grid-template-rows: minmax(0, 1fr) minmax(188px, 28dvh);
   min-height: 0;
+  overflow: hidden;
   padding: 12px;
 }
 
@@ -472,8 +482,8 @@ h2 {
 .timeline-header {
   border-bottom: 1px solid var(--line);
   justify-content: space-between;
-  min-height: 58px;
-  padding: 12px 14px;
+  min-height: 50px;
+  padding: 9px 12px;
 }
 
 .stage-actions,
@@ -526,7 +536,8 @@ h2 {
   box-shadow: none;
   display: grid;
   gap: 0;
-  grid-template-rows: auto minmax(116px, auto) auto;
+  grid-template-rows: auto minmax(78px, 1fr) auto;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -536,8 +547,9 @@ h2 {
   border-bottom: 1px solid var(--line);
   display: flex;
   gap: 8px;
-  min-height: 132px;
+  min-height: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 12px;
   scrollbar-color: var(--line-strong) transparent;
 }
@@ -550,9 +562,9 @@ h2 {
   cursor: grab;
   display: grid;
   flex-basis: 140px;
-  gap: 10px;
+  gap: 7px;
   min-width: 150px;
-  padding: 12px 16px;
+  padding: 10px 15px;
   position: relative;
   transition:
     background 160ms ease,
@@ -589,9 +601,13 @@ h2 {
 }
 
 .timeline-clip p {
-  font-size: 13px;
+  display: -webkit-box;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1.32;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   overflow-wrap: anywhere;
 }
 
@@ -640,11 +656,14 @@ h2 {
   border-radius: 0;
   box-shadow: none;
   display: grid;
-  gap: 12px;
-  padding: 12px;
+  gap: 8px;
+  grid-template-columns: auto minmax(260px, 0.9fr) minmax(260px, 1fr);
+  min-height: 0;
+  padding: 9px 12px;
 }
 
 .inspector-title {
+  align-self: center;
   color: var(--muted);
   gap: 8px;
   font-size: 12px;
@@ -652,9 +671,30 @@ h2 {
   text-transform: uppercase;
 }
 
+.clip-inspector .time-fields {
+  grid-column: 2;
+}
+
+.clip-inspector .nudge-grid {
+  grid-column: 3;
+}
+
+.clip-inspector .inspector-actions {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.clip-inspector > .clip-reason {
+  align-self: center;
+  grid-column: 2 / -1;
+  max-height: 42px;
+  overflow: auto;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
 .time-fields {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -675,7 +715,7 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
-  min-height: 38px;
+  min-height: 34px;
   padding: 0 10px;
   width: 100%;
 }
@@ -687,8 +727,8 @@ h2 {
 
 .nudge-grid {
   display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .nudge-grid button {
@@ -703,8 +743,8 @@ h2 {
   font-weight: 760;
   gap: 6px;
   justify-content: center;
-  min-height: 36px;
-  padding: 0 8px;
+  min-height: 34px;
+  padding: 0 7px;
 }
 
 .nudge-grid button:hover {
@@ -1041,8 +1081,20 @@ h2 {
 }
 
 @media (max-width: 1240px) {
+  html,
+  body {
+    overflow: auto;
+  }
+
+  .editor-shell {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
   .studio-layout {
     grid-template-columns: 220px minmax(0, 1fr);
+    overflow: visible;
   }
 
   .assistant-panel {
@@ -1098,6 +1150,23 @@ h2 {
 
   .editor-stage {
     grid-template-rows: minmax(260px, 52dvh) auto;
+    overflow: visible;
+  }
+
+  .clip-inspector {
+    grid-template-columns: 1fr;
+  }
+
+  .clip-inspector .time-fields,
+  .clip-inspector .nudge-grid,
+  .clip-inspector .inspector-actions,
+  .clip-inspector > .clip-reason {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .nudge-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .time-fields {
