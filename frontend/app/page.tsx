@@ -964,7 +964,8 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [job, setJob] = useState<JobPayload | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activePreview, setActivePreview] = useState<PreviewClip | null>(null);
+  const [hoverPreview, setHoverPreview] = useState<PreviewClip | null>(null);
+  const [lockedPreview, setLockedPreview] = useState<PreviewClip | null>(null);
   const [memory, setMemory] = useState<EditorMemory>({});
   const [conversationBrief, setConversationBrief] = useState("");
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -978,6 +979,7 @@ export default function Home() {
   const previewVideoRef = useRef<HTMLVideoElement>(null);
 
   const progress = useMemo(() => progressFromLog(job ?? undefined), [job]);
+  const activePreview = hoverPreview ?? lockedPreview;
   const previewSource =
     activePreview?.src ||
     absoluteUrl(job?.files.vertical) ||
@@ -1409,6 +1411,8 @@ export default function Home() {
           `Clip order and trim points were saved to the backend project state.\n` +
           `Browser export is silent to avoid audio crackle while jumping between source clips.\n`,
       };
+      setHoverPreview(null);
+      setLockedPreview(null);
       setJob(nextJob);
       void syncManualState(nextJob);
       setMessages((current) => [...current, { role: "assistant", content: "Manual arrangement rendered and saved." }]);
@@ -1442,7 +1446,8 @@ export default function Home() {
     setPrompt("");
     setFile(null);
     setJob(null);
-    setActivePreview(null);
+    setHoverPreview(null);
+    setLockedPreview(null);
     setTimelineOpen(false);
     setMemory({});
     setConversationBrief("");
@@ -1455,7 +1460,8 @@ export default function Home() {
     setPrompt("");
     setFile(null);
     setJob(session.jobSnapshot ?? null);
-    setActivePreview(null);
+    setHoverPreview(null);
+    setLockedPreview(null);
     setTimelineOpen(false);
     setMemory(session.memory ?? {});
     setConversationBrief(session.conversationBrief ?? "");
@@ -1469,7 +1475,8 @@ export default function Home() {
     setPrompt("");
     setFile(null);
     setJob(session.jobSnapshot ?? null);
-    setActivePreview(null);
+    setHoverPreview(null);
+    setLockedPreview(null);
     setTimelineOpen(false);
     setMemory(session.memory ?? {});
     setConversationBrief(session.conversationBrief ?? "");
@@ -1673,52 +1680,7 @@ export default function Home() {
     }
 
     const selectedSeconds = totalHighlightSeconds(highlights);
-    const risk = browserRenderRisk(fileToProcess, highlights);
-    if (risk) {
-      const clippedJob: JobPayload = {
-        ...progressJob(
-          jobId,
-          userText,
-          inputUrl,
-          memoryForJob,
-          plan,
-          "completed",
-          100,
-          `Clips selected, but browser export was paused: ${risk}`,
-          predictions.length,
-          highlights.map((clip) => ({ ...clip, preview_url: inputUrl })),
-        ),
-        report:
-          `Browser Video Shorts Report\n\n` +
-          `The original ${formatBytes(fileToProcess.size)} video stayed in this browser. ` +
-          `${predictions.length} small frame samples and ${eventAnalyses.length} contact sheets were sent to the backend for scoring.\n\n` +
-          `Selected ${highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
-          `No WebM was rendered because this edit is too large for reliable browser recording. ${risk}\n`,
-      };
-      setJob(clippedJob);
-      void syncManualState(clippedJob);
-      return;
-    }
-
-    setJob(
-      progressJob(
-        jobId,
-        userText,
-        inputUrl,
-        memoryForJob,
-        plan,
-        "rendering",
-        72,
-        usedBroadFallback
-          ? "Workflow B is unavailable, so I am rendering the best broad-scan clips instead."
-          : "Rendering selected clips locally in your browser.",
-        predictions.length,
-        highlights,
-      ),
-    );
-
-    const outputUrl = await renderBrowserShort(fileToProcess, highlights, plan?.export_format);
-    const completedJob: JobPayload = {
+    const plannedJob: JobPayload = {
       ...progressJob(
         jobId,
         userText,
@@ -1727,10 +1689,11 @@ export default function Home() {
         plan,
         "completed",
         100,
-        "Browser export completed. The output is WebM because it was rendered locally.",
+        usedBroadFallback
+          ? "Clip plan is ready from broad-scan fallback. Review the timeline, then press Render."
+          : "Clip plan is ready. Review the timeline, then press Render.",
         predictions.length,
         highlights.map((clip) => ({ ...clip, preview_url: inputUrl })),
-        { vertical: outputUrl, horizontal: outputUrl },
       ),
       report:
         `Browser Video Shorts Report\n\n` +
@@ -1738,10 +1701,12 @@ export default function Home() {
         `${predictions.length} small frame samples and ${eventAnalyses.length} contact sheets were sent to the backend for scoring.\n\n` +
         (usedBroadFallback ? `Workflow B fallback: ${temporalFailureReason.slice(0, 220)}\n\n` : "") +
         `Selected ${highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
-        `Export format: browser-rendered silent WebM.\n`,
+        `No video has been rendered yet. Press Render when the timeline looks right, then Export.\n`,
     };
-    setJob(completedJob);
-    void syncManualState(completedJob);
+    setHoverPreview(null);
+    setLockedPreview(null);
+    setJob(plannedJob);
+    void syncManualState(plannedJob);
   }
 
   async function submitJob(event: FormEvent) {
@@ -1935,7 +1900,11 @@ export default function Home() {
               <input
                 type="file"
                 accept="video/*"
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  setFile(event.target.files?.[0] ?? null);
+                  setHoverPreview(null);
+                  setLockedPreview(null);
+                }}
               />
             </label>
           </div>
@@ -2018,6 +1987,18 @@ export default function Home() {
                 <button className="icon-button" type="button" aria-label="Open clip list" onClick={() => setTimelineOpen(true)}>
                   <PanelLeft size={17} />
                 </button>
+                <button
+                  className="utility-button compact"
+                  type="button"
+                  disabled={!lockedPreview && !hoverPreview}
+                  onClick={() => {
+                    setLockedPreview(null);
+                    setHoverPreview(null);
+                  }}
+                >
+                  <Play size={15} />
+                  Full
+                </button>
                 <button className="utility-button compact" type="button" disabled={!file || !job?.highlights.length || isWorking} onClick={renderManualEdit}>
                   {isSubmitting ? <Loader2 size={15} className="spin" /> : <RotateCcw size={15} />}
                   Render
@@ -2072,21 +2053,21 @@ export default function Home() {
                   tabIndex={0}
                   onClick={() => {
                     setSelectedClipIndex(index);
-                    setActivePreview(previewForHighlight(highlight));
+                    setLockedPreview(previewForHighlight(highlight));
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       setSelectedClipIndex(index);
-                      setActivePreview(previewForHighlight(highlight));
+                      setLockedPreview(previewForHighlight(highlight));
                     }
                   }}
                   onDragStart={(event) => handleClipDragStart(event, index)}
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => handleClipDrop(event, index)}
                   onDragEnd={() => setDraggingClipIndex(null)}
-                  onMouseEnter={() => setActivePreview(previewForHighlight(highlight))}
-                  onMouseLeave={() => setActivePreview(null)}
+                  onMouseEnter={() => setHoverPreview(previewForHighlight(highlight))}
+                  onMouseLeave={() => setHoverPreview(null)}
                   style={{ flexGrow: Math.max(1, highlight.duration) }}
                 >
                   <button
@@ -2289,21 +2270,21 @@ export default function Home() {
                   tabIndex={0}
                   onClick={() => {
                     setSelectedClipIndex(index);
-                    setActivePreview(previewForHighlight(highlight));
+                    setLockedPreview(previewForHighlight(highlight));
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       setSelectedClipIndex(index);
-                      setActivePreview(previewForHighlight(highlight));
+                      setLockedPreview(previewForHighlight(highlight));
                     }
                   }}
                   onDragStart={(event) => handleClipDragStart(event, index)}
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => handleClipDrop(event, index)}
                   onDragEnd={() => setDraggingClipIndex(null)}
-                  onMouseEnter={() => setActivePreview(previewForHighlight(highlight))}
-                  onMouseLeave={() => setActivePreview(null)}
+                  onMouseEnter={() => setHoverPreview(previewForHighlight(highlight))}
+                  onMouseLeave={() => setHoverPreview(null)}
                 >
                   <div className="clip-meta">
                     <span>#{index + 1}</span>
