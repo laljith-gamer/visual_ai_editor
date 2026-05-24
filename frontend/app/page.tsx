@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const SESSION_STORAGE_KEY = "visual_ai_editor.sessions.v1";
 const ACTIVE_SESSION_KEY = "visual_ai_editor.active_session.v1";
 const MAX_LOCAL_SESSIONS = 12;
