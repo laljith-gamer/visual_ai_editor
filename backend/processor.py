@@ -77,13 +77,10 @@ SAMPLE_EVERY_SECONDS = float(os.environ.get("SAMPLE_EVERY_SECONDS") or 1)
 MAX_SAMPLES = int(os.environ.get("MAX_SAMPLES") or 0)
 INFERENCE_WIDTH = int(os.environ.get("INFERENCE_WIDTH") or 960)
 MIN_CLIP_SCORE = float(os.environ.get("MIN_CLIP_SCORE") or 0.1)
-ROBOFLOW_DISABLE_AFTER_FAILURES = int(os.environ.get("ROBOFLOW_DISABLE_AFTER_FAILURES") or 2)
 EXPORT_FORMATS = {"vertical", "horizontal", "both", "auto"}
 
 
 client: InferenceHTTPClient | None = None
-roboflow_failure_count = 0
-roboflow_disabled = False
 
 
 def get_roboflow_client() -> InferenceHTTPClient:
@@ -172,9 +169,13 @@ def build_plan_from_ai(user_request: str) -> dict:
         except (KeyError, TypeError, ValueError):
             raise RuntimeError(f"AI edit plan missing numeric label weight for: {label}") from None
 
-    target_seconds = clamp_number(EXTERNAL_EDIT_PLAN.get("target_short_seconds"), 30.0, 5.0, 300.0)
     if EXTERNAL_EDIT_PLAN.get("target_short_seconds") in (None, "", 0):
         raise RuntimeError("AI edit plan must include target_short_seconds.")
+    try:
+        target_seconds = float(EXTERNAL_EDIT_PLAN.get("target_short_seconds"))
+    except (TypeError, ValueError):
+        raise RuntimeError("AI edit plan must include numeric target_short_seconds.") from None
+    target_seconds = max(5.0, min(300.0, target_seconds))
     clip_seconds = clamp_number(
         EXTERNAL_EDIT_PLAN.get("clip_seconds"),
         8.0,
@@ -310,50 +311,7 @@ def resize_for_inference(frame_bgr: np.ndarray) -> np.ndarray:
     return cv2.resize(frame_bgr, (INFERENCE_WIDTH, int(height * scale)))
 
 
-def local_frame_result(frame_bgr: np.ndarray, reason: str) -> dict:
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    brightness = float(np.mean(gray))
-    contrast = float(np.std(gray))
-    blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-
-    ordered_by_weight = sorted(
-        EDIT_PLAN["label_weights"].items(),
-        key=lambda item: item[1],
-    )
-    lowest_label = ordered_by_weight[0][0]
-    highest_label = ordered_by_weight[-1][0]
-    if brightness < 12 or contrast < 7 or blur_score < 18:
-        label = lowest_label
-        confidence = 0.62
-    else:
-        preferred = EDIT_PLAN.get("label_groups", {}).get("keep") or []
-        label = preferred[0] if preferred else highest_label
-        confidence = 0.38
-
-    all_scores = [0.05 for _ in ANALYSIS_SCENARIOS]
-    if label in ANALYSIS_SCENARIOS:
-        all_scores[ANALYSIS_SCENARIOS.index(label)] = confidence
-
-    return {
-        "scene_label": label,
-        "confidence": confidence,
-        "all_scores": all_scores,
-        "fallback": True,
-        "fallback_reason": reason,
-        "frame_metrics": {
-            "brightness": round(brightness, 2),
-            "contrast": round(contrast, 2),
-            "blur": round(blur_score, 2),
-        },
-    }
-
-
 def classify_frame(frame_bgr: np.ndarray) -> dict:
-    global roboflow_disabled, roboflow_failure_count
-
-    original_frame = frame_bgr
-    if roboflow_disabled:
-        return local_frame_result(original_frame, "roboflow disabled after repeated failures")
     if not WORKSPACE or not WORKFLOW_ID:
         raise RuntimeError("ROBOFLOW_WORKSPACE and ROBOFLOW_WORKFLOW_ID are required")
 
@@ -375,22 +333,19 @@ def classify_frame(frame_bgr: np.ndarray) -> dict:
             )
             if not result:
                 raise RuntimeError("Workflow returned no results")
-            return result[0]
+            frame_result = result[0]
+            if not isinstance(frame_result, dict):
+                raise RuntimeError("Workflow returned an invalid frame result")
+            if not str(frame_result.get("scene_label") or "").strip():
+                raise RuntimeError("Workflow returned no scene_label")
+            return frame_result
         except Exception as exc:
             last_error = exc
             if attempt == 3:
                 break
             time.sleep(2 * attempt)
 
-    roboflow_failure_count += 1
-    if roboflow_failure_count >= ROBOFLOW_DISABLE_AFTER_FAILURES:
-        roboflow_disabled = True
-    print(
-        f"Roboflow workflow failed after 3 attempts; using local fallback for this frame. Error: {last_error}",
-        file=sys.stderr,
-        flush=True,
-    )
-    return local_frame_result(original_frame, f"roboflow error: {last_error}")
+    raise RuntimeError(f"Roboflow workflow failed after 3 attempts: {last_error}")
 
 
 def video_info(path: Path) -> dict:
@@ -733,15 +688,6 @@ def build_highlights(predictions: list[dict], duration: float) -> list[dict]:
                     windows.append((candidate["start"], candidate["end"]))
                     candidates.append(candidate)
             cursor = window_end
-
-    if not candidates:
-        for item in sorted(scored, key=lambda sample: float(sample.get("score") or 0), reverse=True):
-            if is_strong_bad_label(item.get("scene")):
-                continue
-            candidate = make_candidate([item], "fallback to the strongest available sample")
-            if candidate:
-                candidates.append(candidate)
-                break
 
     candidates = [candidate for candidate in candidates if candidate["score"] >= MIN_CLIP_SCORE]
     if not candidates:

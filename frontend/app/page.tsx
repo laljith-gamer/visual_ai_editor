@@ -196,6 +196,7 @@ type BrowserEventAnalysis = {
   title_overlay_start_offset_seconds?: number;
   title_overlay_end_offset_seconds?: number;
   fallback?: boolean;
+  error_status?: boolean;
 };
 
 type PreviewClip = {
@@ -220,6 +221,40 @@ function formatTime(seconds: number) {
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function responseErrorMessage(response: Response) {
+  const text = await response.text();
+  if (!text) return `${response.status} ${response.statusText}`.trim();
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown; message?: unknown; error?: unknown };
+    const detail = parsed.detail ?? parsed.message ?? parsed.error;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) return detail.map((item) => item?.msg ?? JSON.stringify(item)).join("; ");
+    if (detail) return JSON.stringify(detail);
+  } catch {
+    // The backend may return plain text from proxies or platform errors.
+  }
+  return text;
+}
+
+function requirePositiveNumber(value: unknown, message: string) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) throw new Error(message);
+  return number;
+}
+
+function temporalResultIsEmpty(event: BrowserEventAnalysis) {
+  const values = [
+    event.event_label,
+    event.keep_score,
+    event.skip_score,
+    event.confidence,
+    event.suggested_clip_start_offset_seconds,
+    event.suggested_clip_end_offset_seconds,
+    event.reason,
+  ];
+  return values.every((value) => value === undefined || value === null || value === "");
 }
 
 function totalHighlightSeconds(highlights: Highlight[]) {
@@ -256,183 +291,6 @@ function predictionScore(prediction: BrowserPrediction, weights?: Record<string,
   const base = weights?.[label] ?? (labelIsLowValue(label, weights) ? 0 : 0.75);
   const confidence = typeof prediction.confidence === "number" ? prediction.confidence : 0.35;
   return base * (0.75 + confidence);
-}
-
-function buildBrowserHighlights(predictions: BrowserPrediction[], duration: number, plan?: EditPlan): Highlight[] {
-  const weights = plan?.label_weights ?? {};
-  const strategy = plan?.selection_strategy ?? {};
-  const targetSeconds = Number(plan?.target_short_seconds || 30);
-  const minClip = Number(strategy.minimum_clip_seconds || 4);
-  const maxClip = Number(strategy.maximum_clip_seconds || 45);
-  const before = Number(strategy.context_before_seconds || 1);
-  const after = Number(strategy.context_after_seconds || 1.5);
-  const sorted = [...predictions]
-    .map((item) => ({ ...item, score: predictionScore(item, weights) }))
-    .sort((left, right) => left.second - right.second);
-
-  const useful = sorted.filter((item) => !labelIsLowValue(item.scene, weights) && item.score > 0.1);
-  if (!useful.length) return [];
-
-  const sampleGap = Math.max(2, sorted[1] ? sorted[1].second - sorted[0].second : 2);
-  const boundaryGap = Math.max(sampleGap * 2.5, 3);
-  const events: BrowserPrediction[][] = [];
-  let current: BrowserPrediction[] = [];
-
-  for (const item of useful) {
-    const previous = current.at(-1);
-    if (previous && item.second - previous.second > boundaryGap) {
-      events.push(current);
-      current = [];
-    }
-    current.push(item);
-  }
-  if (current.length) events.push(current);
-
-  const candidates: Highlight[] = [];
-  for (const event of events) {
-    const eventStart = Math.max(0, Math.min(...event.map((item) => item.second)) - before);
-    const eventEnd = Math.min(duration, Math.max(...event.map((item) => item.second)) + sampleGap + after);
-    let cursor = eventStart;
-    while (cursor < eventEnd) {
-      let end = Math.min(eventEnd, cursor + maxClip);
-      if (end - cursor < minClip) end = Math.min(duration, cursor + minClip);
-      const inside = event.filter((item) => item.second >= cursor && item.second < end);
-      if (!inside.length) break;
-      const labels = [...new Set(inside.map((item) => item.scene).filter(Boolean) as string[])].slice(0, 4);
-      const score =
-        inside.reduce((total, item) => total + predictionScore(item, weights), 0) / Math.max(inside.length, 1);
-      candidates.push({
-        index: candidates.length + 1,
-        start: cursor,
-        end,
-        duration: end - cursor,
-        score: Number(score.toFixed(4)),
-        labels,
-        matched_labels: labels.slice(0, 3),
-        reason: `Kept because ${labels[0] ?? "this moment"} matched the edit request near ${formatTime(inside[0].second)}.`,
-        why_not_longer: "Bounded by nearby low-value samples or the requested target length.",
-        transition: { type: candidates.length ? "fade" : "cut", duration_seconds: candidates.length ? 0.3 : 0 },
-      });
-      cursor = end;
-    }
-  }
-
-  const selected: Highlight[] = [];
-  const usedCandidateIds = new Set<number>();
-  const plannedClipSeconds = Number(plan?.clip_seconds || 10);
-  const desiredClipCount = Math.max(
-    1,
-    Math.min(
-      candidates.length,
-      Number(strategy.target_clip_count || 0) > 0
-        ? Math.round(Number(strategy.target_clip_count))
-        : Math.ceil(targetSeconds / Math.max(minClip, Math.min(maxClip, plannedClipSeconds || 10))),
-    ),
-  );
-  const spreadAcrossTimeline = strategy.spread_across_timeline !== false && duration > targetSeconds;
-  let total = 0;
-
-  function centerOf(clip: Highlight) {
-    return (clip.start + clip.end) / 2;
-  }
-
-  function overlapsSelected(candidate: Highlight) {
-    return selected.some((clip) => candidate.start < clip.end && candidate.end > clip.start);
-  }
-
-  function addCandidate(candidate: Highlight) {
-    if (total >= targetSeconds || overlapsSelected(candidate)) return false;
-    const remaining = targetSeconds - total;
-    const clip = { ...candidate };
-    if (clip.duration > remaining && remaining >= minClip) {
-      clip.end = clip.start + remaining;
-      clip.duration = remaining;
-      clip.why_not_longer = "Trimmed to match the requested final duration.";
-    } else if (clip.duration > remaining && selected.length) {
-      return false;
-    }
-    selected.push(clip);
-    total += clip.duration;
-    return true;
-  }
-
-  const rankedCandidates = candidates.map((candidate, id) => ({
-    id,
-    candidate,
-    center: centerOf(candidate),
-  }));
-
-  function chooseBestNearAnchor(pool: typeof rankedCandidates, anchor: number) {
-    if (!pool.length) return undefined;
-    const bestScore = Math.max(...pool.map((item) => item.candidate.score));
-    const scoreSlack = Math.max(0.025, Math.abs(bestScore) * 0.03);
-    return pool
-      .filter((item) => item.candidate.score >= bestScore - scoreSlack)
-      .sort((left, right) => {
-        const anchorDistance = Math.abs(left.center - anchor) - Math.abs(right.center - anchor);
-        if (anchorDistance) return anchorDistance;
-        return right.candidate.score - left.candidate.score || left.candidate.start - right.candidate.start;
-      })[0];
-  }
-
-  if (spreadAcrossTimeline && desiredClipCount > 1) {
-    const bucketSize = duration / desiredClipCount;
-    for (let bucket = 0; bucket < desiredClipCount && total < targetSeconds; bucket += 1) {
-      const bucketStart = bucket * bucketSize;
-      const bucketEnd = bucket === desiredClipCount - 1 ? duration + 0.001 : bucketStart + bucketSize;
-      const anchor = bucketStart + bucketSize / 2;
-      const unused = rankedCandidates.filter(
-        (item) =>
-          !usedCandidateIds.has(item.id) &&
-          !overlapsSelected(item.candidate) &&
-          item.center >= bucketStart &&
-          item.center < bucketEnd,
-      );
-      const fallback = rankedCandidates.filter(
-        (item) => !usedCandidateIds.has(item.id) && !overlapsSelected(item.candidate),
-      );
-      const chosen = chooseBestNearAnchor(unused.length ? unused : fallback, anchor);
-      if (chosen) {
-        usedCandidateIds.add(chosen.id);
-        addCandidate(chosen.candidate);
-      }
-    }
-  }
-
-  while (total < targetSeconds) {
-    const available = rankedCandidates.filter(
-      (item) => !usedCandidateIds.has(item.id) && !overlapsSelected(item.candidate),
-    );
-    if (!available.length) break;
-
-    available.sort((left, right) => {
-      const leftDistance = selected.length
-        ? Math.min(...selected.map((clip) => Math.abs(centerOf(clip) - left.center)))
-        : duration;
-      const rightDistance = selected.length
-        ? Math.min(...selected.map((clip) => Math.abs(centerOf(clip) - right.center)))
-        : duration;
-      const leftSpreadBonus = duration ? Math.min(0.08, (leftDistance / duration) * 0.08) : 0;
-      const rightSpreadBonus = duration ? Math.min(0.08, (rightDistance / duration) * 0.08) : 0;
-      return (
-        right.candidate.score + rightSpreadBonus - (left.candidate.score + leftSpreadBonus) ||
-        left.candidate.start - right.candidate.start
-      );
-    });
-
-    const chosen = available[0];
-    usedCandidateIds.add(chosen.id);
-    if (!addCandidate(chosen.candidate)) break;
-  }
-
-  return selected
-    .sort((left, right) => left.start - right.start)
-    .map((clip, index) => ({
-      ...clip,
-      index: index + 1,
-      score: Number(clip.score.toFixed(4)),
-      transition: { type: index ? "fade" : "cut", duration_seconds: index ? 0.3 : 0 },
-    }));
 }
 
 function buildCandidateWindows(predictions: BrowserPrediction[], duration: number, plan?: EditPlan): CandidateWindow[] {
@@ -488,7 +346,7 @@ function buildCandidateWindows(predictions: BrowserPrediction[], duration: numbe
 
 function buildEventHighlights(events: BrowserEventAnalysis[], duration: number, plan?: EditPlan): Highlight[] {
   const strategy = plan?.selection_strategy ?? {};
-  const targetSeconds = Math.max(3, Number(plan?.target_short_seconds || 30));
+  const targetSeconds = Math.max(3, Number(plan?.target_short_seconds));
   const minClip = Math.max(1.5, Number(strategy.minimum_clip_seconds || 3));
   const qualityThreshold = Math.max(0, Math.min(1, Number(strategy.quality_threshold ?? EVENT_KEEP_THRESHOLD)));
   const candidates = events
@@ -1170,7 +1028,7 @@ export default function Home() {
         }),
       });
       if (!response.ok) {
-        throw new Error(await response.text());
+        throw new Error(await responseErrorMessage(response));
       }
       setManualSyncLabel("Saved");
     } catch {
@@ -1531,6 +1389,10 @@ export default function Home() {
     if (scenarios.length < 2) {
       throw new Error("The AI planner did not return enough visual scenario labels.");
     }
+    requirePositiveNumber(
+      plan?.target_short_seconds,
+      "The AI planner did not choose a final video duration. Ask for a length like 30 seconds, 40 seconds, or 3 minutes.",
+    );
 
     setJob(progressJob(jobId, userText, inputUrl, memoryForJob, plan, "preparing", 5, "Reading the video locally in your browser."));
 
@@ -1556,7 +1418,7 @@ export default function Home() {
           body: JSON.stringify({ frames: frameBatch, scenarios }),
         });
         if (!response.ok) {
-          throw new Error(await response.text());
+          throw new Error(await responseErrorMessage(response));
         }
         const payload = (await response.json()) as { predictions: BrowserPrediction[] };
         predictions.push(...(payload.predictions ?? []));
@@ -1613,20 +1475,17 @@ export default function Home() {
         }),
       });
 
-      if (response.ok) {
-        eventAnalyses.push((await response.json()) as BrowserEventAnalysis);
-      } else {
-        eventAnalyses.push({
-          window_start: candidate.start,
-          window_end: candidate.end,
-          event_label: "event analyzer failed",
-          keep_score: 0,
-          skip_score: 1,
-          confidence: 0,
-          reason: await response.text(),
-          fallback: true,
-        });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response));
       }
+      const eventPayload = (await response.json()) as BrowserEventAnalysis;
+      if (eventPayload.fallback || eventPayload.error_status || temporalResultIsEmpty(eventPayload)) {
+        throw new Error(
+          eventPayload.reason ||
+            "Workflow B returned empty temporal JSON. Add json_parser error_status to the workflow outputs and confirm Gemini returns strict JSON.",
+        );
+      }
+      eventAnalyses.push(eventPayload);
 
       const percent = 62 + Math.round((index / Math.max(candidateWindows.length - 1, 1)) * 10);
       setJob(
@@ -1645,22 +1504,8 @@ export default function Home() {
     }
     URL.revokeObjectURL(video.src);
 
-    const temporalFailureReason =
-      eventAnalyses.find((event) => event.fallback && event.reason)?.reason ||
-      "Workflow B did not return usable temporal scores.";
-    const allTemporalCallsFailed = eventAnalyses.length > 0 && eventAnalyses.every((event) => event.fallback);
-    let usedBroadFallback = false;
     let highlights = buildEventHighlights(eventAnalyses, duration, plan);
-    if (!highlights.length && allTemporalCallsFailed) {
-      usedBroadFallback = true;
-      highlights = buildBrowserHighlights(predictions, duration, plan).map((clip) => ({
-        ...clip,
-        reason: `Workflow B was unavailable, so this clip came from the broad frame scan. ${clip.reason ?? ""}`.trim(),
-        boundary_reason: temporalFailureReason.slice(0, 220),
-      }));
-    }
     if (!highlights.length) {
-      const unavailable = eventAnalyses.some((event) => event.fallback);
       setJob(
         progressJob(
           jobId,
@@ -1670,9 +1515,7 @@ export default function Home() {
           plan,
           "completed",
           100,
-          unavailable
-            ? `Temporal analysis could not score the candidate windows: ${temporalFailureReason.slice(0, 160)}`
-            : "Temporal analysis finished, but no strong matching clips were found.",
+          "Temporal analysis finished, but no strong matching clips were found.",
           predictions.length,
         ),
       );
@@ -1689,9 +1532,7 @@ export default function Home() {
         plan,
         "completed",
         100,
-        usedBroadFallback
-          ? "Clip plan is ready from broad-scan fallback. Review the timeline, then press Render."
-          : "Clip plan is ready. Review the timeline, then press Render.",
+        "Clip plan is ready. Review the timeline, then press Render.",
         predictions.length,
         highlights.map((clip) => ({ ...clip, preview_url: inputUrl })),
       ),
@@ -1699,7 +1540,6 @@ export default function Home() {
         `Browser Video Shorts Report\n\n` +
         `The original ${formatBytes(fileToProcess.size)} video stayed in this browser. ` +
         `${predictions.length} small frame samples and ${eventAnalyses.length} contact sheets were sent to the backend for scoring.\n\n` +
-        (usedBroadFallback ? `Workflow B fallback: ${temporalFailureReason.slice(0, 220)}\n\n` : "") +
         `Selected ${highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
         `No video has been rendered yet. Press Render when the timeline looks right, then Export.\n`,
     };
@@ -1801,7 +1641,7 @@ export default function Home() {
           }),
         });
         if (!response.ok) {
-          throw new Error(await response.text());
+          throw new Error(await responseErrorMessage(response));
         }
         setJob((await response.json()) as JobPayload);
       }

@@ -85,6 +85,23 @@ def normalize_temporal_result(raw: dict[str, Any], window_start: float, window_e
             parsed.update(possible)
     parsed.update({key: parse_json_value(value) for key, value in raw.items() if not isinstance(parse_json_value(value), dict)})
 
+    parser_failed = bool(parsed.get("error_status") or parsed.get("parser_error") or parsed.get("error"))
+    required_values = [
+        parsed.get("event_label"),
+        parsed.get("keep_score"),
+        parsed.get("skip_score"),
+        parsed.get("confidence"),
+        parsed.get("suggested_clip_start_offset_seconds"),
+        parsed.get("suggested_clip_end_offset_seconds"),
+        parsed.get("reason"),
+    ]
+    all_required_empty = all(value in (None, "", [], {}) for value in required_values)
+    if parser_failed or all_required_empty:
+        raise ValueError(
+            "Workflow B returned no usable temporal JSON. "
+            "Expose json_parser error_status in Roboflow and confirm Gemini returns strict JSON."
+        )
+
     return {
         "window_start": window_start,
         "window_end": window_end,
@@ -166,14 +183,16 @@ def analyze_browser_frames(payload: dict[str, Any] = Body(...)) -> dict[str, Any
                 use_cache=True,
             )
             frame_result = result[0] if result else {}
-            label = frame_result.get("scene_label") or scenarios[0]
+            label = str(frame_result.get("scene_label") or "").strip()
+            if not label:
+                raise ValueError("Roboflow frame screener returned no scene_label")
             confidence = frame_result.get("confidence")
             all_scores = frame_result.get("all_scores")
         except Exception as exc:
-            label = scenarios[0]
-            confidence = 0.05
-            all_scores = []
-            frame_result = {"fallback": True, "fallback_reason": f"{type(exc).__name__}: {exc}"}
+            raise HTTPException(
+                status_code=502,
+                detail=f"Roboflow frame screener failed at {second:.2f}s: {type(exc).__name__}: {exc}",
+            ) from exc
 
         predictions.append(
             {
@@ -230,21 +249,10 @@ def analyze_browser_event(payload: dict[str, Any] = Body(...)) -> dict[str, Any]
         normalized["fallback"] = False
         return normalized
     except Exception as exc:
-        return {
-            "window_start": window_start,
-            "window_end": window_end,
-            "event_label": "event analyzer unavailable",
-            "keep_score": 0.0,
-            "skip_score": 1.0,
-            "confidence": 0.0,
-            "suggested_clip_start_offset_seconds": 0.0,
-            "suggested_clip_end_offset_seconds": 0.0,
-            "reason": f"{type(exc).__name__}: {exc}",
-            "title_overlay": "",
-            "title_overlay_start_offset_seconds": 0.0,
-            "title_overlay_end_offset_seconds": 0.0,
-            "fallback": True,
-        }
+        raise HTTPException(
+            status_code=502,
+            detail=f"Roboflow temporal Workflow B failed: {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 @router.post("/api/jobs")
