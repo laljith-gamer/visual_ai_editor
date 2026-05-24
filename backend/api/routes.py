@@ -26,6 +26,88 @@ from backend.services.roboflow import compact_scenarios, get_roboflow_client
 router = APIRouter()
 
 
+def clean_base64_image(value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("value") or value.get("image") or ""
+    image_value = str(value or "").strip()
+    if "," in image_value:
+        image_value = image_value.split(",", 1)[1]
+    return image_value
+
+
+def coerce_float(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number:
+        return default
+    return number
+
+
+def parse_json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("```"):
+            text = text.strip("`").strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return value
+    return value
+
+
+def build_temporal_prompt(user_request: str, scenarios: list[str]) -> str:
+    scenarios_text = ", ".join(scenarios)
+    return (
+        "You are a professional short-form video editor. The input image is a contact sheet of consecutive "
+        "frames arranged chronologically from left to right, top to bottom. Each thumbnail has a frame number.\n\n"
+        f"User request: {user_request}\n\n"
+        f"Allowed event labels: {scenarios_text}\n\n"
+        "Decide whether this window should be kept in the final edit. Judge visual payoff, action, emotion, "
+        "clarity, novelty, usefulness, and whether it matches the user request. Penalize filler, repeated action, "
+        "menus, loading screens, black frames, blurry frames, weak moments, and anything the user asked to skip.\n\n"
+        "Return only strict JSON with these fields: event_label, keep_score, skip_score, confidence, "
+        "suggested_clip_start_offset_seconds, suggested_clip_end_offset_seconds, reason, title_overlay, "
+        "title_overlay_start_offset_seconds, title_overlay_end_offset_seconds. Scores must be numbers from 0 to 1. "
+        "Use title_overlay only for a clear memorable payoff that deserves on-screen text."
+    )
+
+
+def normalize_temporal_result(raw: dict[str, Any], window_start: float, window_end: float) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for value in raw.values():
+        possible = parse_json_value(value)
+        if isinstance(possible, dict):
+            parsed.update(possible)
+    parsed.update({key: parse_json_value(value) for key, value in raw.items() if not isinstance(parse_json_value(value), dict)})
+
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "event_label": str(parsed.get("event_label") or parsed.get("scene_label") or "").strip(),
+        "keep_score": coerce_float(parsed.get("keep_score"), 0.0),
+        "skip_score": coerce_float(parsed.get("skip_score"), 0.0),
+        "confidence": coerce_float(parsed.get("confidence"), 0.0),
+        "suggested_clip_start_offset_seconds": coerce_float(
+            parsed.get("suggested_clip_start_offset_seconds"),
+            0.0,
+        ),
+        "suggested_clip_end_offset_seconds": coerce_float(
+            parsed.get("suggested_clip_end_offset_seconds"),
+            0.0,
+        ),
+        "reason": str(parsed.get("reason") or "").strip(),
+        "title_overlay": str(parsed.get("title_overlay") or "").strip()[:40],
+        "title_overlay_start_offset_seconds": coerce_float(parsed.get("title_overlay_start_offset_seconds"), 0.0),
+        "title_overlay_end_offset_seconds": coerce_float(parsed.get("title_overlay_end_offset_seconds"), 0.0),
+        "fallback": bool(parsed.get("fallback")),
+    }
+
+
 @router.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "default_prompt": DEFAULT_PROMPT}
@@ -107,6 +189,62 @@ def analyze_browser_frames(payload: dict[str, Any] = Body(...)) -> dict[str, Any
         )
 
     return {"predictions": predictions, "scenarios": scenarios}
+
+
+@router.post("/api/browser/event-analyze")
+def analyze_browser_event(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    image_value = clean_base64_image(payload.get("image") or payload.get("collage"))
+    if not image_value:
+        raise HTTPException(status_code=400, detail="image must be a base64 JPEG contact sheet")
+
+    try:
+        scenarios = compact_scenarios(payload.get("scenarios"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    user_request = str(payload.get("user_request") or payload.get("prompt") or "").strip()
+    window_start = coerce_float(payload.get("window_start"), 0.0)
+    window_end = coerce_float(payload.get("window_end"), window_start)
+    workspace = payload.get("workspace") or os.getenv("ROBOFLOW_WORKSPACE")
+    workflow_id = (
+        payload.get("workflow_id")
+        or os.getenv("ROBOFLOW_EVENT_WORKFLOW_ID")
+        or os.getenv("ROBOFLOW_WORKFLOW_B_ID")
+    )
+    if not workspace or not workflow_id:
+        raise HTTPException(status_code=500, detail="Roboflow temporal workflow is not configured")
+
+    prompt_text = build_temporal_prompt(user_request, scenarios)
+    try:
+        result = get_roboflow_client().run_workflow(
+            workspace_name=workspace,
+            workflow_id=workflow_id,
+            images={"image": image_value},
+            parameters={"scenarios": scenarios, "prompt_text": prompt_text},
+            use_cache=True,
+        )
+        raw_result = result[0] if result else {}
+        if not isinstance(raw_result, dict):
+            raw_result = {"event_label": str(raw_result)}
+        normalized = normalize_temporal_result(raw_result, window_start, window_end)
+        normalized["fallback"] = False
+        return normalized
+    except Exception as exc:
+        return {
+            "window_start": window_start,
+            "window_end": window_end,
+            "event_label": "event analyzer unavailable",
+            "keep_score": 0.0,
+            "skip_score": 1.0,
+            "confidence": 0.0,
+            "suggested_clip_start_offset_seconds": 0.0,
+            "suggested_clip_end_offset_seconds": 0.0,
+            "reason": f"{type(exc).__name__}: {exc}",
+            "title_overlay": "",
+            "title_overlay_start_offset_seconds": 0.0,
+            "title_overlay_end_offset_seconds": 0.0,
+            "fallback": True,
+        }
 
 
 @router.post("/api/jobs")

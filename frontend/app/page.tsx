@@ -35,6 +35,9 @@ const ACTIVE_SESSION_KEY = "visual_ai_editor.active_session.v1";
 const MAX_LOCAL_SESSIONS = 12;
 const MAX_BROWSER_SAMPLES = 120;
 const FRAME_BATCH_SIZE = 4;
+const MAX_EVENT_WINDOWS = 12;
+const CONTACT_SHEET_FRAMES = 12;
+const EVENT_KEEP_THRESHOLD = 0.55;
 const INITIAL_ASSISTANT_MESSAGE =
   "Upload any video and tell me what kind of short you want. If details are missing, I'll ask before spending time on analysis.";
 
@@ -55,6 +58,13 @@ type Highlight = {
     duration_seconds?: number;
   };
   preview_url?: string;
+  event_label?: string;
+  keep_score?: number;
+  skip_score?: number;
+  confidence?: number;
+  title_overlay?: string;
+  title_overlay_start_offset_seconds?: number;
+  title_overlay_end_offset_seconds?: number;
 };
 
 type ProgressPayload = {
@@ -159,6 +169,30 @@ type CapturedFrame = {
   second: number;
   frame: number;
   image: string;
+};
+
+type CandidateWindow = {
+  start: number;
+  end: number;
+  peak: number;
+  score: number;
+  labels: string[];
+};
+
+type BrowserEventAnalysis = {
+  window_start: number;
+  window_end: number;
+  event_label?: string;
+  keep_score?: number;
+  skip_score?: number;
+  confidence?: number;
+  suggested_clip_start_offset_seconds?: number;
+  suggested_clip_end_offset_seconds?: number;
+  reason?: string;
+  title_overlay?: string;
+  title_overlay_start_offset_seconds?: number;
+  title_overlay_end_offset_seconds?: number;
+  fallback?: boolean;
 };
 
 type PreviewClip = {
@@ -383,6 +417,134 @@ function buildBrowserHighlights(predictions: BrowserPrediction[], duration: numb
     }));
 }
 
+function buildCandidateWindows(predictions: BrowserPrediction[], duration: number, plan?: EditPlan): CandidateWindow[] {
+  const weights = plan?.label_weights ?? {};
+  const strategy = plan?.selection_strategy ?? {};
+  const threshold = Number(strategy.broad_scan_threshold ?? 0.1);
+  const windowSeconds = Math.max(2, Math.min(6, Number(strategy.event_window_seconds ?? 4)));
+  const sorted = [...predictions]
+    .map((item) => ({ ...item, score: predictionScore(item, weights) }))
+    .filter((item) => !labelIsLowValue(item.scene, weights) && item.score > threshold)
+    .sort((left, right) => left.second - right.second);
+
+  if (!sorted.length || duration <= 0) return [];
+
+  const desiredWindows = Math.min(MAX_EVENT_WINDOWS, sorted.length);
+  const chosen = new Map<number, (typeof sorted)[number]>();
+  const bucketSize = duration / desiredWindows;
+
+  for (let bucket = 0; bucket < desiredWindows; bucket += 1) {
+    const bucketStart = bucket * bucketSize;
+    const bucketEnd = bucket === desiredWindows - 1 ? duration + 0.001 : bucketStart + bucketSize;
+    const best = sorted
+      .filter((item) => item.second >= bucketStart && item.second < bucketEnd)
+      .sort((left, right) => right.score - left.score || Math.abs(left.second - (bucketStart + bucketSize / 2)) - Math.abs(right.second - (bucketStart + bucketSize / 2)))[0];
+    if (best) chosen.set(best.frame ?? Math.round(best.second * 10), best);
+  }
+
+  for (const item of [...sorted].sort((left, right) => right.score - left.score || left.second - right.second)) {
+    if (chosen.size >= desiredWindows) break;
+    const tooClose = [...chosen.values()].some((selected) => Math.abs(selected.second - item.second) < windowSeconds * 0.75);
+    if (!tooClose) chosen.set(item.frame ?? Math.round(item.second * 10), item);
+  }
+
+  return [...chosen.values()]
+    .map((item) => {
+      const start = Math.max(0, item.second - windowSeconds / 2);
+      const end = Math.min(duration, Math.max(start + 1, item.second + windowSeconds / 2));
+      const near = sorted.filter((sample) => sample.second >= start && sample.second <= end);
+      const labels = [...new Set(near.map((sample) => sample.scene).filter(Boolean) as string[])].slice(0, 5);
+      const score = near.length
+        ? near.reduce((total, sample) => total + sample.score, 0) / near.length
+        : item.score;
+      return {
+        start,
+        end,
+        peak: item.second,
+        score: Number(score.toFixed(4)),
+        labels,
+      };
+    })
+    .sort((left, right) => left.start - right.start);
+}
+
+function buildEventHighlights(events: BrowserEventAnalysis[], duration: number, plan?: EditPlan): Highlight[] {
+  const strategy = plan?.selection_strategy ?? {};
+  const targetSeconds = Math.max(3, Number(plan?.target_short_seconds || 30));
+  const minClip = Math.max(1.5, Number(strategy.minimum_clip_seconds || 3));
+  const qualityThreshold = Math.max(0, Math.min(1, Number(strategy.quality_threshold ?? EVENT_KEEP_THRESHOLD)));
+  const candidates = events
+    .filter((event) => !event.fallback)
+    .map((event) => {
+      const keep = Number(event.keep_score ?? 0);
+      const skip = Number(event.skip_score ?? 0);
+      const confidence = Number(event.confidence ?? 0);
+      const startOffset = Number(event.suggested_clip_start_offset_seconds ?? 0);
+      const endOffset = Number(event.suggested_clip_end_offset_seconds ?? 0);
+      const start = Math.max(0, Number(event.window_start || 0) + startOffset);
+      let end = Math.min(duration, Number(event.window_end || start) + endOffset);
+      if (end - start < minClip) {
+        end = Math.min(duration, start + minClip);
+      }
+      return {
+        event,
+        start,
+        end,
+        duration: Math.max(0, end - start),
+        score: keep * (0.7 + confidence * 0.3) - skip * 0.35,
+      };
+    })
+    .filter((item) => {
+      const keep = Number(item.event.keep_score ?? 0);
+      const skip = Number(item.event.skip_score ?? 0);
+      return item.duration >= 1 && keep >= qualityThreshold && keep > skip;
+    })
+    .sort((left, right) => right.score - left.score || left.start - right.start);
+
+  const selected: typeof candidates = [];
+  let total = 0;
+  for (const candidate of candidates) {
+    if (total >= targetSeconds) break;
+    const overlaps = selected.some((clip) => candidate.start < clip.end && candidate.end > clip.start);
+    if (overlaps) continue;
+    let clip = candidate;
+    const remaining = targetSeconds - total;
+    if (clip.duration > remaining && remaining >= minClip) {
+      clip = { ...clip, end: clip.start + remaining, duration: remaining };
+    } else if (clip.duration > remaining && selected.length) {
+      continue;
+    }
+    selected.push(clip);
+    total += clip.duration;
+  }
+
+  return selected
+    .sort((left, right) => left.start - right.start)
+    .map((item, index) => {
+      const label = item.event.event_label || "selected moment";
+      return {
+        index: index + 1,
+        start: Number(item.start.toFixed(2)),
+        end: Number(item.end.toFixed(2)),
+        duration: Number(item.duration.toFixed(2)),
+        score: Number(item.score.toFixed(4)),
+        labels: [label],
+        matched_labels: [label],
+        reason: item.event.reason || `Kept because ${label} matched the edit request near ${formatTime(item.event.window_start)}.`,
+        boundary_reason: "Bounds came from the temporal event analyzer offsets.",
+        why_not_longer: total >= targetSeconds ? "Trimmed around the requested final duration." : "Kept only around the meaningful event window.",
+        transition: { type: index ? "fade" : "cut", duration_seconds: index ? 0.3 : 0 },
+        event_label: label,
+        keep_score: Number(item.event.keep_score ?? 0),
+        skip_score: Number(item.event.skip_score ?? 0),
+        confidence: Number(item.event.confidence ?? 0),
+        title_overlay: item.event.title_overlay || "",
+        title_overlay_start_offset_seconds: Number(item.event.title_overlay_start_offset_seconds ?? 0),
+        title_overlay_end_offset_seconds: Number(item.event.title_overlay_end_offset_seconds ?? 0),
+      };
+    });
+}
+
 function progressFromLog(job?: JobPayload) {
   if (!job) return 0;
   if (typeof job.progress?.percent === "number") {
@@ -529,6 +691,42 @@ function drawCoverFrame(
   }
 }
 
+function drawTitleOverlay(context: CanvasRenderingContext2D, width: number, height: number, text: string) {
+  const title = text.trim().toUpperCase().slice(0, 28);
+  if (!title) return;
+
+  context.save();
+  let fontSize = Math.round(width * 0.095);
+  context.font = `900 ${fontSize}px Arial, sans-serif`;
+  while (context.measureText(title).width > width * 0.86 && fontSize > 30) {
+    fontSize -= 2;
+    context.font = `900 ${fontSize}px Arial, sans-serif`;
+  }
+
+  const metrics = context.measureText(title);
+  const paddingX = Math.round(width * 0.045);
+  const paddingY = Math.round(height * 0.018);
+  const boxWidth = Math.min(width * 0.92, metrics.width + paddingX * 2);
+  const boxHeight = fontSize + paddingY * 2;
+  const boxX = (width - boxWidth) / 2;
+  const boxY = height * 0.12;
+  const textX = width / 2;
+  const textY = boxY + boxHeight / 2 + fontSize * 0.34;
+
+  context.fillStyle = "rgba(0, 0, 0, 0.62)";
+  context.fillRect(boxX, boxY, boxWidth, boxHeight);
+  context.fillStyle = "#f3c84b";
+  context.fillRect(boxX, boxY + boxHeight - 8, boxWidth, 8);
+  context.textAlign = "center";
+  context.lineJoin = "round";
+  context.strokeStyle = "rgba(0, 0, 0, 0.85)";
+  context.lineWidth = Math.max(6, fontSize * 0.12);
+  context.strokeText(title, textX, textY);
+  context.fillStyle = "#fff9df";
+  context.fillText(title, textX, textY);
+  context.restore();
+}
+
 async function captureFrame(video: HTMLVideoElement, second: number, frame: number): Promise<CapturedFrame> {
   await seekVideo(video, second);
   await delay(30);
@@ -541,6 +739,51 @@ async function captureFrame(video: HTMLVideoElement, second: number, frame: numb
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
   const image = canvas.toDataURL("image/jpeg", 0.72).split(",", 2)[1];
   return { second, frame, image };
+}
+
+async function buildContactSheet(
+  video: HTMLVideoElement,
+  start: number,
+  end: number,
+  frameCount = CONTACT_SHEET_FRAMES,
+) {
+  const cols = 4;
+  const thumbWidth = 320;
+  const thumbHeight = 240;
+  const rows = Math.ceil(frameCount / cols);
+  const canvas = document.createElement("canvas");
+  canvas.width = cols * thumbWidth;
+  canvas.height = rows * thumbHeight;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is not available in this browser.");
+
+  context.fillStyle = "#050505";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const safeStart = Math.max(0, start);
+  const safeEnd = Math.max(safeStart + 0.1, end);
+  for (let index = 0; index < frameCount; index += 1) {
+    const progress = frameCount === 1 ? 0.5 : index / (frameCount - 1);
+    const second = safeStart + (safeEnd - safeStart) * progress;
+    await seekVideo(video, second);
+    await delay(20);
+
+    const column = index % cols;
+    const row = Math.floor(index / cols);
+    const x = column * thumbWidth;
+    const y = row * thumbHeight;
+    const scale = Math.max(thumbWidth / video.videoWidth, thumbHeight / video.videoHeight);
+    const drawWidth = video.videoWidth * scale;
+    const drawHeight = video.videoHeight * scale;
+    context.drawImage(video, x + (thumbWidth - drawWidth) / 2, y + (thumbHeight - drawHeight) / 2, drawWidth, drawHeight);
+    context.fillStyle = "rgba(0, 0, 0, 0.72)";
+    context.fillRect(x + 8, y + 8, 34, 26);
+    context.fillStyle = "#4df08b";
+    context.font = "bold 17px Arial, sans-serif";
+    context.fillText(String(index + 1), x + 18, y + 27);
+  }
+
+  return canvas.toDataURL("image/jpeg", 0.82).split(",", 2)[1];
 }
 
 async function renderBrowserShort(file: File, highlights: Highlight[], format: string | undefined) {
@@ -586,6 +829,11 @@ async function renderBrowserShort(file: File, highlights: Highlight[], format: s
         const remainingEnd = Math.max(0, clip.end - video.currentTime);
         const fade = Math.max(0, 1 - remainingStart / 0.3, 1 - remainingEnd / 0.3);
         drawCoverFrame(context, video, width, height, fade);
+        const overlayStart = Number(clip.title_overlay_start_offset_seconds ?? 0);
+        const overlayEnd = Math.max(overlayStart + 0.2, Number(clip.title_overlay_end_offset_seconds ?? 1.5));
+        if (clip.title_overlay && remainingStart >= overlayStart && remainingStart <= overlayEnd) {
+          drawTitleOverlay(context, width, height, clip.title_overlay);
+        }
         if (video.currentTime >= clip.end || video.ended) {
           video.pause();
           resolve();
@@ -1191,10 +1439,9 @@ export default function Home() {
         );
       }
     }
-    URL.revokeObjectURL(video.src);
-
-    const highlights = buildBrowserHighlights(predictions, duration, plan);
-    if (!highlights.length) {
+    const candidateWindows = buildCandidateWindows(predictions, duration, plan);
+    if (!candidateWindows.length) {
+      URL.revokeObjectURL(video.src);
       setJob(
         progressJob(
           jobId,
@@ -1204,7 +1451,76 @@ export default function Home() {
           plan,
           "completed",
           100,
-          "Analysis finished, but no strong matching clips were found.",
+          "Broad scan finished, but it did not find promising event windows.",
+          predictions.length,
+        ),
+      );
+      return;
+    }
+
+    const eventAnalyses: BrowserEventAnalysis[] = [];
+    for (let index = 0; index < candidateWindows.length; index += 1) {
+      const candidate = candidateWindows[index];
+      const contactSheet = await buildContactSheet(video, candidate.start, candidate.end);
+      const response = await fetch(`${API_BASE}/api/browser/event-analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: contactSheet,
+          scenarios,
+          user_request: check.resolved_prompt || userText,
+          window_start: candidate.start,
+          window_end: candidate.end,
+        }),
+      });
+
+      if (response.ok) {
+        eventAnalyses.push((await response.json()) as BrowserEventAnalysis);
+      } else {
+        eventAnalyses.push({
+          window_start: candidate.start,
+          window_end: candidate.end,
+          event_label: "event analyzer failed",
+          keep_score: 0,
+          skip_score: 1,
+          confidence: 0,
+          reason: await response.text(),
+          fallback: true,
+        });
+      }
+
+      const percent = 62 + Math.round((index / Math.max(candidateWindows.length - 1, 1)) * 10);
+      setJob(
+        progressJob(
+          jobId,
+          userText,
+          inputUrl,
+          memoryForJob,
+          plan,
+          "reviewing",
+          percent,
+          `Temporal review ${index + 1}/${candidateWindows.length}: checking action windows with Workflow B.`,
+          predictions.length,
+        ),
+      );
+    }
+    URL.revokeObjectURL(video.src);
+
+    const highlights = buildEventHighlights(eventAnalyses, duration, plan);
+    if (!highlights.length) {
+      const unavailable = eventAnalyses.some((event) => event.fallback);
+      setJob(
+        progressJob(
+          jobId,
+          userText,
+          inputUrl,
+          memoryForJob,
+          plan,
+          "completed",
+          100,
+          unavailable
+            ? "Temporal analysis could not score the candidate windows. Check Workflow B configuration."
+            : "Temporal analysis finished, but no strong matching clips were found.",
           predictions.length,
         ),
       );
@@ -1245,7 +1561,7 @@ export default function Home() {
       report:
         `Browser Video Shorts Report\n\n` +
         `The original ${formatBytes(fileToProcess.size)} video stayed in this browser. ` +
-        `Only ${predictions.length} small frame samples were sent to the backend for scene scoring.\n\n` +
+        `${predictions.length} small frame samples and ${eventAnalyses.length} contact sheets were sent to the backend for scoring.\n\n` +
         `Selected ${highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
         `Export format: browser-rendered WebM.\n`,
     };
@@ -1588,7 +1904,7 @@ export default function Home() {
                     <strong>#{index + 1}</strong>
                     <span>{formatTime(highlight.start)} - {formatTime(highlight.end)}</span>
                   </div>
-                  <p>{highlight.matched_labels?.[0] || highlight.labels[0] || "clip"}</p>
+                  <p>{highlight.title_overlay || highlight.event_label || highlight.matched_labels?.[0] || highlight.labels[0] || "clip"}</p>
                   <button
                     className="resize-handle end"
                     type="button"
@@ -1679,7 +1995,10 @@ export default function Home() {
                       Remove
                     </button>
                   </div>
-                  <p className="clip-reason">{selectedClip.reason || selectedClip.labels.join(", ")}</p>
+                  <p className="clip-reason">
+                    {selectedClip.title_overlay ? `${selectedClip.title_overlay}: ` : ""}
+                    {selectedClip.reason || selectedClip.labels.join(", ")}
+                  </p>
                 </>
               ) : (
                 <p className="clip-reason">Run an edit to populate the timeline.</p>
@@ -1795,7 +2114,10 @@ export default function Home() {
                       {formatTime(highlight.start)} - {formatTime(highlight.end)}
                     </strong>
                   </div>
-                  <p>{highlight.reason || highlight.labels.join(", ")}</p>
+                  <p>
+                    {highlight.title_overlay ? `${highlight.title_overlay}: ` : ""}
+                    {highlight.reason || highlight.labels.join(", ")}
+                  </p>
                   {(highlight.why_not_longer || highlight.boundary_reason || highlight.transition?.type) && (
                     <div className="clip-reason">
                       {highlight.why_not_longer || highlight.boundary_reason}
