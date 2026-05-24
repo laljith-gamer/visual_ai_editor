@@ -6,20 +6,27 @@ import {
   Download,
   Film,
   FileVideo,
+  Gauge,
+  GripVertical,
   History,
+  Layers,
   Loader2,
   ListVideo,
   MessageSquare,
-  PanelRight,
+  PanelLeft,
   Play,
   Plus,
+  RotateCcw,
+  Scissors,
   Send,
+  SlidersHorizontal,
   Sparkles,
+  Trash2,
   Upload,
   Wand2,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const SESSION_STORAGE_KEY = "visual_ai_editor.sessions.v1";
@@ -31,6 +38,7 @@ const INITIAL_ASSISTANT_MESSAGE =
   "Upload any video and tell me what kind of short you want. If details are missing, I'll ask before spending time on analysis.";
 
 type Highlight = {
+  clip_id?: string;
   index: number;
   start: number;
   end: number;
@@ -73,6 +81,7 @@ type JobPayload = {
   edit_plan?: EditPlan;
   clip_review?: ClipReview;
   progress?: ProgressPayload;
+  manual_updated_at?: string;
   predictions_count: number;
   report: string;
   stdout: string;
@@ -414,6 +423,29 @@ function progressJob(
   };
 }
 
+function normalizeHighlights(highlights: Highlight[]) {
+  return highlights.map((clip, index) => {
+    const start = Math.max(0, Number(clip.start || 0));
+    const end = Math.max(start + 0.25, Number(clip.end || start + clip.duration || start + 0.25));
+    return {
+      ...clip,
+      clip_id: clip.clip_id || `${start.toFixed(2)}-${end.toFixed(2)}-${clip.labels.join("|")}`,
+      index: index + 1,
+      start: Number(start.toFixed(2)),
+      end: Number(end.toFixed(2)),
+      duration: Number((end - start).toFixed(2)),
+      transition: {
+        type: index ? clip.transition?.type || "fade" : "cut",
+        duration_seconds: index ? Number(clip.transition?.duration_seconds ?? 0.3) : 0,
+      },
+    };
+  });
+}
+
+function clipIdentity(clip: Highlight) {
+  return clip.clip_id || `${clip.start}-${clip.end}-${clip.labels.join("|")}`;
+}
+
 function statusLabel(status?: JobPayload["status"]) {
   if (!status) return "Ready";
   if (status === "created") return "Queued";
@@ -585,6 +617,9 @@ export default function Home() {
   const [activeSessionId, setActiveSessionId] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages());
+  const [selectedClipIndex, setSelectedClipIndex] = useState(0);
+  const [draggingClipIndex, setDraggingClipIndex] = useState<number | null>(null);
+  const [manualSyncLabel, setManualSyncLabel] = useState("Synced locally");
   const previewVideoRef = useRef<HTMLVideoElement>(null);
 
   const progress = useMemo(() => progressFromLog(job ?? undefined), [job]);
@@ -598,6 +633,7 @@ export default function Home() {
     () => (job?.highlights ?? []).reduce((total, item) => total + Number(item.duration || 0), 0),
     [job],
   );
+  const selectedClip = job?.highlights?.[selectedClipIndex] ?? null;
   const activeFileName = file?.name ?? (job?.files.input ? "Source video loaded" : "No video selected");
   const isWorking = job?.status === "running" || isSubmitting;
 
@@ -654,6 +690,15 @@ export default function Home() {
       return next;
     });
   }, [activeSessionId, conversationBrief, hydrated, job, memory, messages]);
+
+  useEffect(() => {
+    const count = job?.highlights.length ?? 0;
+    if (!count) {
+      setSelectedClipIndex(0);
+      return;
+    }
+    setSelectedClipIndex((current) => Math.min(current, count - 1));
+  }, [job?.highlights.length]);
 
   useEffect(() => {
     if (!job || job.status === "completed" || job.status === "failed") {
@@ -749,6 +794,157 @@ export default function Home() {
     return { src };
   }
 
+  async function syncManualState(nextJob: JobPayload) {
+    setManualSyncLabel("Saving");
+    try {
+      const response = await fetch(`${API_BASE}/api/jobs/${nextJob.job_id}/manual`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: nextJob.prompt,
+          resolved_prompt: nextJob.resolved_prompt,
+          memory: nextJob.memory ?? memory,
+          edit_plan: nextJob.edit_plan ?? {},
+          highlights: nextJob.highlights,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      setManualSyncLabel("Saved");
+    } catch {
+      setManualSyncLabel("Local only");
+    }
+  }
+
+  function commitManualHighlights(highlights: Highlight[], message = "Manual timeline updated.") {
+    const normalized = normalizeHighlights(highlights);
+    setJob((current) => {
+      if (!current) return current;
+      const nextJob: JobPayload = {
+        ...current,
+        highlights: normalized,
+        progress: {
+          ...(current.progress ?? {}),
+          stage: "manual",
+          percent: current.status === "completed" ? 100 : progressFromLog(current),
+          message,
+        },
+      };
+      void syncManualState(nextJob);
+      return nextJob;
+    });
+  }
+
+  function moveHighlight(fromIndex: number, toIndex: number) {
+    const highlights = job?.highlights ?? [];
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= highlights.length || toIndex >= highlights.length) {
+      return;
+    }
+    const next = [...highlights];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    setSelectedClipIndex(toIndex);
+    commitManualHighlights(next, "Manual clip order saved.");
+  }
+
+  function handleClipDragStart(event: DragEvent<HTMLElement>, index: number) {
+    setDraggingClipIndex(index);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(index));
+  }
+
+  function handleClipDrop(event: DragEvent<HTMLElement>, index: number) {
+    event.preventDefault();
+    const fromIndex = Number(event.dataTransfer.getData("text/plain"));
+    setDraggingClipIndex(null);
+    moveHighlight(fromIndex, index);
+  }
+
+  function updateHighlightTime(index: number, field: "start" | "end", value: string) {
+    const number = Number(value);
+    if (!Number.isFinite(number) || !job?.highlights[index]) return;
+
+    const next = job.highlights.map((clip, clipIndex) => {
+      if (clipIndex !== index) return clip;
+      const start = field === "start" ? Math.max(0, number) : clip.start;
+      const end = field === "end" ? Math.max(start + 0.25, number) : Math.max(start + 0.25, clip.end);
+      return {
+        ...clip,
+        start,
+        end,
+        duration: end - start,
+        why_not_longer: "Adjusted manually by the editor.",
+      };
+    });
+    commitManualHighlights(next, "Manual clip timing saved.");
+  }
+
+  function removeHighlight(index: number) {
+    if (!job?.highlights.length) return;
+    const next = job.highlights.filter((_, clipIndex) => clipIndex !== index);
+    setSelectedClipIndex(Math.max(0, Math.min(index, next.length - 1)));
+    commitManualHighlights(next, "Manual clip removed.");
+  }
+
+  async function renderManualEdit() {
+    if (!file || !job?.highlights.length) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content: "I need the source video in this browser before I can render the manual arrangement.",
+        },
+      ]);
+      return;
+    }
+
+    setIsSubmitting(true);
+    const currentJob = job;
+    setJob({
+      ...currentJob,
+      status: "running",
+      progress: {
+        stage: "rendering",
+        percent: 82,
+        message: "Rendering the manual clip arrangement in your browser.",
+      },
+    });
+
+    try {
+      const outputUrl = await renderBrowserShort(file, currentJob.highlights, currentJob.edit_plan?.export_format);
+      const selectedSeconds = currentJob.highlights.reduce((total, clip) => total + clip.duration, 0);
+      const nextJob: JobPayload = {
+        ...currentJob,
+        status: "completed",
+        files: { ...currentJob.files, vertical: outputUrl, horizontal: outputUrl },
+        progress: {
+          stage: "completed",
+          percent: 100,
+          message: "Manual arrangement rendered locally.",
+        },
+        report:
+          `Manual Browser Edit\n\n` +
+          `Selected ${currentJob.highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
+          `Clip order and trim points were saved to the backend project state.\n`,
+      };
+      setJob(nextJob);
+      void syncManualState(nextJob);
+      setMessages((current) => [...current, { role: "assistant", content: "Manual arrangement rendered and saved." }]);
+    } catch (error) {
+      setJob(currentJob);
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content: error instanceof Error ? `Manual render failed: ${error.message}` : "Manual render failed.",
+        },
+      ]);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   function startNewChat() {
     const newSession: ChatSession = {
       id: createSessionId(),
@@ -791,19 +987,10 @@ export default function Home() {
     const inputUrl = URL.createObjectURL(fileToProcess);
     const plan = check.plan;
     const memoryForJob = check.memory ?? {};
-    const scenarios = plan?.roboflow_scenarios?.length
-      ? plan.roboflow_scenarios
-      : [
-          "player hitting enemy successfully",
-          "enemy taking visible damage",
-          "enemy defeated death animation",
-          "boss fight major combat",
-          "cinematic cutscene story",
-          "exploration walking idle",
-          "menu loading screen inventory",
-          "static boring repeated gameplay",
-          "black blank blurry frame",
-        ];
+    const scenarios = plan?.roboflow_scenarios ?? [];
+    if (scenarios.length < 2) {
+      throw new Error("The AI planner did not return enough visual scenario labels.");
+    }
 
     setJob(progressJob(jobId, userText, inputUrl, memoryForJob, plan, "preparing", 5, "Reading the video locally in your browser."));
 
@@ -888,7 +1075,7 @@ export default function Home() {
 
     const outputUrl = await renderBrowserShort(fileToProcess, highlights, plan?.export_format);
     const selectedSeconds = highlights.reduce((total, clip) => total + clip.duration, 0);
-    setJob({
+    const completedJob: JobPayload = {
       ...progressJob(
         jobId,
         userText,
@@ -908,7 +1095,9 @@ export default function Home() {
         `Only ${predictions.length} small frame samples were sent to the backend for scene scoring.\n\n` +
         `Selected ${highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
         `Export format: browser-rendered WebM.\n`,
-    });
+    };
+    setJob(completedJob);
+    void syncManualState(completedJob);
   }
 
   async function submitJob(event: FormEvent) {
@@ -1067,16 +1256,242 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="workspace">
-        <div className="chat-column">
-          <div className="panel-header">
-            <div>
-              <span className="panel-kicker">Prompt</span>
-              <h2>Edit Brief</h2>
+      <section className="studio-layout">
+        <aside className="project-rail">
+          <div className="rail-card upload-card">
+            <div className="rail-card-header">
+              <Upload size={16} />
+              <span>Source</span>
             </div>
-            <span className="panel-meta">{memory.duration_seconds ? `${memory.duration_seconds}s target` : "Open brief"}</span>
+            <label className="upload-zone">
+              <span className="upload-icon"><Upload size={18} /></span>
+              <span>{activeFileName}</span>
+              <input
+                type="file"
+                accept="video/*"
+                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+              />
+            </label>
           </div>
-          <div className="messages" aria-live="polite">
+
+          <div className="rail-card progress-card">
+            <div className="rail-card-header">
+              <Gauge size={16} />
+              <span>Progress</span>
+            </div>
+            <div className="progress-number">{progress}%</div>
+            <div className="meter-track">
+              <div style={{ width: `${progress}%` }} />
+            </div>
+            <p className="progress-message">{job?.progress?.message || job?.progress?.stage || "Ready"}</p>
+          </div>
+
+          <div className="rail-card memory-panel">
+            <div className="rail-card-header">
+              <Layers size={16} />
+              <span>Memory</span>
+            </div>
+            <div className="memory-tags">
+              {memory.duration_seconds && <span>{memory.duration_seconds}s</span>}
+              {(job?.edit_plan?.export_format || memory.format) && <span>{job?.edit_plan?.export_format || memory.format}</span>}
+              {job?.edit_plan?.planner_source && <span>{job.edit_plan.planner_source}</span>}
+              {job?.clip_review && (
+                <span>{job.clip_review.approved_for_render ? "review passed" : "review warning"}</span>
+              )}
+              {(memory.styles ?? []).map((item) => <span key={`style-${item}`}>{item}</span>)}
+              {(memory.keep ?? []).slice(0, 4).map((item) => <span key={`keep-${item}`}>keep {item}</span>)}
+              {(memory.skip ?? []).slice(0, 3).map((item) => <span key={`skip-${item}`}>skip {item}</span>)}
+              {!memory.duration_seconds && !memory.format && !(memory.styles?.length) && !(memory.keep?.length) && !(memory.skip?.length) && (
+                <span>waiting</span>
+              )}
+            </div>
+          </div>
+
+          <div className="rail-card history-panel">
+            <div className="rail-card-header">
+              <History size={16} />
+              <span>History</span>
+            </div>
+            <div className="history-list">
+              {sessions.map((session) => (
+                <button
+                  className={`history-item ${session.id === activeSessionId ? "active" : ""}`}
+                  type="button"
+                  key={session.id}
+                  onClick={() => restoreSession(session)}
+                >
+                  <span>{session.title}</span>
+                  <small>{session.memory.duration_seconds ? `${session.memory.duration_seconds}s` : "local"}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        </aside>
+
+        <section className="editor-stage">
+          <div className="stage-card">
+            <div className="stage-toolbar">
+              <div>
+                <span className="panel-kicker">Output</span>
+                <h2>Preview</h2>
+              </div>
+              <div className="stage-actions">
+                <button className="icon-button" type="button" aria-label="Open clip list" onClick={() => setTimelineOpen(true)}>
+                  <PanelLeft size={17} />
+                </button>
+                <button className="utility-button compact" type="button" disabled={!file || !job?.highlights.length || isWorking} onClick={renderManualEdit}>
+                  {isSubmitting ? <Loader2 size={15} className="spin" /> : <RotateCcw size={15} />}
+                  Render
+                </button>
+                <button className="utility-button compact primary" type="button" disabled={job?.status !== "completed"} onClick={exportShort}>
+                  <Download size={15} />
+                  Export
+                </button>
+              </div>
+            </div>
+
+            <div className="preview-frame stage-preview">
+              {previewSource ? (
+                <video
+                  ref={previewVideoRef}
+                  key={`${previewSource}-${activePreview?.start ?? "full"}-${activePreview?.end ?? "full"}`}
+                  src={previewSource}
+                  controls
+                  muted
+                  loop={!activePreview?.end}
+                  autoPlay
+                  playsInline
+                />
+              ) : (
+                <div className="empty-preview">
+                  <Play size={32} />
+                  <span>Preview</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <section className="timeline-workbench">
+            <div className="timeline-header">
+              <div>
+                <span className="panel-kicker">Timeline</span>
+                <h2>Manual arrangement</h2>
+              </div>
+              <div className="timeline-meta">
+                <span>{job?.highlights.length ?? 0} clips</span>
+                <span>{selectedDuration ? `${selectedDuration.toFixed(1)}s` : "0.0s"}</span>
+                <span>{manualSyncLabel}</span>
+              </div>
+            </div>
+
+            <div className="timeline-track" aria-label="Selected clips">
+              {(job?.highlights ?? []).map((highlight, index) => (
+                <article
+                  className={`timeline-clip ${selectedClipIndex === index ? "active" : ""} ${draggingClipIndex === index ? "dragging" : ""}`}
+                  key={clipIdentity(highlight)}
+                  draggable
+                  tabIndex={0}
+                  onClick={() => {
+                    setSelectedClipIndex(index);
+                    setActivePreview(previewForHighlight(highlight));
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedClipIndex(index);
+                      setActivePreview(previewForHighlight(highlight));
+                    }
+                  }}
+                  onDragStart={(event) => handleClipDragStart(event, index)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => handleClipDrop(event, index)}
+                  onDragEnd={() => setDraggingClipIndex(null)}
+                  onMouseEnter={() => setActivePreview(previewForHighlight(highlight))}
+                  onMouseLeave={() => setActivePreview(null)}
+                  style={{ flexGrow: Math.max(1, highlight.duration) }}
+                >
+                  <div className="timeline-clip-top">
+                    <GripVertical size={15} />
+                    <strong>#{index + 1}</strong>
+                    <span>{formatTime(highlight.start)} - {formatTime(highlight.end)}</span>
+                  </div>
+                  <p>{highlight.matched_labels?.[0] || highlight.labels[0] || "clip"}</p>
+                </article>
+              ))}
+              {!job?.highlights?.length && (
+                <div className="empty-timeline">
+                  <Film size={22} />
+                  <span>No clips yet</span>
+                </div>
+              )}
+            </div>
+
+            <div className="clip-inspector">
+              <div className="inspector-title">
+                <Scissors size={16} />
+                <span>{selectedClip ? `Clip ${selectedClipIndex + 1}` : "Clip"}</span>
+              </div>
+              {selectedClip ? (
+                <>
+                  <div className="time-fields">
+                    <label>
+                      <span>Start</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={Number(selectedClip.start.toFixed(1))}
+                        onChange={(event) => updateHighlightTime(selectedClipIndex, "start", event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>End</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={Number(selectedClip.end.toFixed(1))}
+                        onChange={(event) => updateHighlightTime(selectedClipIndex, "end", event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>Length</span>
+                      <input type="text" value={`${selectedClip.duration.toFixed(1)}s`} readOnly />
+                    </label>
+                  </div>
+                  <div className="inspector-actions">
+                    <button type="button" onClick={() => moveHighlight(selectedClipIndex, Math.max(0, selectedClipIndex - 1))}>
+                      <PanelLeft size={15} />
+                      Left
+                    </button>
+                    <button type="button" onClick={() => moveHighlight(selectedClipIndex, Math.min((job?.highlights.length ?? 1) - 1, selectedClipIndex + 1))}>
+                      <PanelLeft size={15} className="flip-icon" />
+                      Right
+                    </button>
+                    <button type="button" className="danger-button" onClick={() => removeHighlight(selectedClipIndex)}>
+                      <Trash2 size={15} />
+                      Remove
+                    </button>
+                  </div>
+                  <p className="clip-reason">{selectedClip.reason || selectedClip.labels.join(", ")}</p>
+                </>
+              ) : (
+                <p className="clip-reason">Run an edit to populate the timeline.</p>
+              )}
+            </div>
+          </section>
+        </section>
+
+        <aside className="assistant-panel">
+          <div className="panel-header compact">
+            <div>
+              <span className="panel-kicker">AI Editor</span>
+              <h2>Chat</h2>
+            </div>
+            <SlidersHorizontal size={18} />
+          </div>
+
+          <div className="messages compact-messages" aria-live="polite">
             {messages.map((message, index) => (
               <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
                 <div className="message-icon">
@@ -1095,129 +1510,35 @@ export default function Home() {
             )}
           </div>
 
-          <form className="composer" onSubmit={submitJob}>
+          <form className="composer compact-composer" onSubmit={submitJob}>
             <textarea
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              rows={2}
-              placeholder="Describe the edit..."
+              rows={3}
+              placeholder="Ask for an edit..."
             />
             <button type="submit" disabled={isSubmitting}>
               {isSubmitting ? <Loader2 size={18} className="spin" /> : <Send size={18} />}
-              {job && !file ? "Re-edit" : "Run"}
+              {job && !file ? "Update" : "Run"}
             </button>
           </form>
-        </div>
 
-        <aside className="side-panel">
-          <div className="panel-header compact">
-            <div>
-              <span className="panel-kicker">Output</span>
-              <h2>Preview</h2>
-            </div>
-            <PanelRight size={18} />
+          <div className="assistant-actions">
+            <button className="timeline-button" type="button" onClick={() => setTimelineOpen(true)}>
+              <ListVideo size={18} />
+              <span>Clips</span>
+              <strong>{job?.highlights.length ?? 0}</strong>
+            </button>
+            <button
+              className="export-button"
+              type="button"
+              disabled={job?.status !== "completed"}
+              onClick={exportShort}
+            >
+              {isWorking ? <Loader2 size={18} className="spin" /> : <Download size={18} />}
+              {job?.status === "completed" ? "Export Short" : "Export Pending"}
+            </button>
           </div>
-
-          <label className="upload-zone">
-            <span className="upload-icon"><Upload size={18} /></span>
-            <span>{activeFileName}</span>
-            <input
-              type="file"
-              accept="video/*"
-              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-            />
-          </label>
-
-          <div className="preview-frame">
-            {previewSource ? (
-              <video
-                ref={previewVideoRef}
-                key={`${previewSource}-${activePreview?.start ?? "full"}-${activePreview?.end ?? "full"}`}
-                src={previewSource}
-                controls
-                muted
-                loop={!activePreview?.end}
-                autoPlay
-                playsInline
-              />
-            ) : (
-              <div className="empty-preview">
-                <Play size={28} />
-                <span>Preview</span>
-              </div>
-            )}
-          </div>
-
-          <div className="meter">
-            <div className="meter-row">
-              <span>{job?.progress?.stage ?? `${job?.predictions_count ?? 0} samples`}</span>
-              <span>{progress}%</span>
-            </div>
-            <div className="meter-track">
-              <div style={{ width: `${progress}%` }} />
-            </div>
-            {job?.progress?.message && <div className="progress-message">{job.progress.message}</div>}
-          </div>
-
-          <div className="memory-panel">
-            <div className="memory-title">Memory</div>
-            <div className="memory-tags">
-              {memory.duration_seconds && <span>{memory.duration_seconds}s</span>}
-              {(job?.edit_plan?.export_format || memory.format) && <span>{job?.edit_plan?.export_format || memory.format}</span>}
-              {job?.edit_plan?.planner_source && <span>{job.edit_plan.planner_source}</span>}
-              {job?.clip_review && (
-                <span>{job.clip_review.approved_for_render ? "review passed" : "review warning"}</span>
-              )}
-              {(memory.styles ?? []).map((item) => <span key={`style-${item}`}>{item}</span>)}
-              {(memory.keep ?? []).slice(0, 4).map((item) => <span key={`keep-${item}`}>keep {item}</span>)}
-              {(memory.skip ?? []).slice(0, 3).map((item) => <span key={`skip-${item}`}>skip {item}</span>)}
-              {!memory.duration_seconds && !memory.format && !(memory.styles?.length) && !(memory.keep?.length) && !(memory.skip?.length) && (
-                <span>waiting for edit details</span>
-              )}
-            </div>
-          </div>
-
-          <div className="history-panel">
-            <div className="history-title">
-              <History size={14} />
-              <span>Browser History</span>
-            </div>
-            <div className="history-list">
-              {sessions.map((session) => (
-                <button
-                  className={`history-item ${session.id === activeSessionId ? "active" : ""}`}
-                  type="button"
-                  key={session.id}
-                  onClick={() => restoreSession(session)}
-                >
-                  <span>{session.title}</span>
-                  <small>{session.memory.duration_seconds ? `${session.memory.duration_seconds}s` : "local"}</small>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <button
-            className="timeline-button"
-            type="button"
-            aria-controls="timeline-drawer"
-            aria-expanded={timelineOpen}
-            onClick={() => setTimelineOpen(true)}
-          >
-            <ListVideo size={18} />
-            <span>Timeline</span>
-            <strong>{job?.highlights.length ?? 0}</strong>
-          </button>
-
-          <button
-            className="export-button"
-            type="button"
-            disabled={job?.status !== "completed"}
-            onClick={exportShort}
-          >
-            {isWorking ? <Loader2 size={18} className="spin" /> : <Download size={18} />}
-            {job?.status === "completed" ? "Export Short" : "Export Pending"}
-          </button>
         </aside>
       </section>
 
@@ -1238,16 +1559,32 @@ export default function Home() {
               <span>{selectedDuration ? `${selectedDuration.toFixed(0)}s total` : "No clips yet"}</span>
             </div>
             <div className="timeline-list">
-              {(job?.highlights ?? []).map((highlight) => (
+              {(job?.highlights ?? []).map((highlight, index) => (
                 <article
-                  className="highlight-card"
-                  key={highlight.index}
-                  onClick={() => setActivePreview(previewForHighlight(highlight))}
+                  className={`highlight-card ${selectedClipIndex === index ? "active" : ""}`}
+                  key={clipIdentity(highlight)}
+                  draggable
+                  tabIndex={0}
+                  onClick={() => {
+                    setSelectedClipIndex(index);
+                    setActivePreview(previewForHighlight(highlight));
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedClipIndex(index);
+                      setActivePreview(previewForHighlight(highlight));
+                    }
+                  }}
+                  onDragStart={(event) => handleClipDragStart(event, index)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => handleClipDrop(event, index)}
+                  onDragEnd={() => setDraggingClipIndex(null)}
                   onMouseEnter={() => setActivePreview(previewForHighlight(highlight))}
                   onMouseLeave={() => setActivePreview(null)}
                 >
                   <div className="clip-meta">
-                    <span>#{highlight.index}</span>
+                    <span>#{index + 1}</span>
                     <strong>
                       {formatTime(highlight.start)} - {formatTime(highlight.end)}
                     </strong>
@@ -1268,14 +1605,13 @@ export default function Home() {
               {!job?.highlights?.length && (
                 <div className="empty-highlights">
                   <Film size={22} />
-                  <span>Highlights appear here after analysis.</span>
+                  <span>No highlights yet</span>
                 </div>
               )}
             </div>
           </aside>
         </div>
       )}
-
     </main>
   );
 }

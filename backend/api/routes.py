@@ -16,6 +16,7 @@ from backend.services.jobs import (
     RUNNING_PROCESSES,
     build_job_payload,
     job_dir,
+    safe_job_id,
     start_processor,
 )
 from backend.services.memory import write_memory
@@ -170,6 +171,60 @@ async def create_job(
 @router.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict[str, Any]:
     return build_job_payload(job_id)
+
+
+@router.post("/api/jobs/{job_id}/manual")
+def update_manual_job(job_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    normalized_job_id = safe_job_id(job_id)
+    directory = JOBS_DIR / normalized_job_id
+    directory.mkdir(parents=True, exist_ok=True)
+
+    highlights = payload.get("highlights")
+    if not isinstance(highlights, list):
+        raise HTTPException(status_code=400, detail="highlights must be a list")
+
+    memory = payload.get("memory") if isinstance(payload.get("memory"), dict) else {}
+    edit_plan = payload.get("edit_plan") if isinstance(payload.get("edit_plan"), dict) else {}
+    updated_at = datetime.now(timezone.utc).isoformat()
+    selected_duration = 0.0
+    for clip in highlights:
+        if not isinstance(clip, dict):
+            continue
+        try:
+            selected_duration += float(clip.get("duration") or 0)
+        except (TypeError, ValueError):
+            continue
+    manual_state = {
+        "job_id": normalized_job_id,
+        "updated_at": updated_at,
+        "source": "manual_editor",
+        "prompt": str(payload.get("prompt") or ""),
+        "resolved_prompt": str(payload.get("resolved_prompt") or payload.get("prompt") or ""),
+        "memory": memory,
+        "edit_plan": edit_plan,
+        "highlights": highlights,
+        "selected_duration": selected_duration,
+    }
+    write_json(directory / "manual_state.json", manual_state)
+
+    metadata = read_json(directory / "job.json", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update(
+        {
+            "job_id": normalized_job_id,
+            "prompt": manual_state["prompt"] or metadata.get("prompt", ""),
+            "resolved_prompt": manual_state["resolved_prompt"] or metadata.get("resolved_prompt", ""),
+            "memory": memory or metadata.get("memory", {}),
+            "edit_plan": edit_plan or metadata.get("edit_plan", {}),
+            "status": metadata.get("status", "completed"),
+            "kind": metadata.get("kind", "browser_manual"),
+            "manual_updated_at": updated_at,
+        }
+    )
+    write_json(directory / "job.json", metadata)
+
+    return {"ok": True, "job_id": normalized_job_id, "manual_updated_at": updated_at}
 
 
 @router.post("/api/jobs/{job_id}/edits")

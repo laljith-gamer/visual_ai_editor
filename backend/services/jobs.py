@@ -14,6 +14,13 @@ from backend.core.storage import read_json, tail_text, write_json
 RUNNING_PROCESSES: dict[str, subprocess.Popen] = {}
 
 
+def safe_job_id(job_id: str) -> str:
+    cleaned = "".join(ch for ch in str(job_id) if ch.isalnum() or ch in "-_").strip("-_")
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    return cleaned[:80]
+
+
 def job_log_dir(job_id: str) -> Path:
     path = JOB_LOGS_DIR / job_id
     path.mkdir(parents=True, exist_ok=True)
@@ -28,7 +35,7 @@ def job_log_path(job_id: str, filename: str) -> Path:
 
 
 def job_dir(job_id: str) -> Path:
-    path = JOBS_DIR / job_id
+    path = JOBS_DIR / safe_job_id(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Job not found")
     return path
@@ -73,6 +80,7 @@ def start_processor(
 def build_job_payload(job_id: str) -> dict[str, Any]:
     directory = job_dir(job_id)
     metadata = read_json(directory / "job.json", {})
+    manual_state = read_json(directory / "manual_state.json", {})
     process = RUNNING_PROCESSES.get(job_id)
     return_code = process.poll() if process else metadata.get("return_code")
 
@@ -91,7 +99,8 @@ def build_job_payload(job_id: str) -> dict[str, Any]:
         write_json(directory / "job.json", metadata)
         RUNNING_PROCESSES.pop(job_id, None)
 
-    highlights = read_json(directory / "highlights.json", [])
+    manual_highlights = manual_state.get("highlights") if isinstance(manual_state, dict) else None
+    highlights = manual_highlights if isinstance(manual_highlights, list) else read_json(directory / "highlights.json", [])
     clip_review = read_json(directory / "clip_review.json", {})
     progress = read_json(directory / "progress.json", {})
     predictions = read_json(directory / "predictions.json", [])
@@ -132,10 +141,11 @@ def build_job_payload(job_id: str) -> dict[str, Any]:
         "status": status,
         "prompt": metadata.get("prompt", ""),
         "resolved_prompt": metadata.get("resolved_prompt", metadata.get("prompt", "")),
-        "memory": metadata.get("memory", {}),
-        "edit_plan": metadata.get("edit_plan", {}),
+        "memory": manual_state.get("memory", metadata.get("memory", {})) if isinstance(manual_state, dict) else metadata.get("memory", {}),
+        "edit_plan": manual_state.get("edit_plan", metadata.get("edit_plan", {})) if isinstance(manual_state, dict) else metadata.get("edit_plan", {}),
         "source_job_id": metadata.get("source_job_id"),
         "created_at": metadata.get("created_at"),
+        "manual_updated_at": manual_state.get("updated_at") if isinstance(manual_state, dict) else None,
         "files": files,
         "highlights": highlight_cards,
         "clip_review": clip_review if isinstance(clip_review, dict) else {},
