@@ -13,6 +13,7 @@ import {
   Loader2,
   ListVideo,
   MessageSquare,
+  Minus,
   PanelLeft,
   Play,
   Plus,
@@ -26,7 +27,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import { type DragEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, type FormEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const SESSION_STORAGE_KEY = "visual_ai_editor.sessions.v1";
@@ -836,6 +837,23 @@ export default function Home() {
     });
   }
 
+  function setManualHighlightsLocally(highlights: Highlight[], message = "Editing clip timing.") {
+    const normalized = normalizeHighlights(highlights);
+    setJob((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        highlights: normalized,
+        progress: {
+          ...(current.progress ?? {}),
+          stage: "manual",
+          percent: current.status === "completed" ? 100 : progressFromLog(current),
+          message,
+        },
+      };
+    });
+  }
+
   function moveHighlight(fromIndex: number, toIndex: number) {
     const highlights = job?.highlights ?? [];
     if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= highlights.length || toIndex >= highlights.length) {
@@ -878,6 +896,89 @@ export default function Home() {
       };
     });
     commitManualHighlights(next, "Manual clip timing saved.");
+  }
+
+  function resizeHighlight(index: number, edge: "start" | "end", deltaSeconds: number, sync = true) {
+    if (!job?.highlights[index]) return;
+    const next = job.highlights.map((clip, clipIndex) => {
+      if (clipIndex !== index) return clip;
+      const start =
+        edge === "start"
+          ? Math.max(0, Math.min(clip.start + deltaSeconds, clip.end - 0.25))
+          : clip.start;
+      const end = edge === "end" ? Math.max(clip.start + 0.25, clip.end + deltaSeconds) : clip.end;
+      return {
+        ...clip,
+        start,
+        end,
+        duration: end - start,
+        why_not_longer: "Adjusted manually by the editor.",
+      };
+    });
+    if (sync) {
+      commitManualHighlights(next, "Manual clip timing saved.");
+    } else {
+      setManualHighlightsLocally(next);
+    }
+  }
+
+  function shiftHighlight(index: number, deltaSeconds: number) {
+    if (!job?.highlights[index]) return;
+    const next = job.highlights.map((clip, clipIndex) => {
+      if (clipIndex !== index) return clip;
+      const start = Math.max(0, clip.start + deltaSeconds);
+      const end = start + clip.duration;
+      return {
+        ...clip,
+        start,
+        end,
+        why_not_longer: "Moved manually by the editor.",
+      };
+    });
+    commitManualHighlights(next, "Manual clip position saved.");
+  }
+
+  function handleResizePointerDown(event: PointerEvent<HTMLButtonElement>, index: number, edge: "start" | "end") {
+    const clip = job?.highlights[index];
+    if (!clip || !job) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const clipWidth = event.currentTarget.parentElement?.getBoundingClientRect().width ?? 160;
+    const secondsPerPixel = Math.max(0.025, clip.duration / Math.max(80, clipWidth));
+    const baseHighlights = job.highlights;
+    let latest = baseHighlights;
+
+    const handleMove = (pointerEvent: globalThis.PointerEvent) => {
+      const deltaSeconds = (pointerEvent.clientX - startX) * secondsPerPixel;
+      latest = baseHighlights.map((item, clipIndex) => {
+        if (clipIndex !== index) return item;
+        const start =
+          edge === "start"
+            ? Math.max(0, Math.min(item.start + deltaSeconds, item.end - 0.25))
+            : item.start;
+        const end = edge === "end" ? Math.max(item.start + 0.25, item.end + deltaSeconds) : item.end;
+        return {
+          ...item,
+          start,
+          end,
+          duration: end - start,
+          why_not_longer: "Adjusted manually by dragging the clip edge.",
+        };
+      });
+      setManualSyncLabel("Editing");
+      setManualHighlightsLocally(latest);
+    };
+
+    const handleUp = () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      commitManualHighlights(latest, "Manual clip resize saved.");
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp, { once: true });
   }
 
   function removeHighlight(index: number) {
@@ -980,6 +1081,58 @@ export default function Home() {
     setConversationBrief(session.conversationBrief ?? "");
     setMessages(session.messages.length ? session.messages : initialMessages());
     writeStoredSessions(sessions, session.id);
+  }
+
+  function applySession(session: ChatSession, nextSessions: ChatSession[]) {
+    setSessions(nextSessions);
+    setActiveSessionId(session.id);
+    setPrompt("");
+    setFile(null);
+    setJob(session.jobSnapshot ?? null);
+    setActivePreview(null);
+    setTimelineOpen(false);
+    setMemory(session.memory ?? {});
+    setConversationBrief(session.conversationBrief ?? "");
+    setMessages(session.messages.length ? session.messages : initialMessages());
+    writeStoredSessions(nextSessions, session.id);
+  }
+
+  function deleteSession(sessionId: string) {
+    const next = sessions.filter((session) => session.id !== sessionId);
+    if (!next.length) {
+      const fresh: ChatSession = {
+        id: createSessionId(),
+        title: "New edit",
+        updatedAt: Date.now(),
+        messages: initialMessages(),
+        memory: {},
+        conversationBrief: "",
+        jobSnapshot: null,
+      };
+      applySession(fresh, [fresh]);
+      return;
+    }
+
+    if (sessionId === activeSessionId) {
+      applySession(next[0], next);
+      return;
+    }
+
+    setSessions(next);
+    writeStoredSessions(next, activeSessionId);
+  }
+
+  function clearHistory() {
+    const fresh: ChatSession = {
+      id: createSessionId(),
+      title: "New edit",
+      updatedAt: Date.now(),
+      messages: initialMessages(),
+      memory: {},
+      conversationBrief: "",
+      jobSnapshot: null,
+    };
+    applySession(fresh, [fresh]);
   }
 
   async function runBrowserWorkflow(fileToProcess: File, userText: string, check: AgentCheck) {
@@ -1309,20 +1462,33 @@ export default function Home() {
 
           <div className="rail-card history-panel">
             <div className="rail-card-header">
-              <History size={16} />
-              <span>History</span>
+              <div className="history-title">
+                <History size={16} />
+                <span>History</span>
+              </div>
+              <button className="mini-text-button" type="button" onClick={clearHistory}>
+                Clear
+              </button>
             </div>
             <div className="history-list">
               {sessions.map((session) => (
-                <button
+                <div
                   className={`history-item ${session.id === activeSessionId ? "active" : ""}`}
-                  type="button"
                   key={session.id}
-                  onClick={() => restoreSession(session)}
                 >
-                  <span>{session.title}</span>
-                  <small>{session.memory.duration_seconds ? `${session.memory.duration_seconds}s` : "local"}</small>
-                </button>
+                  <button className="history-select" type="button" onClick={() => restoreSession(session)}>
+                    <span>{session.title}</span>
+                    <small>{session.memory.duration_seconds ? `${session.memory.duration_seconds}s` : "local"}</small>
+                  </button>
+                  <button
+                    className="history-delete"
+                    type="button"
+                    aria-label={`Delete ${session.title}`}
+                    onClick={() => deleteSession(session.id)}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -1410,12 +1576,26 @@ export default function Home() {
                   onMouseLeave={() => setActivePreview(null)}
                   style={{ flexGrow: Math.max(1, highlight.duration) }}
                 >
+                  <button
+                    className="resize-handle start"
+                    type="button"
+                    aria-label="Drag to change clip start"
+                    onClick={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => handleResizePointerDown(event, index, "start")}
+                  />
                   <div className="timeline-clip-top">
                     <GripVertical size={15} />
                     <strong>#{index + 1}</strong>
                     <span>{formatTime(highlight.start)} - {formatTime(highlight.end)}</span>
                   </div>
                   <p>{highlight.matched_labels?.[0] || highlight.labels[0] || "clip"}</p>
+                  <button
+                    className="resize-handle end"
+                    type="button"
+                    aria-label="Drag to change clip end"
+                    onClick={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => handleResizePointerDown(event, index, "end")}
+                  />
                 </article>
               ))}
               {!job?.highlights?.length && (
@@ -1458,6 +1638,32 @@ export default function Home() {
                       <span>Length</span>
                       <input type="text" value={`${selectedClip.duration.toFixed(1)}s`} readOnly />
                     </label>
+                  </div>
+                  <div className="nudge-grid" aria-label="Clip trim controls">
+                    <button type="button" onClick={() => shiftHighlight(selectedClipIndex, -0.5)}>
+                      <Minus size={14} />
+                      Move
+                    </button>
+                    <button type="button" onClick={() => shiftHighlight(selectedClipIndex, 0.5)}>
+                      <Plus size={14} />
+                      Move
+                    </button>
+                    <button type="button" onClick={() => resizeHighlight(selectedClipIndex, "start", 0.5)}>
+                      <Minus size={14} />
+                      Head
+                    </button>
+                    <button type="button" onClick={() => resizeHighlight(selectedClipIndex, "start", -0.5)}>
+                      <Plus size={14} />
+                      Head
+                    </button>
+                    <button type="button" onClick={() => resizeHighlight(selectedClipIndex, "end", -0.5)}>
+                      <Minus size={14} />
+                      Tail
+                    </button>
+                    <button type="button" onClick={() => resizeHighlight(selectedClipIndex, "end", 0.5)}>
+                      <Plus size={14} />
+                      Tail
+                    </button>
                   </div>
                   <div className="inspector-actions">
                     <button type="button" onClick={() => moveHighlight(selectedClipIndex, Math.max(0, selectedClipIndex - 1))}>
