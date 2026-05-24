@@ -38,7 +38,7 @@ const FRAME_BATCH_SIZE = 4;
 const MAX_EVENT_WINDOWS = 12;
 const CONTACT_SHEET_FRAMES = 12;
 const EVENT_KEEP_THRESHOLD = 0.55;
-const MAX_BROWSER_RENDER_SECONDS = 120;
+const MAX_BROWSER_RENDER_SECONDS = 360;
 const MAX_BROWSER_HEAVY_RENDER_SECONDS = 60;
 const HEAVY_SOURCE_BYTES = 1500 * 1024 * 1024;
 const INITIAL_ASSISTANT_MESSAGE =
@@ -808,9 +808,115 @@ async function buildContactSheet(
   return canvas.toDataURL("image/jpeg", 0.82).split(",", 2)[1];
 }
 
+async function pauseRecorder(recorder: MediaRecorder) {
+  if (recorder.state !== "recording") return;
+  await new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(resolve, 250);
+    recorder.addEventListener(
+      "pause",
+      () => {
+        window.clearTimeout(timeout);
+        resolve();
+      },
+      { once: true },
+    );
+    recorder.pause();
+  });
+}
+
+async function resumeRecorder(recorder: MediaRecorder) {
+  if (recorder.state !== "paused") return;
+  await new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(resolve, 250);
+    recorder.addEventListener(
+      "resume",
+      () => {
+        window.clearTimeout(timeout);
+        resolve();
+      },
+      { once: true },
+    );
+    recorder.resume();
+  });
+}
+
+function waitForNextVideoFrame(video: HTMLVideoElement) {
+  return new Promise<void>((resolve) => {
+    const withFrameCallback = video as HTMLVideoElement & {
+      requestVideoFrameCallback?: (callback: () => void) => number;
+    };
+    if (withFrameCallback.requestVideoFrameCallback) {
+      const timeout = window.setTimeout(resolve, 220);
+      withFrameCallback.requestVideoFrameCallback(() => {
+        window.clearTimeout(timeout);
+        resolve();
+      });
+      return;
+    }
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+function drawClipFrame(
+  context: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  width: number,
+  height: number,
+  clip: Highlight,
+) {
+  const elapsed = Math.max(0, video.currentTime - clip.start);
+  const remainingEnd = Math.max(0, clip.end - video.currentTime);
+  const fade = Math.max(0, 1 - elapsed / 0.3, 1 - remainingEnd / 0.3);
+  drawCoverFrame(context, video, width, height, fade);
+  const overlayStart = Number(clip.title_overlay_start_offset_seconds ?? 0);
+  const overlayEnd = Math.max(overlayStart + 0.2, Number(clip.title_overlay_end_offset_seconds ?? 1.5));
+  if (clip.title_overlay && elapsed >= overlayStart && elapsed <= overlayEnd) {
+    drawTitleOverlay(context, width, height, clip.title_overlay);
+  }
+}
+
+async function renderClipToCanvas(
+  video: HTMLVideoElement,
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  clip: Highlight,
+) {
+  await new Promise<void>((resolve) => {
+    let lastMediaTime = -1;
+    let repeatedFrames = 0;
+
+    const draw = () => {
+      if (Math.abs(video.currentTime - lastMediaTime) < 0.001) {
+        repeatedFrames += 1;
+      } else {
+        repeatedFrames = 0;
+        lastMediaTime = video.currentTime;
+      }
+
+      drawClipFrame(context, video, width, height, clip);
+      if (video.currentTime >= clip.end || video.ended) {
+        video.pause();
+        resolve();
+        return;
+      }
+
+      if (repeatedFrames > 18) {
+        requestAnimationFrame(draw);
+        return;
+      }
+
+      void waitForNextVideoFrame(video).then(draw);
+    };
+
+    void waitForNextVideoFrame(video).then(draw);
+  });
+}
+
 async function renderBrowserShort(file: File, highlights: Highlight[], format: string | undefined) {
   const video = await loadVideoElement(file);
-  video.muted = false;
+  video.muted = true;
+  video.playbackRate = 1;
   const vertical = format !== "horizontal";
   const width = vertical ? 720 : 1280;
   const height = vertical ? 1280 : 720;
@@ -831,32 +937,20 @@ async function renderBrowserShort(file: File, highlights: Highlight[], format: s
     if (event.data.size) chunks.push(event.data);
   };
   recorder.start(1000);
+  await pauseRecorder(recorder);
 
   for (const clip of highlights) {
+    await pauseRecorder(recorder);
+    video.pause();
     await seekVideo(video, clip.start);
+    await waitForNextVideoFrame(video);
+    drawClipFrame(context, video, width, height, clip);
+    await resumeRecorder(recorder);
     await video.play();
-    await new Promise<void>((resolve) => {
-      const draw = () => {
-        const remainingStart = Math.max(0, video.currentTime - clip.start);
-        const remainingEnd = Math.max(0, clip.end - video.currentTime);
-        const fade = Math.max(0, 1 - remainingStart / 0.3, 1 - remainingEnd / 0.3);
-        drawCoverFrame(context, video, width, height, fade);
-        const overlayStart = Number(clip.title_overlay_start_offset_seconds ?? 0);
-        const overlayEnd = Math.max(overlayStart + 0.2, Number(clip.title_overlay_end_offset_seconds ?? 1.5));
-        if (clip.title_overlay && remainingStart >= overlayStart && remainingStart <= overlayEnd) {
-          drawTitleOverlay(context, width, height, clip.title_overlay);
-        }
-        if (video.currentTime >= clip.end || video.ended) {
-          video.pause();
-          resolve();
-          return;
-        }
-        requestAnimationFrame(draw);
-      };
-      requestAnimationFrame(draw);
-    });
+    await renderClipToCanvas(video, context, width, height, clip);
   }
 
+  await pauseRecorder(recorder);
   await new Promise<void>((resolve) => {
     recorder.onstop = () => resolve();
     recorder.stop();
