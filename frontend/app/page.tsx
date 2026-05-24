@@ -19,7 +19,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const SESSION_STORAGE_KEY = "visual_ai_editor.sessions.v1";
@@ -149,6 +149,12 @@ type CapturedFrame = {
   second: number;
   frame: number;
   image: string;
+};
+
+type PreviewClip = {
+  src: string;
+  start?: number;
+  end?: number;
 };
 
 function absoluteUrl(path?: string) {
@@ -481,7 +487,7 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [job, setJob] = useState<JobPayload | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activePreview, setActivePreview] = useState("");
+  const [activePreview, setActivePreview] = useState<PreviewClip | null>(null);
   const [memory, setMemory] = useState<EditorMemory>({});
   const [conversationBrief, setConversationBrief] = useState("");
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -489,10 +495,11 @@ export default function Home() {
   const [activeSessionId, setActiveSessionId] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages());
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
 
   const progress = useMemo(() => progressFromLog(job ?? undefined), [job]);
   const previewSource =
-    activePreview ||
+    activePreview?.src ||
     absoluteUrl(job?.files.vertical) ||
     absoluteUrl(job?.files.horizontal) ||
     absoluteUrl(job?.files.input) ||
@@ -603,6 +610,55 @@ export default function Home() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [timelineOpen]);
 
+  useEffect(() => {
+    const video = previewVideoRef.current;
+    if (!video || !activePreview || typeof activePreview.start !== "number" || typeof activePreview.end !== "number") {
+      return;
+    }
+
+    const start = Math.max(0, activePreview.start);
+    const end = Math.max(start + 0.25, activePreview.end);
+
+    function seekToClipStart() {
+      if (!video) return;
+      const safeStart = Number.isFinite(video.duration) ? Math.min(start, Math.max(video.duration - 0.05, 0)) : start;
+      video.currentTime = safeStart;
+      video.play().catch(() => undefined);
+    }
+
+    function keepInsideClip() {
+      if (!video) return;
+      if (video.currentTime >= end || video.ended) {
+        video.currentTime = start;
+        video.play().catch(() => undefined);
+      }
+    }
+
+    if (video.readyState >= 1) {
+      seekToClipStart();
+    } else {
+      video.addEventListener("loadedmetadata", seekToClipStart, { once: true });
+    }
+    video.addEventListener("timeupdate", keepInsideClip);
+
+    return () => {
+      video.removeEventListener("loadedmetadata", seekToClipStart);
+      video.removeEventListener("timeupdate", keepInsideClip);
+    };
+  }, [activePreview]);
+
+  function previewForHighlight(highlight: Highlight): PreviewClip | null {
+    const src = absoluteUrl(highlight.preview_url) || absoluteUrl(job?.files.input);
+    if (!src) return null;
+
+    const inputSource = absoluteUrl(job?.files.input);
+    if (inputSource && src === inputSource) {
+      return { src, start: highlight.start, end: highlight.end };
+    }
+
+    return { src };
+  }
+
   function startNewChat() {
     const newSession: ChatSession = {
       id: createSessionId(),
@@ -619,7 +675,7 @@ export default function Home() {
     setPrompt("");
     setFile(null);
     setJob(null);
-    setActivePreview("");
+    setActivePreview(null);
     setTimelineOpen(false);
     setMemory({});
     setConversationBrief("");
@@ -632,7 +688,7 @@ export default function Home() {
     setPrompt("");
     setFile(null);
     setJob(session.jobSnapshot ?? null);
-    setActivePreview("");
+    setActivePreview(null);
     setTimelineOpen(false);
     setMemory(session.memory ?? {});
     setConversationBrief(session.conversationBrief ?? "");
@@ -984,7 +1040,16 @@ export default function Home() {
 
           <div className="preview-frame">
             {previewSource ? (
-              <video key={previewSource} src={previewSource} controls muted loop autoPlay playsInline />
+              <video
+                ref={previewVideoRef}
+                key={`${previewSource}-${activePreview?.start ?? "full"}-${activePreview?.end ?? "full"}`}
+                src={previewSource}
+                controls
+                muted
+                loop={!activePreview?.end}
+                autoPlay
+                playsInline
+              />
             ) : (
               <div className="empty-preview">
                 <Play size={28} />
@@ -1087,9 +1152,9 @@ export default function Home() {
                 <article
                   className="highlight-card"
                   key={highlight.index}
-                  onClick={() => setActivePreview(absoluteUrl(highlight.preview_url))}
-                  onMouseEnter={() => setActivePreview(absoluteUrl(highlight.preview_url))}
-                  onMouseLeave={() => setActivePreview("")}
+                  onClick={() => setActivePreview(previewForHighlight(highlight))}
+                  onMouseEnter={() => setActivePreview(previewForHighlight(highlight))}
+                  onMouseLeave={() => setActivePreview(null)}
                 >
                   <div className="clip-meta">
                     <span>#{highlight.index}</span>
