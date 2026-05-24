@@ -22,13 +22,15 @@ load_project_env(__file__)
 
 BACKEND_DIR = Path(__file__).parent.resolve()
 ROOT = BACKEND_DIR.parent
-JOBS_DIR = ROOT / "jobs"
+RUNTIME_ROOT = Path(os.getenv("RUNTIME_DIR") or ("/tmp/visual-ai-editor" if os.getenv("VERCEL") else ROOT)).resolve()
+RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+JOBS_DIR = RUNTIME_ROOT / "jobs"
 JOBS_DIR.mkdir(exist_ok=True)
-LOGS_DIR = ROOT / "logs"
+LOGS_DIR = RUNTIME_ROOT / "logs"
 JOB_LOGS_DIR = LOGS_DIR / "jobs"
 LOGS_DIR.mkdir(exist_ok=True)
 JOB_LOGS_DIR.mkdir(exist_ok=True)
-MEMORY_PATH = ROOT / "editor_memory.json"
+MEMORY_PATH = RUNTIME_ROOT / "editor_memory.json"
 
 DEFAULT_PROMPT = (
     "Make a 30 second short from the strongest visual moments. "
