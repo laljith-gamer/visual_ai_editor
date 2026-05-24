@@ -180,10 +180,13 @@ def build_ai_plan(
 
     from openai import OpenAI
 
+    planner_timeout = float(os.getenv("DASHSCOPE_TIMEOUT_SECONDS", "280"))
+    planner_timeout = max(5.0, min(planner_timeout, 280.0))
+
     client = OpenAI(
         api_key=api_key,
         base_url=os.getenv("DASHSCOPE_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
-        timeout=float(os.getenv("DASHSCOPE_TIMEOUT_SECONDS", "20")),
+        timeout=planner_timeout,
     )
     model = os.getenv("DASHSCOPE_MODEL", "qwen3.7-max")
     system = (
