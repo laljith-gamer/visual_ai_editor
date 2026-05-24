@@ -269,6 +269,27 @@ def agent_check_result(
 ) -> dict[str, Any]:
     merged_memory = dict(incoming_memory or {})
     candidate_memory = extract_memory(prompt, merged_memory)
+
+    quick_questions = []
+    if not has_video:
+        quick_questions.append("Upload a video first so I can analyze the actual footage.")
+    if prompt_is_vague(prompt) and not candidate_memory.get("keep"):
+        quick_questions.append("What kind of moments should I keep most?")
+    if quick_questions:
+        if has_video and not candidate_memory.get("duration_seconds"):
+            quick_questions.append("How long should the final edit be?")
+        if has_video and not candidate_memory.get("format"):
+            quick_questions.append("Should I export vertical, horizontal, or both?")
+        questions = quick_questions[:2]
+        return {
+            "ready": False,
+            "message": "Before I run it, I need this: " + " ".join(questions),
+            "questions": questions,
+            "memory": candidate_memory,
+            "resolved_prompt": build_resolved_prompt(prompt, candidate_memory),
+            "plan": {},
+        }
+
     result = build_agent_plan(prompt, has_video, candidate_memory, DEFAULT_PROMPT, supplied_plan=supplied_plan)
     missing_questions = []
     plan = result.get("plan", {}) if isinstance(result.get("plan"), dict) else {}
