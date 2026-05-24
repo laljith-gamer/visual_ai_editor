@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -168,132 +167,6 @@ def job_log_path(job_id: str, filename: str) -> Path:
     return JOBS_DIR / job_id / filename
 
 
-def parse_duration(prompt: str) -> int | None:
-    text = prompt.lower()
-    for match in re.finditer(
-        r"\b(\d{1,3})\s*(seconds?|secs?|sec|s|minutes?|mins?|min|m)\b",
-        text,
-    ):
-        amount = int(match.group(1))
-        unit = match.group(2)
-        seconds = amount * 60 if unit.startswith("m") else amount
-        if 5 <= seconds <= 300:
-            return seconds
-
-    for match in re.finditer(r"\b(15|20|30|45|60|90|120)\b", text):
-        return int(match.group(1))
-    return None
-
-
-def has_any(text: str, words: tuple[str, ...]) -> bool:
-    return any(word in text for word in words)
-
-
-def extract_memory(prompt: str, base: dict[str, Any] | None = None) -> dict[str, Any]:
-    memory = dict(base or {})
-    text = prompt.lower()
-    duration = parse_duration(prompt)
-    if duration:
-        memory["duration_seconds"] = duration
-
-    if has_any(text, ("vertical", "shorts", "tiktok", "reel", "9:16")):
-        memory["format"] = "vertical"
-    elif has_any(text, ("horizontal", "youtube", "wide", "16:9")):
-        memory["format"] = "horizontal"
-    elif "both" in text:
-        memory["format"] = "both"
-
-    style_words = [
-        "fast",
-        "cinematic",
-        "funny",
-        "educational",
-        "emotional",
-        "dramatic",
-        "calm",
-        "detailed",
-        "short",
-        "quick",
-    ]
-    styles = set(memory.get("styles", []))
-    for word in style_words:
-        if word in text:
-            styles.add(word)
-    if styles:
-        memory["styles"] = sorted(styles)
-
-    keep_words = [
-        "talking",
-        "speech",
-        "reaction",
-        "combat",
-        "cutscene",
-        "cooking",
-        "recipe",
-        "lecture",
-        "demo",
-        "screen",
-        "travel",
-        "product",
-        "sport",
-        "dance",
-        "funny",
-    ]
-    keep = set(memory.get("keep", []))
-    for word in keep_words:
-        if word in text:
-            keep.add(word)
-    if keep:
-        memory["keep"] = sorted(keep)
-
-    skip = set(memory.get("skip", []))
-    for word in ("boring", "static", "blurry", "blank", "loading", "intro", "outro", "repeated", "silent"):
-        if f"skip {word}" in text or f"avoid {word}" in text or f"no {word}" in text:
-            skip.add(word)
-    if skip:
-        memory["skip"] = sorted(skip)
-
-    if prompt.strip():
-        memory["last_prompt"] = prompt.strip()
-    memory["updated_at"] = datetime.now(timezone.utc).isoformat()
-    return memory
-
-
-def prompt_is_vague(prompt: str) -> bool:
-    text = prompt.lower().strip()
-    words = re.findall(r"[a-zA-Z0-9]+", text)
-    if len(words) < 4:
-        return True
-    vague_phrases = (
-        "edit this",
-        "make short",
-        "make shorts",
-        "best clip",
-        "best clips",
-        "make it best",
-        "make video",
-        "do it",
-    )
-    return any(phrase in text for phrase in vague_phrases) and not has_any(
-        text,
-        (
-            "talk",
-            "reaction",
-            "funny",
-            "combat",
-            "cutscene",
-            "lecture",
-            "cooking",
-            "screen",
-            "product",
-            "travel",
-            "sport",
-            "seconds",
-            "minute",
-        ),
-    )
-
-
 def build_resolved_prompt(prompt: str, memory: dict[str, Any]) -> str:
     details = []
     if memory.get("duration_seconds"):
@@ -317,44 +190,13 @@ def agent_check_result(
     incoming_memory: dict[str, Any] | None = None,
     supplied_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    merged_memory = dict(incoming_memory or {})
-    candidate_memory = extract_memory(prompt, merged_memory)
-
-    quick_questions = []
-    if not has_video:
-        quick_questions.append("Upload a video first so I can analyze the actual footage.")
-    if prompt_is_vague(prompt) and not candidate_memory.get("keep"):
-        quick_questions.append("What kind of moments should I keep most?")
-    if quick_questions:
-        if has_video and not candidate_memory.get("duration_seconds"):
-            quick_questions.append("How long should the final edit be?")
-        if has_video and not candidate_memory.get("format"):
-            quick_questions.append("Should I export vertical, horizontal, or both?")
-        questions = quick_questions[:2]
-        return {
-            "ready": False,
-            "message": "Before I run it, I need this: " + " ".join(questions),
-            "questions": questions,
-            "memory": candidate_memory,
-            "resolved_prompt": build_resolved_prompt(prompt, candidate_memory),
-            "plan": {},
-        }
-
+    candidate_memory = dict(incoming_memory or {})
     result = build_agent_plan(prompt, has_video, candidate_memory, DEFAULT_PROMPT, supplied_plan=supplied_plan)
-    missing_questions = []
-    plan = result.get("plan", {}) if isinstance(result.get("plan"), dict) else {}
-    if not candidate_memory.get("duration_seconds"):
-        missing_questions.append("How long should the final edit be?")
-    if not result["memory"].get("format") and plan.get("export_format") in (None, "", "auto"):
-        missing_questions.append("Should I export vertical, horizontal, or both?")
-    if prompt_is_vague(prompt) and not result["memory"].get("keep"):
-        missing_questions.append("What kind of moments should I keep most?")
-    if missing_questions and result["ready"]:
-        result["ready"] = False
-        result["questions"] = missing_questions[:2]
-        result["message"] = "Before I run it, I need this: " + " ".join(result["questions"])
-    result["resolved_prompt"] = build_resolved_prompt(result.get("resolved_prompt") or prompt, result["memory"])
-    result["plan"]["request"] = result["resolved_prompt"]
+    result["resolved_prompt"] = result.get("resolved_prompt") or build_resolved_prompt(prompt, result.get("memory", {}))
+    if isinstance(result.get("plan"), dict):
+        result["plan"]["request"] = result["resolved_prompt"]
+    else:
+        result["plan"] = {}
     return result
 
 

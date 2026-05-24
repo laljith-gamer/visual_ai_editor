@@ -400,59 +400,6 @@ def normalize_plan(
     }
 
 
-def build_local_plan(
-    prompt: str,
-    has_video: bool,
-    memory: dict[str, Any],
-    default_prompt: str,
-) -> dict[str, Any]:
-    questions = []
-    if not has_video:
-        questions.append("Upload a video first so I can analyze the actual footage.")
-    if not prompt.strip():
-        questions.append("Tell me what kind of moments to keep or skip.")
-    if not memory.get("duration_seconds"):
-        questions.append("How long should the final short be?")
-
-    resolved_prompt = prompt.strip() or default_prompt
-    scenarios = local_scenarios(resolved_prompt)
-    weights = {label: default_weight(label) for label in scenarios}
-    for label in scenarios:
-        if label.startswith("best moment matching"):
-            weights[label] = 1.0
-    raw = {
-        "ready": not questions,
-        "message": (
-            "I have enough detail. I will reuse saved analysis when possible and use a local edit plan because the AI planner is not configured."
-            if not questions
-            else "Before I run it, I need this: " + " ".join(questions[:2])
-        ),
-        "questions": questions[:2],
-        "memory": memory,
-        "resolved_prompt": resolved_prompt,
-        "roboflow_scenarios": scenarios,
-        "request_scenarios": scenarios,
-        "label_weights": weights,
-        "target_short_seconds": memory.get("duration_seconds") or 30,
-        "clip_seconds": 8,
-        "export_format": memory.get("format") or "auto",
-        "selection_strategy": memory.get("selection_strategy") or {
-            "search_scope": "full_video",
-            "spread_across_timeline": True,
-            "avoid_single_start_chunk": True,
-            "minimum_clip_seconds": 4,
-            "maximum_clip_seconds": 45,
-            "context_before_seconds": 1,
-            "context_after_seconds": 1.5,
-            "boundary_gap_seconds": 2.5,
-        },
-        "preview_policy": {"preview_source": "selected_clip", "hover_preview": True, "show_review_before_export": True},
-        "transition_policy": {"enabled": True, "type": "fade", "duration_seconds": 0.3, "audio_fade": True},
-        "planner_source": "local",
-    }
-    return normalize_plan(raw, prompt, has_video, memory, default_prompt)
-
-
 def build_ai_plan(
     prompt: str,
     has_video: bool,
@@ -476,7 +423,10 @@ def build_ai_plan(
     model = os.getenv("DASHSCOPE_MODEL", "qwen3.7-max")
     system = (
         "You are the planning brain for a universal video shorts editor. "
-        "Turn natural user chat into a precise edit plan. "
+        "Talk like a helpful human editor, then turn natural user chat into a precise edit plan. "
+        "If the user only greets you or gives no edit intent, reply naturally and ask what they want from the uploaded video. "
+        "Use sensible defaults when the request is clear enough: 30 seconds, vertical shorts format, strongest visual moments, "
+        "and skip boring, static, blurry, menu, loading, or repeated footage. "
         "Ask at most two short clarification questions only when required. "
         "Create Roboflow CLIP scenario labels that match this user's request and include negative labels for bad footage. "
         "Every Roboflow scenario label must be 2 to 6 words, plain visual language, no sentences, no punctuation. "
@@ -581,4 +531,19 @@ def build_agent_plan(
 
     if plan:
         return plan
-    return build_local_plan(prompt, has_video, memory, default_prompt)
+
+    questions = []
+    if os.getenv("ENABLE_AI_PLANNER") != "1":
+        questions.append("Set ENABLE_AI_PLANNER=1 on the backend.")
+    if not os.getenv("DASHSCOPE_API_KEY"):
+        questions.append("Add DASHSCOPE_API_KEY on the backend.")
+
+    detail = " ".join(questions) if questions else "Check the backend logs for the Qwen/DashScope error."
+    return {
+        "ready": False,
+        "message": f"The AI planner is required but not ready. {detail}",
+        "questions": questions[:2],
+        "memory": memory,
+        "resolved_prompt": prompt.strip() or default_prompt,
+        "plan": {},
+    }
