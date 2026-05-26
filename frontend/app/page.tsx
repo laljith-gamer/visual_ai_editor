@@ -28,6 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { type DragEvent, type FormEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { OutputFormat } from "mediabunny";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const SESSION_STORAGE_KEY = "visual_ai_editor.sessions.v1";
@@ -1068,45 +1069,159 @@ type BrowserRenderResult = {
   mimeType: string;
   extension: string;
   renderer: string;
+  sourceSummary: string;
+  outputSummary: string;
 };
 
 type BrowserRenderProgress = (percent: number, message: string) => void;
 
-async function chooseMediabunnyVideoTarget(width: number, height: number) {
-  const { Mp4OutputFormat, QUALITY_HIGH, WebMOutputFormat, canEncodeVideo } = await import("mediabunny");
+type RenderCodec = "avc" | "vp8" | "vp9";
+type RecorderFormat = {
+  mimeType: string;
+  extension: "mp4" | "webm";
+};
 
-  if (await canEncodeVideo("vp9", { width, height, bitrate: QUALITY_HIGH })) {
-    return {
-      codec: "vp9" as const,
-      format: new WebMOutputFormat(),
-      extension: "webm",
-      mimeType: "video/webm",
-      bitrate: QUALITY_HIGH,
-    };
-  }
-  if (await canEncodeVideo("vp8", { width, height, bitrate: QUALITY_HIGH })) {
-    return {
-      codec: "vp8" as const,
-      format: new WebMOutputFormat(),
-      extension: "webm",
-      mimeType: "video/webm",
-      bitrate: QUALITY_HIGH,
-    };
-  }
-  if (await canEncodeVideo("avc", { width, height, bitrate: QUALITY_HIGH })) {
-    return {
-      codec: "avc" as const,
-      format: new Mp4OutputFormat({ fastStart: false }),
-      extension: "mp4",
-      mimeType: "video/mp4",
-      bitrate: QUALITY_HIGH,
-    };
-  }
+type MediabunnyRenderTarget = {
+  codec: RenderCodec;
+  extension: "mp4" | "webm";
+  mimeType: string;
+  width: number;
+  height: number;
+  bitrate: number;
+  hardwareAcceleration: "no-preference" | "prefer-software";
+  label: string;
+  makeFormat: () => OutputFormat;
+};
 
-  throw new Error("This browser cannot encode video with WebCodecs. Try Chrome/Edge, or update your browser.");
+async function mediabunnyRenderTargets(width: number, height: number) {
+  const { Mp4OutputFormat, WebMOutputFormat, canEncodeVideo } = await import("mediabunny");
+  const sizes = [
+    { width, height, scale: 1 },
+    { width: Math.round(width * 0.75), height: Math.round(height * 0.75), scale: 0.75 },
+    { width: Math.round(width * 0.5), height: Math.round(height * 0.5), scale: 0.5 },
+  ];
+  const candidates: MediabunnyRenderTarget[] = sizes.flatMap((size) => {
+    const pixels = size.width * size.height;
+    const bitrate = Math.max(750_000, Math.round(pixels * 1.25));
+    return [
+      {
+        codec: "avc" as const,
+        extension: "mp4" as const,
+        mimeType: "video/mp4",
+        width: size.width,
+        height: size.height,
+        bitrate,
+        hardwareAcceleration: "no-preference" as const,
+        label: `MP4/H.264 ${size.width}x${size.height}`,
+        makeFormat: () => new Mp4OutputFormat({ fastStart: false }),
+      },
+      {
+        codec: "vp8" as const,
+        extension: "webm" as const,
+        mimeType: "video/webm",
+        width: size.width,
+        height: size.height,
+        bitrate,
+        hardwareAcceleration: "no-preference" as const,
+        label: `WebM/VP8 ${size.width}x${size.height}`,
+        makeFormat: () => new WebMOutputFormat(),
+      },
+      {
+        codec: "vp9" as const,
+        extension: "webm" as const,
+        mimeType: "video/webm",
+        width: size.width,
+        height: size.height,
+        bitrate,
+        hardwareAcceleration: "no-preference" as const,
+        label: `WebM/VP9 ${size.width}x${size.height}`,
+        makeFormat: () => new WebMOutputFormat(),
+      },
+      {
+        codec: "vp8" as const,
+        extension: "webm" as const,
+        mimeType: "video/webm",
+        width: size.width,
+        height: size.height,
+        bitrate: Math.max(500_000, Math.round(bitrate * 0.7)),
+        hardwareAcceleration: "prefer-software" as const,
+        label: `WebM/VP8 software ${size.width}x${size.height}`,
+        makeFormat: () => new WebMOutputFormat(),
+      },
+    ];
+  });
+
+  const supported: MediabunnyRenderTarget[] = [];
+  for (const candidate of candidates) {
+    try {
+      if (
+        await canEncodeVideo(candidate.codec, {
+          width: candidate.width,
+          height: candidate.height,
+          bitrate: candidate.bitrate,
+          hardwareAcceleration: candidate.hardwareAcceleration,
+        })
+      ) {
+        supported.push(candidate);
+      }
+    } catch {
+      // Some browsers throw while probing. The real render loop will try the next usable candidate.
+    }
+  }
+  return supported.length ? supported : candidates;
 }
 
 async function renderBrowserShort(
+  file: File,
+  highlights: Highlight[],
+  format: string | undefined,
+  onProgress?: BrowserRenderProgress,
+): Promise<BrowserRenderResult> {
+  if (!normalizeHighlights(highlights).some((clip) => clip.duration > 0.1)) {
+    throw new Error("There are no clips to render.");
+  }
+
+  if (!("VideoEncoder" in window)) {
+    return renderBrowserShortWithRecorder(
+      file,
+      highlights,
+      format,
+      onProgress,
+      "WebCodecs VideoEncoder is not available in this browser.",
+    );
+  }
+
+  try {
+    return await renderBrowserShortWithMediabunny(file, highlights, format, onProgress);
+  } catch (error) {
+    return renderBrowserShortWithRecorder(
+      file,
+      highlights,
+      format,
+      onProgress,
+      error instanceof Error ? error.message : "Mediabunny render failed.",
+    );
+  }
+}
+
+function chooseMediaRecorderFormat(): RecorderFormat | null {
+  const formats: RecorderFormat[] = [
+    { mimeType: "video/mp4;codecs=avc1.42E01E", extension: "mp4" },
+    { mimeType: "video/mp4", extension: "mp4" },
+    { mimeType: "video/webm;codecs=vp8", extension: "webm" },
+    { mimeType: "video/webm;codecs=vp9", extension: "webm" },
+    { mimeType: "video/webm", extension: "webm" },
+  ];
+  return formats.find((candidate) => {
+    try {
+      return MediaRecorder.isTypeSupported(candidate.mimeType);
+    } catch {
+      return false;
+    }
+  }) ?? null;
+}
+
+async function renderBrowserShortWithMediabunny(
   file: File,
   highlights: Highlight[],
   format: string | undefined,
@@ -1134,15 +1249,6 @@ async function renderBrowserShort(
   const sortedHighlights = normalizeHighlights(highlights).filter((clip) => clip.duration > 0.1);
   if (!sortedHighlights.length) throw new Error("There are no clips to render.");
 
-  const target = await chooseMediabunnyVideoTarget(width, height);
-  onProgress?.(84, `Preparing Mediabunny ${target.extension.toUpperCase()} renderer.`);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas is not available in this browser.");
-
   const input = new Input({
     source: new BlobSource(file, { maxCacheSize: 32 * 1024 * 1024 }),
     formats: ALL_FORMATS,
@@ -1157,78 +1263,171 @@ async function renderBrowserShort(
 
     const sourceWidth = await videoTrack.getDisplayWidth();
     const sourceHeight = await videoTrack.getDisplayHeight();
-    const sink = new CanvasSink(videoTrack, { poolSize: 6 });
-    const outputTarget = new BufferTarget();
-    const output = new Output({
-      format: target.format,
-      target: outputTarget,
-    });
-    const canvasSource = new CanvasSource(canvas, {
-      codec: target.codec,
-      bitrate: target.bitrate,
-      keyFrameInterval: 1.5,
-      hardwareAcceleration: "prefer-hardware",
-    });
-    output.addVideoTrack(canvasSource);
-    await output.start();
-
+    const sourceCodec = (await videoTrack.getCodec()) || "unknown";
+    const sourceMime = await input.getMimeType().catch(() => file.type || "unknown container");
+    const sourceSummary = `${sourceMime}; ${sourceCodec}; ${sourceWidth}x${sourceHeight}`;
+    const targets = await mediabunnyRenderTargets(width, height);
+    const failures: string[] = [];
     const totalFrames = Math.max(1, Math.ceil(totalHighlightSeconds(sortedHighlights) * fps));
-    let frameIndex = 0;
-    let outputTime = 0;
 
-    for (let clipIndex = 0; clipIndex < sortedHighlights.length; clipIndex += 1) {
-      const clip = sortedHighlights[clipIndex];
-      const clipFrameCount = Math.max(1, Math.ceil(clip.duration * fps));
-      for (let localFrame = 0; localFrame < clipFrameCount; localFrame += 1) {
-        const sourceTime = Math.min(clip.end - 0.001, clip.start + localFrame * frameDuration);
-        const wrapped = await sink.getCanvas(Math.max(0, sourceTime));
-        if (wrapped?.canvas) {
-          drawTimelineFrame(
-            context,
-            wrapped.canvas,
-            sourceWidth,
-            sourceHeight,
-            width,
-            height,
-            clip,
-            sourceTime,
-          );
-        } else {
-          context.fillStyle = "#000";
-          context.fillRect(0, 0, width, height);
+    for (const target of targets) {
+      const canvas = document.createElement("canvas");
+      canvas.width = target.width;
+      canvas.height = target.height;
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("Canvas is not available in this browser.");
+      const sink = new CanvasSink(videoTrack, { poolSize: 6 });
+      const outputTarget = new BufferTarget();
+      const output = new Output({
+        format: target.makeFormat(),
+        target: outputTarget,
+      });
+      let outputStarted = false;
+      try {
+        onProgress?.(84, `Trying ${target.label} for ${sourceCodec} source.`);
+        const canvasSource = new CanvasSource(canvas, {
+          codec: target.codec,
+          bitrate: target.bitrate,
+          keyFrameInterval: 1.5,
+          hardwareAcceleration: target.hardwareAcceleration,
+        });
+        output.addVideoTrack(canvasSource);
+        await output.start();
+        outputStarted = true;
+
+        let frameIndex = 0;
+        for (let clipIndex = 0; clipIndex < sortedHighlights.length; clipIndex += 1) {
+          const clip = sortedHighlights[clipIndex];
+          const clipFrameCount = Math.max(1, Math.ceil(clip.duration * fps));
+          for (let localFrame = 0; localFrame < clipFrameCount; localFrame += 1) {
+            const sourceTime = Math.min(clip.end - 0.001, clip.start + localFrame * frameDuration);
+            const wrapped = await sink.getCanvas(Math.max(0, sourceTime));
+            if (wrapped?.canvas) {
+              drawTimelineFrame(
+                context,
+                wrapped.canvas,
+                sourceWidth,
+                sourceHeight,
+                target.width,
+                target.height,
+                clip,
+                sourceTime,
+              );
+            } else {
+              context.fillStyle = "#000";
+              context.fillRect(0, 0, target.width, target.height);
+            }
+
+            const timestamp = Number((frameIndex * frameDuration).toFixed(6));
+            await canvasSource.add(timestamp, frameDuration, {
+              keyFrame: frameIndex % Math.round(fps * 1.5) === 0,
+            });
+            frameIndex += 1;
+
+            if (frameIndex % 12 === 0) {
+              const percent = 84 + Math.min(14, Math.round((frameIndex / totalFrames) * 14));
+              onProgress?.(
+                percent,
+                `Rendering ${target.label} (${Math.min(frameIndex, totalFrames)}/${totalFrames} frames).`,
+              );
+              await delay(0);
+            }
+          }
         }
 
-        await canvasSource.add(outputTime, frameDuration, {
-          keyFrame: frameIndex % Math.round(fps * 1.5) === 0,
-        });
-        frameIndex += 1;
-        outputTime += frameDuration;
-
-        if (frameIndex % 12 === 0) {
-          const percent = 84 + Math.min(14, Math.round((frameIndex / totalFrames) * 14));
-          onProgress?.(
-            percent,
-            `Rendering clip ${clipIndex + 1}/${sortedHighlights.length} with Mediabunny (${Math.min(frameIndex, totalFrames)}/${totalFrames} frames).`,
-          );
-          await delay(0);
+        onProgress?.(99, `Finalizing ${target.label}.`);
+        await output.finalize();
+        const buffer = outputTarget.buffer;
+        if (!buffer) throw new Error("Mediabunny did not produce an output buffer.");
+        const blob = new Blob([buffer], { type: target.mimeType });
+        return {
+          url: URL.createObjectURL(blob),
+          mimeType: target.mimeType,
+          extension: target.extension,
+          renderer: `Mediabunny ${target.label}`,
+          sourceSummary,
+          outputSummary: `${target.label}; ${fps}fps; ${formatBytes(blob.size)}`,
+        };
+      } catch (error) {
+        failures.push(`${target.label}: ${error instanceof Error ? error.message : String(error)}`);
+        if (outputStarted && output.state !== "finalized" && output.state !== "canceled") {
+          await output.cancel().catch(() => undefined);
         }
       }
     }
 
-    onProgress?.(99, "Finalizing the Mediabunny output file.");
-    await output.finalize();
-    const buffer = outputTarget.buffer;
-    if (!buffer) throw new Error("Mediabunny did not produce an output buffer.");
-    const blob = new Blob([buffer], { type: target.mimeType });
-    return {
-      url: URL.createObjectURL(blob),
-      mimeType: target.mimeType,
-      extension: target.extension,
-      renderer: `Mediabunny ${target.codec.toUpperCase()}`,
-    };
+    throw new Error(`No WebCodecs encoder profile worked for source ${sourceSummary}. ${failures.slice(0, 4).join(" | ")}`);
   } finally {
     input.dispose();
   }
+}
+
+async function renderBrowserShortWithRecorder(
+  file: File,
+  highlights: Highlight[],
+  format: string | undefined,
+  onProgress?: BrowserRenderProgress,
+  fallbackReason = "WebCodecs encoder was unavailable.",
+): Promise<BrowserRenderResult> {
+  if (!("MediaRecorder" in window)) {
+    throw new Error(`${fallbackReason} MediaRecorder is also unavailable in this browser.`);
+  }
+
+  const video = await loadVideoElement(file);
+  video.muted = true;
+  video.playbackRate = 1;
+  const vertical = format !== "horizontal";
+  const width = vertical ? 540 : 960;
+  const height = vertical ? 960 : 540;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("Canvas is not available in this browser.");
+  const stream = canvas.captureStream(24);
+  const recorderFormat = chooseMediaRecorderFormat();
+  if (!recorderFormat) {
+    URL.revokeObjectURL(video.src);
+    throw new Error(`${fallbackReason} This browser has no supported MediaRecorder video format.`);
+  }
+
+  const chunks: Blob[] = [];
+  const recorder = new MediaRecorder(stream, { mimeType: recorderFormat.mimeType, videoBitsPerSecond: 900_000 });
+  recorder.ondataavailable = (event) => {
+    if (event.data.size) chunks.push(event.data);
+  };
+  recorder.start(750);
+  await pauseRecorder(recorder);
+
+  const normalized = normalizeHighlights(highlights);
+  for (let index = 0; index < normalized.length; index += 1) {
+    const clip = normalized[index];
+    onProgress?.(84 + Math.min(14, Math.round((index / normalized.length) * 14)), `Fallback rendering clip ${index + 1}/${normalized.length}.`);
+    await pauseRecorder(recorder);
+    video.pause();
+    await seekVideo(video, clip.start);
+    await waitForNextVideoFrame(video);
+    drawClipFrame(context, video, width, height, clip);
+    await resumeRecorder(recorder);
+    await video.play();
+    await renderClipToCanvas(video, context, width, height, clip);
+  }
+
+  await pauseRecorder(recorder);
+  await new Promise<void>((resolve) => {
+    recorder.onstop = () => resolve();
+    recorder.stop();
+  });
+  URL.revokeObjectURL(video.src);
+  const blob = new Blob(chunks, { type: recorderFormat.mimeType });
+  return {
+    url: URL.createObjectURL(blob),
+    mimeType: recorderFormat.mimeType,
+    extension: recorderFormat.extension,
+    renderer: "MediaRecorder fallback",
+    sourceSummary: `${file.type || "unknown container"}; browser video element; ${video.videoWidth}x${video.videoHeight}`,
+    outputSummary: `${recorderFormat.extension.toUpperCase()} fallback ${width}x${height}; ${formatBytes(blob.size)}; reason: ${fallbackReason}`,
+  };
 }
 
 export default function Home() {
@@ -1680,6 +1879,8 @@ export default function Home() {
         report:
           `Manual Browser Edit\n\n` +
           `Renderer: ${output.renderer}\n` +
+          `Source: ${output.sourceSummary}\n` +
+          `Output: ${output.outputSummary}\n` +
           `Container: ${output.extension.toUpperCase()} (${output.mimeType})\n` +
           `Selected ${currentJob.highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
           `Clip order and trim points were saved to the backend project state.\n` +
