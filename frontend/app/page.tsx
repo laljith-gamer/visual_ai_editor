@@ -33,8 +33,7 @@ const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").re
 const SESSION_STORAGE_KEY = "visual_ai_editor.sessions.v1";
 const ACTIVE_SESSION_KEY = "visual_ai_editor.active_session.v1";
 const MAX_LOCAL_SESSIONS = 12;
-const MAX_BROWSER_SAMPLES = 120;
-const FRAME_BATCH_SIZE = 4;
+const MAX_BROWSER_SAMPLES = 72;
 const MAX_EVENT_WINDOWS = 12;
 const CONTACT_SHEET_FRAMES = 12;
 const EVENT_KEEP_THRESHOLD = 0.55;
@@ -168,12 +167,6 @@ type BrowserPrediction = {
   scenarios?: string[];
 };
 
-type CapturedFrame = {
-  second: number;
-  frame: number;
-  image: string;
-};
-
 type CandidateWindow = {
   start: number;
   end: number;
@@ -291,6 +284,87 @@ function predictionScore(prediction: BrowserPrediction, weights?: Record<string,
   const base = weights?.[label] ?? (labelIsLowValue(label, weights) ? 0 : 0.75);
   const confidence = typeof prediction.confidence === "number" ? prediction.confidence : 0.35;
   return base * (0.75 + confidence);
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function bestKeepLabel(scenarios: string[], weights?: Record<string, number>) {
+  return (
+    [...scenarios]
+      .filter((label) => !labelIsLowValue(label, weights))
+      .sort((left, right) => (weights?.[right] ?? 0.75) - (weights?.[left] ?? 0.75))[0] ||
+    scenarios[0] ||
+    "selected moment"
+  );
+}
+
+function lowestValueLabel(scenarios: string[], weights?: Record<string, number>) {
+  return (
+    [...scenarios].sort((left, right) => (weights?.[left] ?? 0.75) - (weights?.[right] ?? 0.75))[0] ||
+    scenarios[0] ||
+    "low value footage"
+  );
+}
+
+async function captureScoutPrediction(
+  video: HTMLVideoElement,
+  second: number,
+  frame: number,
+  scenarios: string[],
+  weights?: Record<string, number>,
+  previousPixels?: Uint8ClampedArray,
+): Promise<{ prediction: BrowserPrediction; pixels: Uint8ClampedArray }> {
+  await seekVideo(video, second);
+  await delay(16);
+
+  const canvas = document.createElement("canvas");
+  const targetWidth = 96;
+  canvas.width = targetWidth;
+  canvas.height = Math.max(54, Math.round((video.videoHeight / video.videoWidth) * targetWidth));
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Canvas is not available in this browser.");
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  const pixels = new Uint8ClampedArray(context.getImageData(0, 0, canvas.width, canvas.height).data);
+  const count = pixels.length / 4;
+  let sum = 0;
+  let sumSquares = 0;
+  let delta = 0;
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    const luminance = (pixels[index] * 0.2126 + pixels[index + 1] * 0.7152 + pixels[index + 2] * 0.0722) / 255;
+    sum += luminance;
+    sumSquares += luminance * luminance;
+    if (previousPixels && previousPixels.length === pixels.length) {
+      const previous =
+        (previousPixels[index] * 0.2126 + previousPixels[index + 1] * 0.7152 + previousPixels[index + 2] * 0.0722) /
+        255;
+      delta += Math.abs(luminance - previous);
+    }
+  }
+
+  const brightness = sum / Math.max(count, 1);
+  const contrast = Math.sqrt(Math.max(0, sumSquares / Math.max(count, 1) - brightness * brightness));
+  const motion = previousPixels && previousPixels.length === pixels.length ? delta / Math.max(count, 1) : contrast * 0.75;
+  const unusable = brightness < 0.045 || contrast < 0.018;
+  const scene = unusable ? lowestValueLabel(scenarios, weights) : bestKeepLabel(scenarios, weights);
+  const confidence = unusable
+    ? 0.01
+    : clamp01(motion * 3.2 + contrast * 1.35 + Math.min(0.18, Math.abs(brightness - 0.5) * 0.35));
+
+  return {
+    pixels,
+    prediction: {
+      second,
+      frame,
+      scene,
+      confidence,
+      all_scores: scenarios.map((label) => (label === scene ? confidence : Math.max(0.01, confidence * 0.18))),
+      scenarios,
+    },
+  };
 }
 
 function buildCandidateWindows(predictions: BrowserPrediction[], duration: number, plan?: EditPlan): CandidateWindow[] {
@@ -605,20 +679,6 @@ function drawTitleOverlay(context: CanvasRenderingContext2D, width: number, heig
   context.fillStyle = "#fff9df";
   context.fillText(title, textX, textY);
   context.restore();
-}
-
-async function captureFrame(video: HTMLVideoElement, second: number, frame: number): Promise<CapturedFrame> {
-  await seekVideo(video, second);
-  await delay(30);
-  const canvas = document.createElement("canvas");
-  const targetWidth = 512;
-  canvas.width = targetWidth;
-  canvas.height = Math.max(288, Math.round((video.videoHeight / video.videoWidth) * targetWidth));
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas is not available in this browser.");
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  const image = canvas.toDataURL("image/jpeg", 0.72).split(",", 2)[1];
-  return { second, frame, image };
 }
 
 async function buildContactSheet(
@@ -1405,30 +1465,16 @@ export default function Home() {
     }
 
     const predictions: BrowserPrediction[] = [];
-    let frameBatch: CapturedFrame[] = [];
+    let previousPixels: Uint8ClampedArray | undefined;
+    const weights = plan?.label_weights ?? {};
 
     for (let index = 0; index < sampleTimes.length; index += 1) {
-      const frame = await captureFrame(video, sampleTimes[index], index);
-      frameBatch.push(frame);
+      const scout = await captureScoutPrediction(video, sampleTimes[index], index, scenarios, weights, previousPixels);
+      previousPixels = scout.pixels;
+      predictions.push(scout.prediction);
 
-      if (frameBatch.length === FRAME_BATCH_SIZE || index === sampleTimes.length - 1) {
-        const response = await fetch(`${API_BASE}/api/browser/analyze`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            frames: frameBatch,
-            scenarios,
-            user_request: check.resolved_prompt || userText,
-          }),
-        });
-        if (!response.ok) {
-          throw new Error(await responseErrorMessage(response));
-        }
-        const payload = (await response.json()) as { predictions: BrowserPrediction[] };
-        predictions.push(...(payload.predictions ?? []));
-        frameBatch = [];
-
-        const percent = 8 + Math.round((index / Math.max(sampleTimes.length - 1, 1)) * 52);
+      if (index % 4 === 0 || index === sampleTimes.length - 1) {
+        const percent = 8 + Math.round((index / Math.max(sampleTimes.length - 1, 1)) * 42);
         setJob(
           progressJob(
             jobId,
@@ -1436,9 +1482,9 @@ export default function Home() {
             inputUrl,
             memoryForJob,
             plan,
-            "analyzing",
+            "scouting",
             percent,
-            `Analyzed ${Math.min(index + 1, sampleTimes.length)}/${sampleTimes.length} browser samples.`,
+            `Scouted ${Math.min(index + 1, sampleTimes.length)}/${sampleTimes.length} local video samples.`,
             predictions.length,
           ),
         );
