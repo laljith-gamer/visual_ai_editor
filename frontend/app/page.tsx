@@ -37,9 +37,6 @@ const MAX_BROWSER_SAMPLES = 100;
 const MAX_EVENT_WINDOWS = 12;
 const CONTACT_SHEET_FRAMES = 12;
 const EVENT_KEEP_THRESHOLD = 0.55;
-const MAX_BROWSER_RENDER_SECONDS = 360;
-const MAX_BROWSER_HEAVY_RENDER_SECONDS = 60;
-const HEAVY_SOURCE_BYTES = 1500 * 1024 * 1024;
 const INITIAL_ASSISTANT_MESSAGE =
   "Upload any video and tell me what kind of short you want. If details are missing, I'll ask before spending time on analysis.";
 
@@ -278,17 +275,6 @@ function temporalResultIsEmpty(event: BrowserEventAnalysis) {
 
 function totalHighlightSeconds(highlights: Highlight[]) {
   return highlights.reduce((total, clip) => total + Number(clip.duration || 0), 0);
-}
-
-function browserRenderRisk(fileToRender: File, highlights: Highlight[]) {
-  const seconds = totalHighlightSeconds(highlights);
-  if (seconds > MAX_BROWSER_RENDER_SECONDS) {
-    return `This cut is ${seconds.toFixed(1)}s. Browser WebM export is reliable for short cuts only; long renders can stretch, stutter, or desync.`;
-  }
-  if (fileToRender.size > HEAVY_SOURCE_BYTES && seconds > MAX_BROWSER_HEAVY_RENDER_SECONDS) {
-    return `The source is ${formatBytes(fileToRender.size)} and the cut is ${seconds.toFixed(1)}s. Chrome cannot reliably decode and record that much video in real time.`;
-  }
-  return "";
 }
 
 function delay(ms: number) {
@@ -659,12 +645,24 @@ function drawCoverFrame(
   height: number,
   fade = 0,
 ) {
+  drawCoverSource(context, video, video.videoWidth, video.videoHeight, width, height, fade);
+}
+
+function drawCoverSource(
+  context: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  width: number,
+  height: number,
+  fade = 0,
+) {
   context.fillStyle = "#000";
   context.fillRect(0, 0, width, height);
-  const scale = Math.max(width / video.videoWidth, height / video.videoHeight);
-  const drawWidth = video.videoWidth * scale;
-  const drawHeight = video.videoHeight * scale;
-  context.drawImage(video, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+  const scale = Math.max(width / sourceWidth, height / sourceHeight);
+  const drawWidth = sourceWidth * scale;
+  const drawHeight = sourceHeight * scale;
+  context.drawImage(source, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
   if (fade > 0) {
     context.fillStyle = `rgba(0,0,0,${Math.min(1, Math.max(0, fade))})`;
     context.fillRect(0, 0, width, height);
@@ -808,10 +806,23 @@ function drawClipFrame(
   height: number,
   clip: Highlight,
 ) {
-  const elapsed = Math.max(0, video.currentTime - clip.start);
-  const remainingEnd = Math.max(0, clip.end - video.currentTime);
+  drawTimelineFrame(context, video, video.videoWidth, video.videoHeight, width, height, clip, video.currentTime);
+}
+
+function drawTimelineFrame(
+  context: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  width: number,
+  height: number,
+  clip: Highlight,
+  sourceTime: number,
+) {
+  const elapsed = Math.max(0, sourceTime - clip.start);
+  const remainingEnd = Math.max(0, clip.end - sourceTime);
   const fade = Math.max(0, 1 - elapsed / 0.3, 1 - remainingEnd / 0.3);
-  drawCoverFrame(context, video, width, height, fade);
+  drawCoverSource(context, source, sourceWidth, sourceHeight, width, height, fade);
   const overlayStart = Number(clip.title_overlay_start_offset_seconds ?? 0);
   const overlayEnd = Math.max(overlayStart + 0.2, Number(clip.title_overlay_end_offset_seconds ?? 1.5));
   if (clip.title_overlay && elapsed >= overlayStart && elapsed <= overlayEnd) {
@@ -857,50 +868,172 @@ async function renderClipToCanvas(
   });
 }
 
-async function renderBrowserShort(file: File, highlights: Highlight[], format: string | undefined) {
-  const video = await loadVideoElement(file);
-  video.muted = true;
-  video.playbackRate = 1;
+type BrowserRenderResult = {
+  url: string;
+  mimeType: string;
+  extension: string;
+  renderer: string;
+};
+
+type BrowserRenderProgress = (percent: number, message: string) => void;
+
+async function chooseMediabunnyVideoTarget(width: number, height: number) {
+  const { Mp4OutputFormat, QUALITY_HIGH, WebMOutputFormat, canEncodeVideo } = await import("mediabunny");
+
+  if (await canEncodeVideo("vp9", { width, height, bitrate: QUALITY_HIGH })) {
+    return {
+      codec: "vp9" as const,
+      format: new WebMOutputFormat(),
+      extension: "webm",
+      mimeType: "video/webm",
+      bitrate: QUALITY_HIGH,
+    };
+  }
+  if (await canEncodeVideo("vp8", { width, height, bitrate: QUALITY_HIGH })) {
+    return {
+      codec: "vp8" as const,
+      format: new WebMOutputFormat(),
+      extension: "webm",
+      mimeType: "video/webm",
+      bitrate: QUALITY_HIGH,
+    };
+  }
+  if (await canEncodeVideo("avc", { width, height, bitrate: QUALITY_HIGH })) {
+    return {
+      codec: "avc" as const,
+      format: new Mp4OutputFormat({ fastStart: false }),
+      extension: "mp4",
+      mimeType: "video/mp4",
+      bitrate: QUALITY_HIGH,
+    };
+  }
+
+  throw new Error("This browser cannot encode video with WebCodecs. Try Chrome/Edge, or update your browser.");
+}
+
+async function renderBrowserShort(
+  file: File,
+  highlights: Highlight[],
+  format: string | undefined,
+  onProgress?: BrowserRenderProgress,
+): Promise<BrowserRenderResult> {
+  if (!("VideoEncoder" in window)) {
+    throw new Error("WebCodecs VideoEncoder is not available in this browser.");
+  }
+
+  const {
+    ALL_FORMATS,
+    BlobSource,
+    BufferTarget,
+    CanvasSink,
+    CanvasSource,
+    Input,
+    Output,
+  } = await import("mediabunny");
+
   const vertical = format !== "horizontal";
   const width = vertical ? 720 : 1280;
   const height = vertical ? 1280 : 720;
+  const fps = 24;
+  const frameDuration = 1 / fps;
+  const sortedHighlights = normalizeHighlights(highlights).filter((clip) => clip.duration > 0.1);
+  if (!sortedHighlights.length) throw new Error("There are no clips to render.");
+
+  const target = await chooseMediabunnyVideoTarget(width, height);
+  onProgress?.(84, `Preparing Mediabunny ${target.extension.toUpperCase()} renderer.`);
+
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas is not available in this browser.");
 
-  const stream = canvas.captureStream(30);
-
-  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-    ? "video/webm;codecs=vp9"
-    : "video/webm";
-  const chunks: Blob[] = [];
-  const recorder = new MediaRecorder(stream, { mimeType });
-  recorder.ondataavailable = (event) => {
-    if (event.data.size) chunks.push(event.data);
-  };
-  recorder.start(1000);
-  await pauseRecorder(recorder);
-
-  for (const clip of highlights) {
-    await pauseRecorder(recorder);
-    video.pause();
-    await seekVideo(video, clip.start);
-    await waitForNextVideoFrame(video);
-    drawClipFrame(context, video, width, height, clip);
-    await resumeRecorder(recorder);
-    await video.play();
-    await renderClipToCanvas(video, context, width, height, clip);
-  }
-
-  await pauseRecorder(recorder);
-  await new Promise<void>((resolve) => {
-    recorder.onstop = () => resolve();
-    recorder.stop();
+  const input = new Input({
+    source: new BlobSource(file, { maxCacheSize: 32 * 1024 * 1024 }),
+    formats: ALL_FORMATS,
   });
-  URL.revokeObjectURL(video.src);
-  return URL.createObjectURL(new Blob(chunks, { type: mimeType }));
+
+  try {
+    const videoTrack = await input.getPrimaryVideoTrack();
+    if (!videoTrack) throw new Error("No readable video track was found in this file.");
+    if (!(await videoTrack.canDecode())) {
+      throw new Error("This browser cannot decode the source video codec.");
+    }
+
+    const sourceWidth = await videoTrack.getDisplayWidth();
+    const sourceHeight = await videoTrack.getDisplayHeight();
+    const sink = new CanvasSink(videoTrack, { poolSize: 6 });
+    const outputTarget = new BufferTarget();
+    const output = new Output({
+      format: target.format,
+      target: outputTarget,
+    });
+    const canvasSource = new CanvasSource(canvas, {
+      codec: target.codec,
+      bitrate: target.bitrate,
+      keyFrameInterval: 1.5,
+      hardwareAcceleration: "prefer-hardware",
+    });
+    output.addVideoTrack(canvasSource);
+    await output.start();
+
+    const totalFrames = Math.max(1, Math.ceil(totalHighlightSeconds(sortedHighlights) * fps));
+    let frameIndex = 0;
+    let outputTime = 0;
+
+    for (let clipIndex = 0; clipIndex < sortedHighlights.length; clipIndex += 1) {
+      const clip = sortedHighlights[clipIndex];
+      const clipFrameCount = Math.max(1, Math.ceil(clip.duration * fps));
+      for (let localFrame = 0; localFrame < clipFrameCount; localFrame += 1) {
+        const sourceTime = Math.min(clip.end - 0.001, clip.start + localFrame * frameDuration);
+        const wrapped = await sink.getCanvas(Math.max(0, sourceTime));
+        if (wrapped?.canvas) {
+          drawTimelineFrame(
+            context,
+            wrapped.canvas,
+            sourceWidth,
+            sourceHeight,
+            width,
+            height,
+            clip,
+            sourceTime,
+          );
+        } else {
+          context.fillStyle = "#000";
+          context.fillRect(0, 0, width, height);
+        }
+
+        await canvasSource.add(outputTime, frameDuration, {
+          keyFrame: frameIndex % Math.round(fps * 1.5) === 0,
+        });
+        frameIndex += 1;
+        outputTime += frameDuration;
+
+        if (frameIndex % 12 === 0) {
+          const percent = 84 + Math.min(14, Math.round((frameIndex / totalFrames) * 14));
+          onProgress?.(
+            percent,
+            `Rendering clip ${clipIndex + 1}/${sortedHighlights.length} with Mediabunny (${Math.min(frameIndex, totalFrames)}/${totalFrames} frames).`,
+          );
+          await delay(0);
+        }
+      }
+    }
+
+    onProgress?.(99, "Finalizing the Mediabunny output file.");
+    await output.finalize();
+    const buffer = outputTarget.buffer;
+    if (!buffer) throw new Error("Mediabunny did not produce an output buffer.");
+    const blob = new Blob([buffer], { type: target.mimeType });
+    return {
+      url: URL.createObjectURL(blob),
+      mimeType: target.mimeType,
+      extension: target.extension,
+      renderer: `Mediabunny ${target.codec.toUpperCase()}`,
+    };
+  } finally {
+    input.dispose();
+  }
 }
 
 export default function Home() {
@@ -920,6 +1053,7 @@ export default function Home() {
   const [selectedClipIndex, setSelectedClipIndex] = useState(0);
   const [draggingClipIndex, setDraggingClipIndex] = useState<number | null>(null);
   const [manualSyncLabel, setManualSyncLabel] = useState("Synced locally");
+  const [renderedDownloadName, setRenderedDownloadName] = useState("browser-short.webm");
   const previewVideoRef = useRef<HTMLVideoElement>(null);
 
   const progress = useMemo(() => progressFromLog(job ?? undefined), [job]);
@@ -1317,49 +1451,53 @@ export default function Home() {
     });
 
     try {
-      const risk = browserRenderRisk(file, currentJob.highlights);
-      if (risk) {
-        setJob({
-          ...currentJob,
-          status: "completed",
-          progress: {
-            stage: "manual",
-            percent: 100,
-            message: `Manual clips are saved, but browser export was paused: ${risk}`,
-          },
-        });
-        setMessages((current) => [
-          ...current,
-          {
-            role: "assistant",
-            content:
-              `I paused the browser render because it would likely create a broken WebM: ${risk} Shorten the cut, or export with a local/server FFmpeg worker for this size.`,
-          },
-        ]);
-        return;
-      }
-      const outputUrl = await renderBrowserShort(file, currentJob.highlights, currentJob.edit_plan?.export_format);
+      const output = await renderBrowserShort(
+        file,
+        currentJob.highlights,
+        currentJob.edit_plan?.export_format,
+        (percent, message) => {
+          setJob((latest) =>
+            latest
+              ? {
+                  ...latest,
+                  status: "running",
+                  progress: {
+                    stage: "rendering",
+                    percent,
+                    message,
+                  },
+                }
+              : latest,
+          );
+        },
+      );
       const selectedSeconds = totalHighlightSeconds(currentJob.highlights);
+      setRenderedDownloadName(`browser-short.${output.extension}`);
       const nextJob: JobPayload = {
         ...currentJob,
         status: "completed",
-        files: { ...currentJob.files, vertical: outputUrl, horizontal: outputUrl },
+        files: { ...currentJob.files, vertical: output.url, horizontal: output.url },
         progress: {
           stage: "completed",
           percent: 100,
-          message: "Manual arrangement rendered locally.",
+          message: `Manual arrangement rendered locally with ${output.renderer}.`,
         },
         report:
           `Manual Browser Edit\n\n` +
+          `Renderer: ${output.renderer}\n` +
+          `Container: ${output.extension.toUpperCase()} (${output.mimeType})\n` +
           `Selected ${currentJob.highlights.length} clips totaling ${selectedSeconds.toFixed(1)} seconds.\n` +
           `Clip order and trim points were saved to the backend project state.\n` +
-          `Browser export is silent to avoid audio crackle while jumping between source clips.\n`,
+          `Audio is not included yet; this avoids crackle while jumping between source clips.\n`,
       };
       setHoverPreview(null);
       setLockedPreview(null);
       setJob(nextJob);
       void syncManualState(nextJob);
-      setMessages((current) => [...current, { role: "assistant", content: "Manual arrangement rendered and saved." }]);
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: `Manual arrangement rendered with ${output.renderer} and saved.` },
+      ]);
     } catch (error) {
       setJob(currentJob);
       setMessages((current) => [
@@ -1392,6 +1530,7 @@ export default function Home() {
     setJob(null);
     setHoverPreview(null);
     setLockedPreview(null);
+    setRenderedDownloadName("browser-short.webm");
     setTimelineOpen(false);
     setMemory({});
     setConversationBrief("");
@@ -1781,7 +1920,7 @@ export default function Home() {
     if (browserOutput?.startsWith("blob:")) {
       const link = document.createElement("a");
       link.href = browserOutput;
-      link.download = "browser-short.webm";
+      link.download = renderedDownloadName;
       link.click();
       return;
     }
@@ -1791,7 +1930,7 @@ export default function Home() {
         {
           role: "assistant",
           content:
-            "There is no rendered browser output yet. Shorten the selected clips and press Render, or use a local/server FFmpeg export for long heavy videos.",
+            "There is no rendered browser output yet. Press Render first, then Export.",
         },
       ]);
       return;
