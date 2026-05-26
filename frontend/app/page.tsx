@@ -218,17 +218,43 @@ function formatBytes(bytes: number) {
 
 async function responseErrorMessage(response: Response) {
   const text = await response.text();
-  if (!text) return `${response.status} ${response.statusText}`.trim();
+  const status = `${response.status} ${response.statusText}`.trim();
+  if (!text) return status;
   try {
     const parsed = JSON.parse(text) as { detail?: unknown; message?: unknown; error?: unknown };
     const detail = parsed.detail ?? parsed.message ?? parsed.error;
-    if (typeof detail === "string") return detail;
+    if (typeof detail === "string") return detail === "Not Found" ? `${status}: ${detail}` : detail;
     if (Array.isArray(detail)) return detail.map((item) => item?.msg ?? JSON.stringify(item)).join("; ");
     if (detail) return JSON.stringify(detail);
   } catch {
     // The backend may return plain text from proxies or platform errors.
   }
   return text;
+}
+
+async function fetchJsonWithTimeout<T>(url: string, init: RequestInit, timeoutMs = 120000): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (!response.ok) {
+      const message = await responseErrorMessage(response);
+      if (response.status === 404 && url.includes("/api/browser/event-analyze")) {
+        throw new Error(
+          "Backend is missing /api/browser/event-analyze. Redeploy the backend from the latest GitHub commit and make sure its Vercel project root is the repo root.",
+        );
+      }
+      throw new Error(message);
+    }
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The backend request timed out. The unified analyzer took too long to respond.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function requirePositiveNumber(value: unknown, message: string) {
@@ -1510,10 +1536,36 @@ export default function Home() {
     }
 
     const eventAnalyses: BrowserEventAnalysis[] = [];
+    setJob(
+      progressJob(
+        jobId,
+        userText,
+        inputUrl,
+        memoryForJob,
+        plan,
+        "reviewing",
+        52,
+        `Found ${candidateWindows.length} candidate windows. Sending the first contact sheet to the unified analyzer.`,
+        predictions.length,
+      ),
+    );
     for (let index = 0; index < candidateWindows.length; index += 1) {
       const candidate = candidateWindows[index];
+      setJob(
+        progressJob(
+          jobId,
+          userText,
+          inputUrl,
+          memoryForJob,
+          plan,
+          "reviewing",
+          52 + Math.round((index / Math.max(candidateWindows.length, 1)) * 20),
+          `Temporal review ${index + 1}/${candidateWindows.length}: sending action window to the unified analyzer.`,
+          predictions.length,
+        ),
+      );
       const contactSheet = await buildContactSheet(video, candidate.start, candidate.end);
-      const response = await fetch(`${API_BASE}/api/browser/event-analyze`, {
+      const eventPayload = await fetchJsonWithTimeout<BrowserEventAnalysis>(`${API_BASE}/api/browser/event-analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1524,11 +1576,6 @@ export default function Home() {
           window_end: candidate.end,
         }),
       });
-
-      if (!response.ok) {
-        throw new Error(await responseErrorMessage(response));
-      }
-      const eventPayload = (await response.json()) as BrowserEventAnalysis;
       if (eventPayload.fallback || eventPayload.error_status || temporalResultIsEmpty(eventPayload)) {
         throw new Error(
           eventPayload.reason ||
@@ -1697,6 +1744,22 @@ export default function Home() {
       }
       setPrompt("");
     } catch (error) {
+      setJob((current) =>
+        current?.status === "running"
+          ? {
+              ...current,
+              status: "failed",
+              progress: {
+                stage: "failed",
+                percent: progressFromLog(current),
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "The edit failed before a clip plan could be created.",
+              },
+            }
+          : current,
+      );
       setMessages((current) => [
         ...current,
         {
