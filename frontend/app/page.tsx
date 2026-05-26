@@ -1415,7 +1415,11 @@ export default function Home() {
         const response = await fetch(`${API_BASE}/api/browser/analyze`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frames: frameBatch, scenarios }),
+          body: JSON.stringify({
+            frames: frameBatch,
+            scenarios,
+            user_request: check.resolved_prompt || userText,
+          }),
         });
         if (!response.ok) {
           throw new Error(await responseErrorMessage(response));
@@ -1482,7 +1486,7 @@ export default function Home() {
       if (eventPayload.fallback || eventPayload.error_status || temporalResultIsEmpty(eventPayload)) {
         throw new Error(
           eventPayload.reason ||
-            "Workflow B returned empty temporal JSON. Add json_parser error_status to the workflow outputs and confirm Gemini returns strict JSON.",
+            "The unified analyzer returned empty temporal JSON. Check error_status/gemini_raw and confirm Gemini returns strict JSON.",
         );
       }
       eventAnalyses.push(eventPayload);
@@ -1497,7 +1501,7 @@ export default function Home() {
           plan,
           "reviewing",
           percent,
-          `Temporal review ${index + 1}/${candidateWindows.length}: checking action windows with Workflow B.`,
+          `Temporal review ${index + 1}/${candidateWindows.length}: checking action windows with the unified analyzer.`,
           predictions.length,
         ),
       );

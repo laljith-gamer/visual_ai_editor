@@ -45,6 +45,21 @@ def coerce_float(value: Any, default: float = 0.0) -> float:
     return number
 
 
+def coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
 def parse_json_value(value: Any) -> Any:
     if isinstance(value, str):
         text = value.strip()
@@ -60,6 +75,31 @@ def parse_json_value(value: Any) -> Any:
     return value
 
 
+def roboflow_workflow_id(payload: dict[str, Any], *, temporal: bool = False) -> str | None:
+    if payload.get("workflow_id"):
+        return str(payload["workflow_id"])
+    return (
+        os.getenv("ROBOFLOW_UNIFIED_WORKFLOW_ID")
+        or (os.getenv("ROBOFLOW_EVENT_WORKFLOW_ID") if temporal else None)
+        or os.getenv("ROBOFLOW_WORKFLOW_ID")
+        or os.getenv("ROBOFLOW_WORKFLOW_B_ID")
+    )
+
+
+def build_frame_prompt(user_request: str, scenarios: list[str]) -> str:
+    scenarios_text = ", ".join(scenarios)
+    return (
+        "You are a professional short-form video editor. The input image is one sampled video frame. "
+        "Use the frame for a coarse visual read only.\n\n"
+        f"User request: {user_request}\n\n"
+        f"Allowed event labels: {scenarios_text}\n\n"
+        "Return only strict JSON with these fields: event_label, keep_score, skip_score, event_confidence, "
+        "suggested_clip_start_offset_seconds, suggested_clip_end_offset_seconds, reason, title_overlay, "
+        "title_overlay_start_offset_seconds, title_overlay_end_offset_seconds. Scores must be numbers from 0 to 1. "
+        "If the single frame is not enough for a temporal decision, keep the reason short and use moderate confidence."
+    )
+
+
 def build_temporal_prompt(user_request: str, scenarios: list[str]) -> str:
     scenarios_text = ", ".join(scenarios)
     return (
@@ -70,11 +110,28 @@ def build_temporal_prompt(user_request: str, scenarios: list[str]) -> str:
         "Decide whether this window should be kept in the final edit. Judge visual payoff, action, emotion, "
         "clarity, novelty, usefulness, and whether it matches the user request. Penalize filler, repeated action, "
         "menus, loading screens, black frames, blurry frames, weak moments, and anything the user asked to skip.\n\n"
-        "Return only strict JSON with these fields: event_label, keep_score, skip_score, confidence, "
+        "Return only strict JSON with these fields: event_label, keep_score, skip_score, event_confidence, "
         "suggested_clip_start_offset_seconds, suggested_clip_end_offset_seconds, reason, title_overlay, "
         "title_overlay_start_offset_seconds, title_overlay_end_offset_seconds. Scores must be numbers from 0 to 1. "
         "Use title_overlay only for a clear memorable payoff that deserves on-screen text."
     )
+
+
+def normalize_clip_result(raw: dict[str, Any], scenarios: list[str]) -> dict[str, Any]:
+    label = str(first_present(raw.get("clip_label"), raw.get("scene_label")) or "").strip()
+    if not label:
+        raise ValueError("Unified Roboflow workflow returned no clip_label")
+    confidence = coerce_float(first_present(raw.get("clip_confidence"), raw.get("confidence")), 0.05)
+    all_scores = first_present(raw.get("clip_all_scores"), raw.get("all_scores"))
+    return {
+        "scene": label,
+        "confidence": confidence,
+        "all_scores": all_scores if isinstance(all_scores, list) else [],
+        "scenarios": scenarios,
+        "error_status": coerce_bool(raw.get("error_status")),
+        "gemini_raw": raw.get("gemini_raw"),
+        "preview_image": raw.get("preview_image"),
+    }
 
 
 def normalize_temporal_result(raw: dict[str, Any], window_start: float, window_end: float) -> dict[str, Any]:
@@ -85,12 +142,15 @@ def normalize_temporal_result(raw: dict[str, Any], window_start: float, window_e
             parsed.update(possible)
     parsed.update({key: parse_json_value(value) for key, value in raw.items() if not isinstance(parse_json_value(value), dict)})
 
-    parser_failed = bool(parsed.get("error_status") or parsed.get("parser_error") or parsed.get("error"))
+    parser_failed = any(
+        coerce_bool(value)
+        for value in (parsed.get("error_status"), parsed.get("parser_error"), parsed.get("error"))
+    )
     required_values = [
         parsed.get("event_label"),
         parsed.get("keep_score"),
         parsed.get("skip_score"),
-        parsed.get("confidence"),
+        first_present(parsed.get("event_confidence"), parsed.get("confidence")),
         parsed.get("suggested_clip_start_offset_seconds"),
         parsed.get("suggested_clip_end_offset_seconds"),
         parsed.get("reason"),
@@ -98,17 +158,17 @@ def normalize_temporal_result(raw: dict[str, Any], window_start: float, window_e
     all_required_empty = all(value in (None, "", [], {}) for value in required_values)
     if parser_failed or all_required_empty:
         raise ValueError(
-            "Workflow B returned no usable temporal JSON. "
-            "Expose json_parser error_status in Roboflow and confirm Gemini returns strict JSON."
+            "Unified Roboflow workflow returned no usable temporal JSON. "
+            "Check error_status/gemini_raw and confirm Gemini returns strict JSON."
         )
 
     return {
         "window_start": window_start,
         "window_end": window_end,
-        "event_label": str(parsed.get("event_label") or parsed.get("scene_label") or "").strip(),
+        "event_label": str(first_present(parsed.get("event_label"), parsed.get("scene_label")) or "").strip(),
         "keep_score": coerce_float(parsed.get("keep_score"), 0.0),
         "skip_score": coerce_float(parsed.get("skip_score"), 0.0),
-        "confidence": coerce_float(parsed.get("confidence"), 0.0),
+        "confidence": coerce_float(first_present(parsed.get("event_confidence"), parsed.get("confidence")), 0.0),
         "suggested_clip_start_offset_seconds": coerce_float(
             parsed.get("suggested_clip_start_offset_seconds"),
             0.0,
@@ -121,6 +181,10 @@ def normalize_temporal_result(raw: dict[str, Any], window_start: float, window_e
         "title_overlay": str(parsed.get("title_overlay") or "").strip()[:40],
         "title_overlay_start_offset_seconds": coerce_float(parsed.get("title_overlay_start_offset_seconds"), 0.0),
         "title_overlay_end_offset_seconds": coerce_float(parsed.get("title_overlay_end_offset_seconds"), 0.0),
+        "clip_label": str(parsed.get("clip_label") or "").strip(),
+        "clip_confidence": coerce_float(parsed.get("clip_confidence"), 0.0),
+        "error_status": coerce_bool(parsed.get("error_status")),
+        "gemini_raw": parsed.get("gemini_raw"),
         "fallback": bool(parsed.get("fallback")),
     }
 
@@ -155,11 +219,13 @@ def analyze_browser_frames(payload: dict[str, Any] = Body(...)) -> dict[str, Any
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    user_request = str(payload.get("user_request") or payload.get("prompt") or "").strip()
     workspace = payload.get("workspace") or os.getenv("ROBOFLOW_WORKSPACE")
-    workflow_id = payload.get("workflow_id") or os.getenv("ROBOFLOW_WORKFLOW_ID")
+    workflow_id = roboflow_workflow_id(payload)
     if not workspace or not workflow_id:
         raise HTTPException(status_code=500, detail="Roboflow workspace/workflow is not configured")
     predictions = []
+    prompt_text = build_frame_prompt(user_request, scenarios)
 
     for index, frame in enumerate(frames):
         if not isinstance(frame, dict):
@@ -179,31 +245,29 @@ def analyze_browser_frames(payload: dict[str, Any] = Body(...)) -> dict[str, Any
                 workspace_name=workspace,
                 workflow_id=workflow_id,
                 images={"image": image_value},
-                parameters={"scenarios": scenarios},
+                parameters={"scenarios": scenarios, "prompt_text": prompt_text},
                 use_cache=True,
             )
             frame_result = result[0] if result else {}
-            label = str(frame_result.get("scene_label") or "").strip()
-            if not label:
-                raise ValueError("Roboflow frame screener returned no scene_label")
-            confidence = frame_result.get("confidence")
-            all_scores = frame_result.get("all_scores")
+            if not isinstance(frame_result, dict):
+                raise ValueError("Roboflow workflow returned an invalid frame result")
+            clip_result = normalize_clip_result(frame_result, scenarios)
         except Exception as exc:
             raise HTTPException(
                 status_code=502,
-                detail=f"Roboflow frame screener failed at {second:.2f}s: {type(exc).__name__}: {exc}",
+                detail=f"Unified Roboflow frame analysis failed at {second:.2f}s: {type(exc).__name__}: {exc}",
             ) from exc
 
         predictions.append(
             {
                 "second": second,
                 "frame": int(frame.get("frame") or index),
-                "scene": label,
-                "confidence": confidence if isinstance(confidence, (int, float)) else 0.05,
-                "all_scores": all_scores if isinstance(all_scores, list) else [],
-                "scenarios": scenarios,
-                "fallback": bool(frame_result.get("fallback")),
-                "fallback_reason": frame_result.get("fallback_reason"),
+                "scene": clip_result["scene"],
+                "confidence": clip_result["confidence"],
+                "all_scores": clip_result["all_scores"],
+                "scenarios": clip_result["scenarios"],
+                "error_status": clip_result["error_status"],
+                "gemini_raw": clip_result["gemini_raw"],
             }
         )
 
@@ -225,13 +289,9 @@ def analyze_browser_event(payload: dict[str, Any] = Body(...)) -> dict[str, Any]
     window_start = coerce_float(payload.get("window_start"), 0.0)
     window_end = coerce_float(payload.get("window_end"), window_start)
     workspace = payload.get("workspace") or os.getenv("ROBOFLOW_WORKSPACE")
-    workflow_id = (
-        payload.get("workflow_id")
-        or os.getenv("ROBOFLOW_EVENT_WORKFLOW_ID")
-        or os.getenv("ROBOFLOW_WORKFLOW_B_ID")
-    )
+    workflow_id = roboflow_workflow_id(payload, temporal=True)
     if not workspace or not workflow_id:
-        raise HTTPException(status_code=500, detail="Roboflow temporal workflow is not configured")
+        raise HTTPException(status_code=500, detail="Roboflow unified workflow is not configured")
 
     prompt_text = build_temporal_prompt(user_request, scenarios)
     try:
@@ -251,7 +311,7 @@ def analyze_browser_event(payload: dict[str, Any] = Body(...)) -> dict[str, Any]
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Roboflow temporal Workflow B failed: {type(exc).__name__}: {exc}",
+            detail=f"Unified Roboflow temporal analysis failed: {type(exc).__name__}: {exc}",
         ) from exc
 
 

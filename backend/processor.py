@@ -65,7 +65,7 @@ SHORT_VERTICAL_PATH = (BASE_DIR / "best_short_vertical.mp4").resolve()
 SEGMENTS_DIR = (BASE_DIR / "short_segments").resolve()
 
 WORKSPACE = os.environ.get("ROBOFLOW_WORKSPACE")
-WORKFLOW_ID = os.environ.get("ROBOFLOW_WORKFLOW_ID")
+WORKFLOW_ID = os.environ.get("ROBOFLOW_UNIFIED_WORKFLOW_ID") or os.environ.get("ROBOFLOW_WORKFLOW_ID")
 EDIT_REQUEST = os.environ.get("EDIT_REQUEST", "").strip()
 EXTERNAL_EDIT_PLAN = load_json_env("EDIT_PLAN_JSON")
 
@@ -311,9 +311,29 @@ def resize_for_inference(frame_bgr: np.ndarray) -> np.ndarray:
     return cv2.resize(frame_bgr, (INFERENCE_WIDTH, int(height * scale)))
 
 
+def first_present(*values: object) -> object:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def build_frame_prompt() -> str:
+    scenarios_text = ", ".join(ANALYSIS_SCENARIOS)
+    return (
+        "You are a professional short-form video editor. The input image is one sampled video frame. "
+        "Use the frame for a coarse visual read only.\n\n"
+        f"User request: {EDIT_REQUEST}\n\n"
+        f"Allowed event labels: {scenarios_text}\n\n"
+        "Return only strict JSON with these fields: event_label, keep_score, skip_score, event_confidence, "
+        "suggested_clip_start_offset_seconds, suggested_clip_end_offset_seconds, reason, title_overlay, "
+        "title_overlay_start_offset_seconds, title_overlay_end_offset_seconds. Scores must be numbers from 0 to 1."
+    )
+
+
 def classify_frame(frame_bgr: np.ndarray) -> dict:
     if not WORKSPACE or not WORKFLOW_ID:
-        raise RuntimeError("ROBOFLOW_WORKSPACE and ROBOFLOW_WORKFLOW_ID are required")
+        raise RuntimeError("ROBOFLOW_WORKSPACE and ROBOFLOW_UNIFIED_WORKFLOW_ID/ROBOFLOW_WORKFLOW_ID are required")
 
     frame_bgr = resize_for_inference(frame_bgr)
     ok, buffer = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
@@ -328,7 +348,7 @@ def classify_frame(frame_bgr: np.ndarray) -> dict:
                 workspace_name=WORKSPACE,
                 workflow_id=WORKFLOW_ID,
                 images={"image": frame_b64},
-                parameters={"scenarios": ANALYSIS_SCENARIOS},
+                parameters={"scenarios": ANALYSIS_SCENARIOS, "prompt_text": build_frame_prompt()},
                 use_cache=True,
             )
             if not result:
@@ -336,9 +356,17 @@ def classify_frame(frame_bgr: np.ndarray) -> dict:
             frame_result = result[0]
             if not isinstance(frame_result, dict):
                 raise RuntimeError("Workflow returned an invalid frame result")
-            if not str(frame_result.get("scene_label") or "").strip():
-                raise RuntimeError("Workflow returned no scene_label")
-            return frame_result
+            label = str(first_present(frame_result.get("clip_label"), frame_result.get("scene_label")) or "").strip()
+            if not label:
+                raise RuntimeError("Workflow returned no clip_label")
+            confidence = first_present(frame_result.get("clip_confidence"), frame_result.get("confidence"), 0.05)
+            all_scores = first_present(frame_result.get("clip_all_scores"), frame_result.get("all_scores"), [])
+            return {
+                **frame_result,
+                "scene_label": label,
+                "confidence": confidence,
+                "all_scores": all_scores if isinstance(all_scores, list) else [],
+            }
         except Exception as exc:
             last_error = exc
             if attempt == 3:
