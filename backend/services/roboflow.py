@@ -1,8 +1,69 @@
 import os
+import json
+import urllib.error
+import urllib.request
 from typing import Any
 
 
 ROBOFLOW_CLIENT: Any = None
+
+
+class RoboflowWorkflowHTTPClient:
+    def __init__(self, api_url: str, api_key: str):
+        self.api_url = api_url.rstrip("/")
+        self.api_key = api_key
+
+    def run_workflow(
+        self,
+        workspace_name: str,
+        workflow_id: str,
+        images: dict[str, Any] | None = None,
+        parameters: dict[str, Any] | None = None,
+        use_cache: bool = True,
+        **_: Any,
+    ) -> list[dict[str, Any]]:
+        inputs: dict[str, Any] = {}
+        for name, value in (images or {}).items():
+            image_value = value.get("value") if isinstance(value, dict) else value
+            if isinstance(image_value, str) and "," in image_value:
+                image_value = image_value.split(",", 1)[1]
+            inputs[name] = {"type": "base64", "value": image_value}
+        inputs.update(parameters or {})
+
+        payload = {
+            "api_key": self.api_key,
+            "use_cache": use_cache,
+            "enable_profiling": False,
+            "inputs": inputs,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.api_url}/{workspace_name}/workflows/{workflow_id}",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=float(os.getenv("ROBOFLOW_TIMEOUT_SECONDS", "120")),
+            ) as response:
+                response_body = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Roboflow HTTP {exc.code}: {error_body[:1000]}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Roboflow connection error: {exc}") from exc
+
+        try:
+            data = json.loads(response_body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Roboflow returned non-JSON response: {response_body[:500]}") from exc
+
+        outputs = data.get("outputs")
+        if not isinstance(outputs, list):
+            raise RuntimeError(f"Roboflow response missing outputs: {str(data)[:500]}")
+        return outputs
 
 
 def get_roboflow_client() -> Any:
@@ -11,9 +72,7 @@ def get_roboflow_client() -> Any:
         api_key = os.getenv("ROBOFLOW_API_KEY")
         if not api_key:
             raise RuntimeError("ROBOFLOW_API_KEY is not configured")
-        from inference_sdk import InferenceHTTPClient
-
-        ROBOFLOW_CLIENT = InferenceHTTPClient.init(
+        ROBOFLOW_CLIENT = RoboflowWorkflowHTTPClient(
             api_url=os.getenv("ROBOFLOW_API_URL", "https://serverless.roboflow.com"),
             api_key=api_key,
         )

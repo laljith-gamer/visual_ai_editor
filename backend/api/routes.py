@@ -322,6 +322,16 @@ async def create_job(
     memory_json: str = Form("{}"),
     plan_json: str = Form("{}"),
 ) -> JSONResponse:
+    if os.getenv("VERCEL") and os.getenv("ALLOW_SERVER_VIDEO_PROCESSING") != "1":
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Server-side video processing is disabled on Vercel to keep the function small. "
+                "Use the browser-local upload flow, which keeps the video in the browser and sends "
+                "only small contact-sheet images to Roboflow."
+            ),
+        )
+
     if not video.filename:
         raise HTTPException(status_code=400, detail="Video file is required")
 
