@@ -13,6 +13,16 @@ class RoboflowWorkflowHTTPClient:
         self.api_url = api_url.rstrip("/")
         self.api_key = api_key
 
+    def workflow_url(self, workspace_name: str, workflow_id: str) -> str:
+        template = os.getenv("ROBOFLOW_WORKFLOW_ENDPOINT_TEMPLATE")
+        if template:
+            return template.format(
+                api_url=self.api_url,
+                workspace_name=workspace_name,
+                workflow_id=workflow_id,
+            )
+        return f"{self.api_url}/infer/workflows/{workspace_name}/{workflow_id}"
+
     def run_workflow(
         self,
         workspace_name: str,
@@ -38,9 +48,13 @@ class RoboflowWorkflowHTTPClient:
         }
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            f"{self.api_url}/{workspace_name}/workflows/{workflow_id}",
+            self.workflow_url(workspace_name, workflow_id),
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "visual-ai-editor/1.0",
+            },
             method="POST",
         )
         try:
