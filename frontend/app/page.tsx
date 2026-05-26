@@ -302,6 +302,93 @@ function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
 }
 
+function finiteNumber(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function planNumber(
+  source: Record<string, unknown>,
+  keys: string[],
+  fallback: number,
+  min = Number.NEGATIVE_INFINITY,
+  max = Number.POSITIVE_INFINITY,
+) {
+  for (const key of keys) {
+    const value = finiteNumber(source[key]);
+    if (value !== null) return clampNumber(value, min, max);
+  }
+  return clampNumber(fallback, min, max);
+}
+
+function dynamicSelectionSettings(plan: EditPlan | undefined, duration: number) {
+  const strategy = plan?.selection_strategy ?? {};
+  const transitionPolicy = plan?.transition_policy ?? {};
+  const targetSeconds =
+    finiteNumber(plan?.target_short_seconds) ??
+    clampNumber(duration * 0.18, Math.min(duration, 12), Math.min(duration, 90));
+  const target = clampNumber(targetSeconds, 1, Math.max(1, duration || targetSeconds));
+  const inferredMinClip = clampNumber(target / Math.max(3, Math.ceil(target / 14)), 2.5, Math.min(14, target));
+  const minClip = planNumber(strategy, ["minimum_clip_seconds", "minimum_connected_seconds"], inferredMinClip, 1, target);
+  const maxClip = planNumber(
+    strategy,
+    ["maximum_clip_seconds", "maximum_connected_seconds"],
+    Math.max(minClip, target / Math.max(1, Math.ceil(target / Math.max(minClip * 2.4, 1)))),
+    minClip,
+    Math.max(minClip, target),
+  );
+  const contextBefore = planNumber(
+    strategy,
+    ["context_before_seconds", "preroll_seconds"],
+    clampNumber(minClip * 0.32, 0.6, Math.max(0.6, minClip * 0.6)),
+    0,
+    Math.max(0, minClip),
+  );
+  const contextAfter = planNumber(
+    strategy,
+    ["context_after_seconds", "postroll_seconds"],
+    clampNumber(minClip * 0.42, 0.8, Math.max(0.8, minClip * 0.75)),
+    0,
+    Math.max(0, minClip * 1.5),
+  );
+  const mergeGap = planNumber(
+    strategy,
+    ["merge_gap_seconds", "boundary_gap_seconds", "continuity_gap_seconds"],
+    clampNumber(Math.min(contextBefore, contextAfter), 0.5, Math.max(0.5, minClip * 0.5)),
+    0,
+    Math.max(0, minClip),
+  );
+  const transitionSeconds = planNumber(
+    transitionPolicy,
+    ["duration_seconds"],
+    Math.min(0.35, Math.max(0, mergeGap * 0.2)),
+    0,
+    Math.min(1.2, Math.max(0, minClip / 3)),
+  );
+  const qualityThreshold = planNumber(strategy, ["quality_threshold", "event_keep_threshold"], EVENT_KEEP_THRESHOLD, 0, 1);
+  const allowSingleLongClip = Boolean(strategy.allow_single_long_clip);
+  const titleOverlayPolicy = String(
+    strategy.title_overlay_policy || transitionPolicy.title_overlay_policy || "payoff_only",
+  ).toLowerCase();
+
+  return {
+    target,
+    minClip,
+    maxClip,
+    contextBefore,
+    contextAfter,
+    mergeGap,
+    transitionSeconds,
+    qualityThreshold,
+    allowSingleLongClip,
+    titleOverlayPolicy,
+  };
+}
+
 function bestKeepLabel(scenarios: string[], weights?: Record<string, number>) {
   return (
     [...scenarios]
@@ -431,22 +518,29 @@ function buildCandidateWindows(predictions: BrowserPrediction[], duration: numbe
 }
 
 function buildEventHighlights(events: BrowserEventAnalysis[], duration: number, plan?: EditPlan): Highlight[] {
-  const strategy = plan?.selection_strategy ?? {};
-  const targetSeconds = Math.max(3, Number(plan?.target_short_seconds));
-  const minClip = Math.max(1.5, Number(strategy.minimum_clip_seconds || 3));
-  const qualityThreshold = Math.max(0, Math.min(1, Number(strategy.quality_threshold ?? EVENT_KEEP_THRESHOLD)));
+  const settings = dynamicSelectionSettings(plan, duration);
   const candidates = events
     .filter((event) => !event.fallback)
     .map((event) => {
       const keep = Number(event.keep_score ?? 0);
       const skip = Number(event.skip_score ?? 0);
       const confidence = Number(event.confidence ?? 0);
-      const startOffset = Number(event.suggested_clip_start_offset_seconds ?? 0);
-      const endOffset = Number(event.suggested_clip_end_offset_seconds ?? 0);
+      const startOffset = Math.min(Number(event.suggested_clip_start_offset_seconds ?? 0), -settings.contextBefore);
+      const endOffset = Math.max(Number(event.suggested_clip_end_offset_seconds ?? 0), settings.contextAfter);
       const start = Math.max(0, Number(event.window_start || 0) + startOffset);
       let end = Math.min(duration, Number(event.window_end || start) + endOffset);
-      if (end - start < minClip) {
-        end = Math.min(duration, start + minClip);
+      if (end - start < settings.minClip) {
+        const center = (start + end) / 2;
+        const expandedStart = Math.max(0, center - settings.minClip / 2);
+        end = Math.min(duration, expandedStart + settings.minClip);
+        return {
+          event,
+          start: Math.max(0, end - settings.minClip),
+          end,
+          duration: Math.max(0, end - Math.max(0, end - settings.minClip)),
+          score: keep * (0.7 + confidence * 0.3) - skip * 0.35,
+          peak: (Number(event.window_start || 0) + Number(event.window_end || 0)) / 2,
+        };
       }
       return {
         event,
@@ -454,55 +548,156 @@ function buildEventHighlights(events: BrowserEventAnalysis[], duration: number, 
         end,
         duration: Math.max(0, end - start),
         score: keep * (0.7 + confidence * 0.3) - skip * 0.35,
+        peak: (Number(event.window_start || 0) + Number(event.window_end || 0)) / 2,
       };
     })
     .filter((item) => {
       const keep = Number(item.event.keep_score ?? 0);
       const skip = Number(item.event.skip_score ?? 0);
-      return item.duration >= 1 && keep >= qualityThreshold && keep > skip;
+      return item.duration >= 1 && keep >= settings.qualityThreshold && keep > skip;
     })
-    .sort((left, right) => right.score - left.score || left.start - right.start);
+    .sort((left, right) => left.start - right.start);
 
-  const selected: typeof candidates = [];
-  let total = 0;
+  type ConnectedClip = {
+    events: BrowserEventAnalysis[];
+    start: number;
+    end: number;
+    duration: number;
+    score: number;
+    peak: number;
+    labels: string[];
+    title_overlay: string;
+    title_overlay_start_offset_seconds: number;
+    title_overlay_end_offset_seconds: number;
+    keep_score: number;
+    skip_score: number;
+    confidence: number;
+    reason: string;
+  };
+
+  const connected: ConnectedClip[] = [];
   for (const candidate of candidates) {
-    if (total >= targetSeconds) break;
-    const overlaps = selected.some((clip) => candidate.start < clip.end && candidate.end > clip.start);
-    if (overlaps) continue;
-    let clip = candidate;
-    const remaining = targetSeconds - total;
-    if (clip.duration > remaining && remaining >= minClip) {
-      clip = { ...clip, end: clip.start + remaining, duration: remaining };
-    } else if (clip.duration > remaining && selected.length) {
-      continue;
+    const label = candidate.event.event_label || "selected moment";
+    const current: ConnectedClip = {
+      events: [candidate.event],
+      start: candidate.start,
+      end: candidate.end,
+      duration: candidate.duration,
+      score: candidate.score,
+      peak: candidate.peak,
+      labels: [label],
+      title_overlay: candidate.event.title_overlay || "",
+      title_overlay_start_offset_seconds: Number(candidate.event.title_overlay_start_offset_seconds ?? 0),
+      title_overlay_end_offset_seconds: Number(candidate.event.title_overlay_end_offset_seconds ?? 0),
+      keep_score: Number(candidate.event.keep_score ?? 0),
+      skip_score: Number(candidate.event.skip_score ?? 0),
+      confidence: Number(candidate.event.confidence ?? 0),
+      reason: candidate.event.reason || `Kept because ${label} matched the edit request near ${formatTime(candidate.event.window_start)}.`,
+    };
+    const previous = connected.at(-1);
+    const mergedDuration = previous ? Math.max(previous.end, current.end) - Math.min(previous.start, current.start) : 0;
+    const canMerge =
+      previous &&
+      current.start <= previous.end + settings.mergeGap &&
+      (settings.allowSingleLongClip || mergedDuration <= settings.maxClip);
+    if (previous && canMerge) {
+      const currentIsStronger = current.score > previous.score;
+      previous.events.push(candidate.event);
+      previous.start = Math.min(previous.start, current.start);
+      previous.end = Math.max(previous.end, current.end);
+      previous.duration = previous.end - previous.start;
+      previous.score = Math.max(previous.score, current.score);
+      previous.peak = currentIsStronger ? current.peak : previous.peak;
+      previous.labels = [...new Set([...previous.labels, ...current.labels])].slice(0, 4);
+      if (currentIsStronger && current.title_overlay) {
+        previous.title_overlay = current.title_overlay;
+        previous.title_overlay_start_offset_seconds = Math.max(0, current.peak - previous.start);
+        previous.title_overlay_end_offset_seconds =
+          previous.title_overlay_start_offset_seconds +
+          Math.max(0.7, current.title_overlay_end_offset_seconds - current.title_overlay_start_offset_seconds);
+      }
+      previous.keep_score = Math.max(previous.keep_score, current.keep_score);
+      previous.skip_score = Math.min(previous.skip_score, current.skip_score);
+      previous.confidence = Math.max(previous.confidence, current.confidence);
+      previous.reason = `Connected ${previous.events.length} nearby moments because they are part of the same useful run.`;
+    } else {
+      connected.push(current);
+    }
+  }
+
+  function trimConnectedClip(clip: ConnectedClip, length: number): ConnectedClip {
+    if (clip.duration <= length) return clip;
+    const center = clampNumber(clip.peak, clip.start, clip.end);
+    let start = clampNumber(center - length * 0.42, clip.start, Math.max(clip.start, clip.end - length));
+    let end = start + length;
+    if (end > clip.end) {
+      end = clip.end;
+      start = Math.max(clip.start, end - length);
+    }
+    return {
+      ...clip,
+      start,
+      end,
+      duration: end - start,
+      title_overlay_start_offset_seconds: Math.max(0, clip.title_overlay_start_offset_seconds - (start - clip.start)),
+      title_overlay_end_offset_seconds: Math.max(0, clip.title_overlay_end_offset_seconds - (start - clip.start)),
+      reason: `${clip.reason} Trimmed around the strongest peak to match the requested length.`,
+    };
+  }
+
+  const ranked = [...connected].sort((left, right) => right.score - left.score || left.start - right.start);
+  const selected: ConnectedClip[] = [];
+  let total = 0;
+  for (const group of ranked) {
+    if (total >= settings.target) break;
+    const remaining = settings.target - total;
+    let clip = group;
+    if (clip.duration > remaining) {
+      if (!selected.length || remaining >= Math.min(settings.minClip, clip.duration)) {
+        clip = trimConnectedClip(clip, Math.max(Math.min(settings.minClip, clip.duration), remaining));
+      } else {
+        continue;
+      }
     }
     selected.push(clip);
     total += clip.duration;
   }
 
+  const seenTitles = new Set<string>();
   return selected
     .sort((left, right) => left.start - right.start)
     .map((item, index) => {
-      const label = item.event.event_label || "selected moment";
+      const label = item.labels[0] || "selected moment";
+      const titleKey = item.title_overlay.trim().toLowerCase();
+      const titleAllowed =
+        item.title_overlay &&
+        (settings.titleOverlayPolicy === "every_clip" || !seenTitles.has(titleKey));
+      if (titleKey) seenTitles.add(titleKey);
       return {
         index: index + 1,
         start: Number(item.start.toFixed(2)),
         end: Number(item.end.toFixed(2)),
         duration: Number(item.duration.toFixed(2)),
         score: Number(item.score.toFixed(4)),
-        labels: [label],
-        matched_labels: [label],
-        reason: item.event.reason || `Kept because ${label} matched the edit request near ${formatTime(item.event.window_start)}.`,
-        boundary_reason: "Bounds came from the temporal event analyzer offsets.",
-        why_not_longer: total >= targetSeconds ? "Trimmed around the requested final duration." : "Kept only around the meaningful event window.",
-        transition: { type: index ? "fade" : "cut", duration_seconds: index ? 0.3 : 0 },
+        labels: item.labels,
+        matched_labels: item.labels,
+        reason: item.reason,
+        boundary_reason:
+          item.events.length > 1
+            ? `Merged nearby moments with a ${settings.mergeGap.toFixed(1)}s continuity gap from the AI plan.`
+            : "Bounds include the AI-planned context before and after the event.",
+        why_not_longer:
+          total >= settings.target
+            ? "Trimmed around the requested final duration."
+            : "Kept connected action without adding low-value filler.",
+        transition: { type: index ? "fade" : "cut", duration_seconds: index ? settings.transitionSeconds : 0 },
         event_label: label,
-        keep_score: Number(item.event.keep_score ?? 0),
-        skip_score: Number(item.event.skip_score ?? 0),
-        confidence: Number(item.event.confidence ?? 0),
-        title_overlay: item.event.title_overlay || "",
-        title_overlay_start_offset_seconds: Number(item.event.title_overlay_start_offset_seconds ?? 0),
-        title_overlay_end_offset_seconds: Number(item.event.title_overlay_end_offset_seconds ?? 0),
+        keep_score: item.keep_score,
+        skip_score: item.skip_score,
+        confidence: item.confidence,
+        title_overlay: titleAllowed ? item.title_overlay : "",
+        title_overlay_start_offset_seconds: item.title_overlay_start_offset_seconds,
+        title_overlay_end_offset_seconds: item.title_overlay_end_offset_seconds,
       };
     });
 }

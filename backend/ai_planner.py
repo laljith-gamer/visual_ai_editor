@@ -216,13 +216,22 @@ def build_ai_plan(
             "prefer_diverse_labels": "boolean",
             "minimum_clip_seconds": "number",
             "maximum_clip_seconds": "number",
+            "minimum_connected_seconds": "number",
             "context_before_seconds": "number",
             "context_after_seconds": "number",
             "boundary_gap_seconds": "number",
+            "merge_gap_seconds": "number; merge nearby clips into one connected sequence when the gap is this small",
+            "event_window_seconds": "number",
+            "quality_threshold": "number from 0 to 1",
+            "title_overlay_policy": "payoff_only, first_clip_only, every_clip, or none",
             "target_clip_count": "number or 0 for AI/backend to infer",
         },
         "preview_policy": "object",
-        "transition_policy": "object",
+        "transition_policy": {
+            "enabled": "boolean",
+            "type": "cut, fade, whip, or none",
+            "duration_seconds": "number chosen by AI",
+        },
         "request_scenarios": "array of human-readable intent notes",
     }
     user = {
