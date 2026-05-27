@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { formatTime } from "@/lib/util/time";
+import { logUser } from "@/lib/log/recorders";
 import styles from "./Timeline.module.css";
 
 type DragMode = "move" | "resize-l" | "resize-r" | null;
@@ -21,6 +22,7 @@ export function Timeline() {
   const updateHighlight = useEditorStore((s) => s.updateHighlight);
   const selectClip = useEditorStore((s) => s.selectClip);
   const selectedId = useEditorStore((s) => s.selectedClipId);
+  const sessionId = useEditorStore((s) => s.sessionId);
 
   const trackRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -71,6 +73,51 @@ export function Timeline() {
 
   function onMouseUp(e: React.PointerEvent<HTMLDivElement>) {
     (e.target as Element).releasePointerCapture?.(e.pointerId);
+    if (drag) {
+      // Log the release-level mutation only — pixel-level moves are too noisy.
+      const current = useEditorStore.getState().highlights.find((h) => h.id === drag.id);
+      if (current) {
+        const fromStart = drag.origStart;
+        const fromEnd = drag.origEnd;
+        if (drag.mode === "move" && Math.abs(current.start - fromStart) > 0.05) {
+          logUser({
+            sessionId,
+            kind: "clip.moved",
+            payload: {
+              clipId: drag.id,
+              from: round2(fromStart),
+              to: round2(current.start),
+              delta: round2(current.start - fromStart)
+            },
+            summary: `Moved clip ${shortId(drag.id)} ${formatDelta(current.start - fromStart)}s`
+          });
+        } else if (drag.mode === "resize-l" && Math.abs(current.start - fromStart) > 0.05) {
+          logUser({
+            sessionId,
+            kind: "clip.resized",
+            payload: {
+              clipId: drag.id,
+              edge: "left",
+              from: round2(fromStart),
+              to: round2(current.start)
+            },
+            summary: `Resized clip ${shortId(drag.id)} left edge ${formatDelta(current.start - fromStart)}s`
+          });
+        } else if (drag.mode === "resize-r" && Math.abs(current.end - fromEnd) > 0.05) {
+          logUser({
+            sessionId,
+            kind: "clip.resized",
+            payload: {
+              clipId: drag.id,
+              edge: "right",
+              from: round2(fromEnd),
+              to: round2(current.end)
+            },
+            summary: `Resized clip ${shortId(drag.id)} right edge ${formatDelta(current.end - fromEnd)}s`
+          });
+        }
+      }
+    }
     setDrag(null);
   }
 
@@ -167,4 +214,17 @@ function niceStep(raw: number): number {
   const candidates = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
   for (const c of candidates) if (c >= raw) return c;
   return 600;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function formatDelta(d: number): string {
+  if (Math.abs(d) < 0.05) return "±0.0";
+  return d >= 0 ? `+${d.toFixed(1)}` : d.toFixed(1);
+}
+
+function shortId(id: string): string {
+  return id.length > 8 ? id.slice(-6) : id;
 }

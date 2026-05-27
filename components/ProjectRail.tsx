@@ -6,6 +6,7 @@ import { useEditorStore } from "@/hooks/useEditorStore";
 import { sha256Blob } from "@/lib/util/hash";
 import { probeVideo } from "@/lib/pipeline/sample";
 import { formatTime } from "@/lib/util/time";
+import { logUser } from "@/lib/log/recorders";
 import styles from "./ProjectRail.module.css";
 
 export function ProjectRail() {
@@ -18,6 +19,7 @@ export function ProjectRail() {
   const statusDetail = useEditorStore((s) => s.statusDetail);
   const memory = useEditorStore((s) => s.memory);
   const history = useEditorStore((s) => s.history);
+  const sessionId = useEditorStore((s) => s.sessionId);
   const refreshHistory = useEditorStore((s) => s.refreshHistory);
   const restoreSession = useEditorStore((s) => s.restoreSession);
   const removeSession = useEditorStore((s) => s.removeSession);
@@ -37,10 +39,34 @@ export function ProjectRail() {
         width: probe.width,
         height: probe.height
       }, hash);
+      logUser({
+        sessionId,
+        kind: "video.uploaded",
+        payload: {
+          name: file.name,
+          sizeBytes: file.size,
+          durationSeconds: Math.round(probe.duration),
+          width: probe.width,
+          height: probe.height
+        },
+        summary: `Uploaded "${file.name}" (${Math.round(probe.duration)}s, ${probe.width}×${probe.height})`
+      });
     } catch (err) {
       console.error("Failed to load video", err);
       alert(`Couldn't read this video: ${(err as Error).message}`);
     }
+  }
+
+  function handleClearVideo() {
+    if (videoMeta) {
+      logUser({
+        sessionId,
+        kind: "video.removed",
+        payload: { name: videoMeta.name },
+        summary: `Removed "${videoMeta.name}"`
+      });
+    }
+    clearVideo();
   }
 
   return (
@@ -55,7 +81,7 @@ export function ProjectRail() {
                 {formatTime(videoMeta.duration)} · {videoMeta.width}×{videoMeta.height} ·{" "}
                 {(videoMeta.size / 1024 / 1024).toFixed(1)} MB
               </p>
-              <button className="btn danger" onClick={clearVideo}>
+              <button className="btn danger" onClick={handleClearVideo}>
                 <Trash2 size={14} /> Remove
               </button>
             </div>

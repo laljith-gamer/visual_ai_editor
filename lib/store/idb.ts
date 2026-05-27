@@ -2,6 +2,7 @@ import { get, set, del, keys, createStore } from "idb-keyval";
 
 const sessionStore = createStore("shorts-studio-sessions", "kv");
 const cacheStore = createStore("shorts-studio-cache", "kv");
+const logStore = createStore("shorts-studio-logs", "kv");
 
 export const idbSessions = {
   get: <T>(key: string) => get<T>(key, sessionStore),
@@ -15,4 +16,11 @@ export const idbCache = {
   set: <T>(key: string, value: T) => set(key, value, cacheStore),
   del: (key: string) => del(key, cacheStore),
   keys: () => keys(cacheStore)
+};
+
+export const idbLog = {
+  get: <T>(key: string) => get<T>(key, logStore),
+  set: <T>(key: string, value: T) => set(key, value, logStore),
+  del: (key: string) => del(key, logStore),
+  keys: () => keys(logStore)
 };

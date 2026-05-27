@@ -6,6 +6,7 @@ import { useEditorStore } from "@/hooks/useEditorStore";
 import { useShare } from "@/hooks/useShare";
 import { CapabilityBadge } from "./CapabilityBadge";
 import { QuickReplies } from "./QuickReplies";
+import { logUser } from "@/lib/log/recorders";
 import type { ClarifyQuestion, InferredField } from "@/lib/types";
 import styles from "./AssistantPanel.module.css";
 
@@ -28,6 +29,7 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
   const inferred = useEditorStore((s) => s.inferred);
   const pendingClarify = useEditorStore((s) => s.pendingClarify);
   const hasVideo = useEditorStore((s) => Boolean(s.videoBlob));
+  const sessionId = useEditorStore((s) => s.sessionId);
 
   const [text, setText] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -39,10 +41,25 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
     }
   }, [messages, pendingClarify]);
 
-  async function send(value?: string) {
+  async function send(value?: string, source: "typed" | "quickreply" = "typed") {
     const trimmed = (value ?? text).trim();
     if (!trimmed || isBusy) return;
     setText("");
+    if (source === "quickreply") {
+      logUser({
+        sessionId,
+        kind: "quickreply.picked",
+        payload: { suggestion: trimmed },
+        summary: `Picked suggestion: "${truncate(trimmed, 40)}"`
+      });
+    } else {
+      logUser({
+        sessionId,
+        kind: "chat.sent",
+        payload: { text: trimmed },
+        summary: `Said: "${truncate(trimmed, 60)}"`
+      });
+    }
     await onSubmit(trimmed);
   }
 
@@ -78,7 +95,7 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
           <QuickReplies
             questions={pendingClarify.questions}
             disabled={isBusy}
-            onPick={(suggestion) => void send(suggestion)}
+            onPick={(suggestion) => void send(suggestion, "quickreply")}
           />
         )}
 
@@ -89,7 +106,7 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
             requireVideo={!hasVideo}
             onPick={(s) => {
               if (!hasVideo) return;
-              void send(s);
+              void send(s, "quickreply");
             }}
           />
         )}
@@ -209,4 +226,8 @@ function StarterSuggestions({
 function formatInferredValue(v: ClarifyQuestion | InferredField["value"]): string {
   if (Array.isArray(v)) return v.join(", ");
   return String(v);
+}
+
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1) + "…";
 }

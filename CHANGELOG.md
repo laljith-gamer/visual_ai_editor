@@ -4,6 +4,57 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.2.0] — 2026-05-27
+
+### Added
+- **Activity log** capturing every AI pipeline step and every manual user
+  action with typed payloads, dedupe, and an in-app drawer with filters
+  (All / AI / Manual / System) and per-row payload expansion.
+- **Activity-aware planner**: each `/api/agent` call sends a compact
+  "Recent activity" summary built from the last ≤12 events. The planner
+  reads these signals as implicit memory — repeated leftward nudges
+  bias toward earlier moments, repeated removals downweight a scenario,
+  etc. Documented in `lib/plan/prompt.ts`.
+- **Multi-layer rate limit** designed so the deployed instance stays up
+  even under viral load:
+  1. Edge IP throttle (`middleware.ts` + `lib/ratelimit/edge.ts`).
+  2. Session burst + daily caps per scope (`lib/ratelimit/index.ts`).
+  3. Global daily Gemini budget guard with soft (70%) + hard (95%)
+     thresholds (`lib/ratelimit/global.ts`).
+  4. Per-provider circuit breaker (`lib/ratelimit/circuit.ts`).
+- **Punishment tier** for sessions that hit limits ≥5×/day — auto
+  throttled to 1 req/min for the rest of the UTC day.
+- **Quota banner** (`components/QuotaBanner.tsx`) shown when the global
+  budget enters the soft tier; dismissible per UTC day.
+- **Admin stats endpoint** at `GET /api/admin/stats` (gated by the
+  `ADMIN_TOKEN` env var; returns 404 if unset). Reports current Gemini
+  budget, both circuits, and env presence.
+- **Security headers** in middleware: HSTS, CSP (lenient enough for
+  ffmpeg.wasm + transformers.js CDN), Permissions-Policy,
+  Referrer-Policy, X-Frame-Options, X-Content-Type-Options.
+
+### Changed
+- `app/api/agent/route.ts`, `app/api/vision/window/route.ts`, and
+  `app/api/vision/frame/route.ts` now go through `checkAllLimits` (Layers
+  2/3/4) and report rate-limit decisions as `{ mode: "error", transient,
+  retryAfterSeconds }` for predictable client UX.
+- `AgentRequest` gained a `recentActivity?: string` field. Plan/Moment/
+  Clarify response shapes gained an optional `quotaWarning` so the
+  client can render the soft-tier banner.
+- The Topbar now hosts an **Activity** button with a green dot indicator
+  for unread events. The clips drawer is unchanged.
+- `lib/store/idb.ts` exposes a third dedicated KV store
+  (`shorts-studio-logs`) for the activity log so log writes don't churn
+  the session/cache stores.
+- `lib/log/store.ts` debounces IDB writes by 250ms (configurable via
+  `ACTIVITY.flushIntervalMs`) and dedupes identical consecutive events
+  within `ACTIVITY.dedupeWindowMs` into a single row with a `count`.
+
+### Steering
+- Appended Section 9 to `.kiro/steering/conversation-patterns.md`
+  documenting the activity-log policy and the four-layer rate-limit
+  contract so future sessions don't accidentally regress them.
+
 ## [1.1.0] — 2026-05-27
 
 ### Added

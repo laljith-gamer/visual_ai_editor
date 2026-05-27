@@ -224,6 +224,10 @@ export interface AgentRequest {
   };
   /** Cross-turn memory chips. */
   memory?: SessionMemory;
+  /** Compact summary of recent activity events for the planner.
+   *  Built client-side via `summarizeRecentActivity()`. Keeps the prompt
+   *  small while letting the LLM reason about implicit user preferences. */
+  recentActivity?: string;
 }
 
 /** Discriminated union returned by POST /api/agent. */
@@ -240,6 +244,8 @@ export type AgentResponse =
       inferred: InferredField[];
       /** Soft warnings (e.g., "fell back to Groq"). */
       warnings: string[];
+      /** Soft-tier global quota state (banner trigger). Present when fraction > softThreshold. */
+      quotaWarning?: { usage: number; limit: number; fraction: number };
     }
   | {
       mode: "moment";
@@ -251,6 +257,7 @@ export type AgentResponse =
       message: string;
       inferred: InferredField[];
       warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
     }
   | {
       mode: "clarify";
@@ -258,10 +265,57 @@ export type AgentResponse =
       /** 1–2 questions to ask before running the pipeline. */
       questions: ClarifyQuestion[];
       warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
     }
   | {
       mode: "error";
       error: string;
       /** True when the error is transient (overload, network) and a retry helps. */
       transient?: boolean;
+      /** Set when rate-limited; UI uses this to show a friendly retry banner. */
+      retryAfterSeconds?: number;
     };
+
+// ---------------------------------------------------------------------
+// Activity log (NEW in v1.2.0)
+// ---------------------------------------------------------------------
+
+export type ActivityActor = "user" | "ai" | "system";
+
+/** Open string union for kinds — strings only, with a documented set in
+ *  `lib/log/types.ts`. Using a string type lets components log new kinds
+ *  without first amending the type. */
+export type ActivityKind = string;
+
+export interface ActivityEvent {
+  id: string;
+  sessionId: string;
+  /** Wall-clock timestamp in ms (most recent occurrence when `count > 1`). */
+  ts: number;
+  actor: ActivityActor;
+  kind: ActivityKind;
+  /** Free-form payload; see `lib/log/types.ts` for documented shapes. */
+  payload: Record<string, unknown>;
+  /** Duration of the action when known, in ms. */
+  ms?: number;
+  /** When > 1, this row was deduped from N consecutive identical events. */
+  count?: number;
+  /** Pre-rendered one-line summary for drawers and planner prompts. */
+  summary?: string;
+}
+
+// ---------------------------------------------------------------------
+// Rate limit responses (NEW in v1.2.0)
+// ---------------------------------------------------------------------
+
+export interface RateLimitDecision {
+  allowed: boolean;
+  reason?: string;
+  status?: 429 | 503;
+  retryAfterSeconds?: number;
+  /** "ok" | "soft" → request allowed; "hard" → rejected by global guard. */
+  tier?: "ok" | "soft" | "hard";
+  /** Used quota across the layer that decided. */
+  usage?: number;
+  limit?: number;
+}

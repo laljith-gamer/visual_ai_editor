@@ -12,7 +12,8 @@ export const serverEnv = {
   GROQ_MODEL: readOptional("GROQ_MODEL") ?? "llama-3.3-70b-versatile",
   SESSION_SECRET: readOptional("SESSION_SECRET"),
   UPSTASH_REDIS_REST_URL: readOptional("UPSTASH_REDIS_REST_URL"),
-  UPSTASH_REDIS_REST_TOKEN: readOptional("UPSTASH_REDIS_REST_TOKEN")
+  UPSTASH_REDIS_REST_TOKEN: readOptional("UPSTASH_REDIS_REST_TOKEN"),
+  ADMIN_TOKEN: readOptional("ADMIN_TOKEN")
 };
 
 export function hasAnyChatProvider(): boolean {
@@ -27,4 +28,8 @@ export function hasRateLimit(): boolean {
   return Boolean(
     serverEnv.UPSTASH_REDIS_REST_URL && serverEnv.UPSTASH_REDIS_REST_TOKEN
   );
+}
+
+export function hasAdminAccess(): boolean {
+  return Boolean(serverEnv.ADMIN_TOKEN);
 }

@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
 import { cookies } from "next/headers";
 import { sessionOptions, type SessionData } from "@/lib/session/cookie";
-import { checkRateLimit } from "@/lib/ratelimit";
+import {
+  checkAllLimits,
+  recordFailure,
+  recordSuccess
+} from "@/lib/ratelimit";
 import { hasAnyChatProvider, hasGemini, serverEnv } from "@/lib/env";
 import { geminiJson, isTransientError } from "@/lib/providers/gemini";
 import { groqJson } from "@/lib/providers/groq";
@@ -15,15 +19,15 @@ import { mergePlan } from "@/lib/plan/merge";
 import { inferIntent } from "@/lib/plan/intent";
 import { extractJsonObject } from "@/lib/util/safeJson";
 import { newId } from "@/lib/util/id";
-import { CONVERSATION } from "@/lib/config";
+import { CONVERSATION, RATE_LIMITS } from "@/lib/config";
 import type {
   AgentRequest,
   AgentResponse,
-  ChatMessage,
   ClarifyQuestion,
   EditPlan,
   InferredField,
-  PlanPatch
+  PlanPatch,
+  RateLimitDecision
 } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -46,13 +50,17 @@ export async function POST(req: NextRequest) {
     await session.save();
   }
 
-  const rl = await checkRateLimit(`agent:${session.sid}`);
+  // ---- Layers 2/3/4 rate check (Layer 1 already ran in middleware) ---
+  const rl = await checkAllLimits({
+    sid: session.sid,
+    scope: "agent",
+    consumesLlm: true,
+    provider: "gemini"
+  });
   if (!rl.allowed) {
-    return NextResponse.json<AgentResponse>(
-      { mode: "error", error: "Rate limit exceeded. Try again shortly." },
-      { status: 429, headers: { "Retry-After": String(rl.reset) } }
-    );
+    return rateLimitResponse(rl);
   }
+  const quotaWarning = buildQuotaWarning(rl);
 
   // ---- Parse body ----------------------------------------------------
   let body: AgentRequest;
@@ -89,39 +97,43 @@ export async function POST(req: NextRequest) {
     currentPlan: body.currentPlan ?? null,
     videoMeta: body.videoMeta,
     memory: body.memory,
-    hint
+    hint,
+    recentActivity: typeof body.recentActivity === "string" ? body.recentActivity : undefined
   });
 
-  // ---- Call LLM ------------------------------------------------------
+  // ---- Call LLM with circuit-aware fallback chain --------------------
   const warnings: string[] = [];
   let raw: string;
   try {
     if (hasGemini()) {
-      raw = await geminiJson(PLANNER_SYSTEM_PROMPT, userPrompt);
+      try {
+        raw = await geminiJson(PLANNER_SYSTEM_PROMPT, userPrompt);
+        await recordSuccess("gemini");
+      } catch (err) {
+        await recordFailure("gemini");
+        // Try Groq if available before surfacing failure.
+        if (serverEnv.GROQ_API_KEY) {
+          raw = await groqJson(PLANNER_SYSTEM_PROMPT, userPrompt);
+          warnings.push("Gemini failed; used Groq fallback.");
+        } else {
+          throw err;
+        }
+      }
     } else {
       raw = await groqJson(PLANNER_SYSTEM_PROMPT, userPrompt);
     }
-  } catch (err) {
-    try {
-      if (serverEnv.GROQ_API_KEY && hasGemini()) {
-        raw = await groqJson(PLANNER_SYSTEM_PROMPT, userPrompt);
-        warnings.push("Gemini failed; used Groq fallback.");
-      } else {
-        throw err;
-      }
-    } catch (e2) {
-      const transient = isTransientError(e2);
-      return NextResponse.json<AgentResponse>(
-        {
-          mode: "error",
-          error: transient
-            ? "The chat model is temporarily overloaded. Please try again in a few seconds."
-            : `Planner failed: ${(e2 as Error).message}`,
-          transient
-        },
-        { status: transient ? 503 : 502 }
-      );
-    }
+  } catch (e2) {
+    const transient = isTransientError(e2);
+    return NextResponse.json<AgentResponse>(
+      {
+        mode: "error",
+        error: transient
+          ? "The chat model is temporarily overloaded. Please try again in a few seconds."
+          : `Planner failed: ${(e2 as Error).message}`,
+        transient
+      },
+      { status: transient ? 503 : 502 }
+    );
   }
 
   // ---- Parse LLM JSON ------------------------------------------------
@@ -134,11 +146,11 @@ export async function POST(req: NextRequest) {
   }
 
   const mode = parsed.mode;
+
   // ---- CLARIFY -------------------------------------------------------
   if (mode === "clarify") {
     const questions = normalizeClarifyQuestions(parsed.questions);
     if (questions.length === 0) {
-      // The model said clarify but produced no questions; synthesize a sensible default.
       questions.push(defaultClarifyQuestion(body.currentPlan ?? null));
     }
     return NextResponse.json<AgentResponse>({
@@ -148,7 +160,8 @@ export async function POST(req: NextRequest) {
           ? parsed.message.trim()
           : "I need a bit more to plan the cuts.",
       questions,
-      warnings
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
     });
   }
 
@@ -161,20 +174,18 @@ export async function POST(req: NextRequest) {
       warnings
     });
     if (!buildResult.ok) {
-      // Couldn't form a usable plan AND no current one to fall back on.
-      // Fall through to a clarify response targeted at the missing fields.
       return NextResponse.json<AgentResponse>({
         mode: "clarify",
         message:
           "I need a bit more before I can run the analysis — what should the short be about?",
         questions: missingFieldsToQuestions(buildResult.missing),
-        warnings
+        warnings,
+        ...(quotaWarning ? { quotaWarning } : {})
       });
     }
     const inferred = normalizeInferred(parsed.inferred);
 
     if (mode === "moment") {
-      // Enforce exactly one scenario in moment mode.
       if (buildResult.plan.scenarios.length > 1) {
         buildResult.plan.scenarios = [buildResult.plan.scenarios[0]];
         buildResult.plan.labelWeights = {
@@ -191,7 +202,8 @@ export async function POST(req: NextRequest) {
             : userText,
         message: stringOr(parsed.message, "Locating the moment in your video."),
         inferred,
-        warnings
+        warnings,
+        ...(quotaWarning ? { quotaWarning } : {})
       });
     }
 
@@ -201,11 +213,11 @@ export async function POST(req: NextRequest) {
       planPatch: buildResult.planPatch,
       message: stringOr(parsed.message, "Plan ready."),
       inferred,
-      warnings
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
     });
   }
 
-  // ---- Unknown mode → treat as error --------------------------------
   return NextResponse.json<AgentResponse>(
     {
       mode: "error",
@@ -219,6 +231,49 @@ export async function POST(req: NextRequest) {
 // Helpers
 // ---------------------------------------------------------------------
 
+function rateLimitResponse(rl: RateLimitDecision): NextResponse<AgentResponse> {
+  const status = rl.status ?? 429;
+  let userMessage: string;
+  if (rl.reason === "global_budget") {
+    userMessage =
+      "We're at our shared daily AI capacity. Please try again after midnight UTC.";
+  } else if (rl.reason?.startsWith("circuit_open")) {
+    userMessage = "The AI model is temporarily unavailable. Try again shortly.";
+  } else if (rl.reason === "session_strict_burst") {
+    userMessage =
+      "You've been auto-throttled after repeated rate-limit hits. Slow down for a few minutes.";
+  } else {
+    userMessage = "Too many requests. Please slow down.";
+  }
+  return NextResponse.json<AgentResponse>(
+    {
+      mode: "error",
+      error: userMessage,
+      transient: true,
+      retryAfterSeconds: rl.retryAfterSeconds
+    },
+    {
+      status,
+      headers: rl.retryAfterSeconds
+        ? { "Retry-After": String(rl.retryAfterSeconds) }
+        : undefined
+    }
+  );
+}
+
+function buildQuotaWarning(
+  rl: RateLimitDecision
+): { usage: number; limit: number; fraction: number } | null {
+  if (rl.tier === "soft" && typeof rl.usage === "number" && typeof rl.limit === "number") {
+    return {
+      usage: rl.usage,
+      limit: rl.limit,
+      fraction: rl.limit > 0 ? rl.usage / rl.limit : 0
+    };
+  }
+  return null;
+}
+
 function validateRequest(body: AgentRequest): string | null {
   if (!body || !Array.isArray(body.messages) || body.messages.length === 0) {
     return "messages must be a non-empty array";
@@ -229,6 +284,9 @@ function validateRequest(body: AgentRequest): string | null {
   }
   if (last.content.length > CONVERSATION.maxUserRequestChars) {
     return "userRequest too long";
+  }
+  if (typeof body.recentActivity === "string" && body.recentActivity.length > 4000) {
+    return "recentActivity too long";
   }
   return null;
 }
@@ -251,7 +309,6 @@ function resolvePlan(args: {
 }): ResolveOk | ResolveErr {
   const { parsed, currentPlan, warnings } = args;
 
-  // Refinement: planPatch + existing currentPlan → merge.
   if (parsed.planPatch && currentPlan) {
     const { patch, warnings: pw } = normalizePlanPatch(parsed.planPatch);
     warnings.push(...pw);
@@ -259,14 +316,12 @@ function resolvePlan(args: {
     return { ok: true, plan: merged, planPatch: patch };
   }
 
-  // Fresh plan: full plan object.
   if (parsed.plan) {
     const { plan, missing, warnings: pw } = normalizePlan(parsed.plan);
     warnings.push(...pw);
     if (plan) {
       return { ok: true, plan };
     }
-    // Plan was provided but unusable — try merging into currentPlan as a patch.
     if (currentPlan) {
       const { patch } = normalizePlanPatch(parsed.plan);
       const merged = mergePlan(currentPlan, patch);
@@ -275,7 +330,6 @@ function resolvePlan(args: {
     return { ok: false, missing };
   }
 
-  // Patch-only without current plan.
   if (parsed.planPatch && !currentPlan) {
     const { patch, warnings: pw } = normalizePlanPatch(parsed.planPatch);
     warnings.push(...pw);
@@ -329,7 +383,8 @@ function normalizeClarifyQuestions(raw: unknown): ClarifyQuestion[] {
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const o = item as Record<string, unknown>;
-    const id = typeof o.id === "string" && o.id.trim() ? o.id.trim().slice(0, 32) : `q_${out.length}`;
+    const id =
+      typeof o.id === "string" && o.id.trim() ? o.id.trim().slice(0, 32) : `q_${out.length}`;
     const prompt = typeof o.prompt === "string" ? o.prompt.trim() : "";
     if (!prompt) continue;
     const suggestionsRaw = Array.isArray(o.suggestions) ? o.suggestions : [];
@@ -369,9 +424,9 @@ function defaultClarifyQuestion(currentPlan: EditPlan | null): ClarifyQuestion {
 }
 
 function missingFieldsToQuestions(missing: string[]): ClarifyQuestion[] {
-  if (missing.includes("scenarios") || missing.includes("plan")) {
-    return [defaultClarifyQuestion(null)];
-  }
+  // Right now both branches return the same default; left as a function so
+  // future field-specific clarifications can plug in here.
+  void missing;
   return [defaultClarifyQuestion(null)];
 }
 
@@ -379,5 +434,5 @@ function stringOr(v: unknown, fallback: string): string {
   return typeof v === "string" && v.trim() ? v.trim() : fallback;
 }
 
-// Suppress unused-variable warning for ChatMessage type import (used for type narrowing).
-export type _UnusedChatMessage = ChatMessage;
+// Suppress unused-symbol warnings for re-exported types.
+export type _UnusedRateLimits = typeof RATE_LIMITS;

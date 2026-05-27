@@ -204,3 +204,86 @@ export const CAPABILITY = {
   /** Hardware concurrency threshold for "mid" tier. */
   midTierMinHardwareConcurrency: 4
 } as const;
+
+// =====================================================================
+// v1.2.0 additions — activity log + multi-layer rate limit
+// =====================================================================
+
+/** Activity log behaviour (lib/log/*). */
+export const ACTIVITY = {
+  /** Max events kept per session in IndexedDB. Oldest are trimmed first. */
+  maxEventsPerSession: 2000,
+  /** Identical consecutive events within this window collapse into one with a `count`. */
+  dedupeWindowMs: 1500,
+  /** How many recent events get summarised into the planner prompt. */
+  recentForPlanner: 12,
+  /** Older than this is treated as irrelevant for planner context. */
+  recentMaxAgeMs: 30 * 60 * 1000,
+  /** Debounce IndexedDB writes by this much for performance. */
+  flushIntervalMs: 250,
+  /** When this many user actions fire without a render, we lower-priority them in summaries. */
+  noisyEventCap: 25
+} as const;
+
+/** Multi-layer rate limit configuration (lib/ratelimit/*). */
+export const RATE_LIMITS = {
+  /** Layer 1 — IP-based throttle, applied at the edge (middleware). */
+  ip: {
+    /** Global cap for any /api/* request. */
+    api: { limit: 60, windowSeconds: 60 },
+    /** Stricter cap for the LLM-cost endpoint. */
+    agent: { limit: 15, windowSeconds: 60 }
+  },
+  /** Layer 2 — session-cookie buckets (per-user). Burst + daily ceiling. */
+  session: {
+    agent: { burstLimit: 30, burstWindowSeconds: 60, dailyLimit: 200 },
+    visionWindow: { burstLimit: 30, burstWindowSeconds: 60, dailyLimit: 300 },
+    visionFrame: { burstLimit: 20, burstWindowSeconds: 60, dailyLimit: 200 }
+  },
+  /** Layer 3 — global daily LLM budget guard. */
+  global: {
+    /** Total provider calls allowed per UTC day across ALL users.
+     *  Set below the actual provider quota to leave a safety margin. */
+    geminiDailyBudget: 200,
+    /** Tighten per-session limits at this fraction consumed. */
+    softThreshold: 0.7,
+    /** Reject new agent requests at this fraction consumed. */
+    hardThreshold: 0.95
+  },
+  /** Layer 4 — circuit breaker per provider. */
+  circuitBreaker: {
+    failureThreshold: 5,
+    failureWindowMs: 60 * 1000,
+    cooldownMs: 120 * 1000
+  },
+  /** Punishment tier for sessions that repeatedly hit limits. */
+  punish: {
+    /** Triggers strict tier after this many rate-limit hits in a day. */
+    maxHitsBeforeStrict: 5,
+    /** Reduced burst limit while in strict tier. */
+    strictBurstLimit: 1,
+    strictBurstWindowSeconds: 60
+  }
+} as const;
+
+/** Security headers applied by middleware on every response. */
+export const SECURITY_HEADERS = {
+  /** CSP must allow wasm + CDN scripts for ffmpeg + transformers. */
+  contentSecurityPolicy:
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: blob: https:; " +
+    "font-src 'self' data:; " +
+    "media-src 'self' blob:; " +
+    "connect-src 'self' https://*.googleapis.com https://*.groq.com https://huggingface.co https://*.huggingface.co https://unpkg.com https://cdn.jsdelivr.net; " +
+    "worker-src 'self' blob:; " +
+    "frame-ancestors 'none'; " +
+    "base-uri 'self'; " +
+    "form-action 'self'",
+  permissionsPolicy: "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+  referrerPolicy: "strict-origin-when-cross-origin",
+  hsts: "max-age=31536000; includeSubDomains",
+  xFrameOptions: "DENY",
+  xContentTypeOptions: "nosniff"
+} as const;

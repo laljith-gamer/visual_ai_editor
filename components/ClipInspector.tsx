@@ -3,6 +3,7 @@
 import { ChevronLeft, ChevronRight, Trash2, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { formatSeconds } from "@/lib/util/time";
+import { logUser } from "@/lib/log/recorders";
 import styles from "./ClipInspector.module.css";
 
 export function ClipInspector() {
@@ -10,6 +11,7 @@ export function ClipInspector() {
   const selectedId = useEditorStore((s) => s.selectedClipId);
   const updateHighlight = useEditorStore((s) => s.updateHighlight);
   const removeHighlight = useEditorStore((s) => s.removeHighlight);
+  const sessionId = useEditorStore((s) => s.sessionId);
 
   const clip = highlights.find((h) => h.id === selectedId);
 
@@ -28,6 +30,34 @@ export function ClipInspector() {
     const next = { ...clip, [field]: Math.max(0, clip[field] + delta) };
     if (next.end - next.start < 0.5) return;
     updateHighlight(clip.id, next);
+    logUser({
+      sessionId,
+      kind: "clip.nudged",
+      payload: {
+        clipId: clip.id,
+        field,
+        delta: Math.round(delta * 100) / 100,
+        from: Math.round(clip[field] * 100) / 100,
+        to: Math.round(next[field] * 100) / 100
+      },
+      summary: `Nudged clip ${shortId(clip.id)} ${field} by ${delta >= 0 ? "+" : ""}${delta.toFixed(1)}s`
+    });
+  }
+
+  function handleRemove() {
+    if (!clip) return;
+    logUser({
+      sessionId,
+      kind: "clip.removed",
+      payload: {
+        clipId: clip.id,
+        start: Math.round(clip.start * 100) / 100,
+        end: Math.round(clip.end * 100) / 100,
+        reason: clip.reason
+      },
+      summary: `Removed clip ${shortId(clip.id)} (${(clip.end - clip.start).toFixed(1)}s)`
+    });
+    removeHighlight(clip.id);
   }
 
   return (
@@ -89,7 +119,7 @@ export function ClipInspector() {
 
         <button
           className="btn danger"
-          onClick={() => removeHighlight(clip.id)}
+          onClick={handleRemove}
         >
           <Trash2 size={14} /> Remove
         </button>
@@ -102,4 +132,8 @@ export function ClipInspector() {
       )}
     </div>
   );
+}
+
+function shortId(id: string): string {
+  return id.length > 8 ? id.slice(-6) : id;
 }

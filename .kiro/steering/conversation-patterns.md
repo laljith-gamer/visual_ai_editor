@@ -103,3 +103,26 @@ into MOMENT mode.
 - Do not reset the chat unless the user explicitly says reset / start over.
 - Do not show the user "I assumed X" for fields they explicitly stated.
 - Do not show inferred badges for memory-derived fields (those are silent).
+
+## 9. Activity log + rate limit (v1.2.0)
+
+The chat planner is now activity-aware: every user action (chat, clip
+move, resize, remove, nudge) and every AI pipeline step (plan, sample,
+score, temporal verdict, render) is recorded to an append-only log in
+IndexedDB and surfaced into the planner prompt as a "Recent activity"
+block. The planner uses these signals as implicit memory.
+
+Rate limiting is multi-layer and must stay this way:
+
+  Layer 1 (edge IP)     enforced in middleware.ts
+  Layer 2 (session)     burst + daily caps in lib/ratelimit/index.ts
+  Layer 3 (global LLM)  daily Gemini budget in lib/ratelimit/global.ts
+  Layer 4 (circuit)     per-provider breaker in lib/ratelimit/circuit.ts
+
+The deployed instance must remain available even at 100% global budget:
+return 503 with a friendly message, not a crash. All four layers fail
+open if Upstash is unavailable — best-effort instead of total outage.
+
+The activity log itself never leaves the device (browser-only IndexedDB).
+Only a compact text summary (12 most recent events, max 30 minutes old)
+is sent to the planner as part of the request body.

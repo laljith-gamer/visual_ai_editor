@@ -136,6 +136,25 @@ Example D (REFINEMENT):
   → mode: "plan", planPatch: { targetShortSeconds: 60, format: "vertical" },
     inferred: []   // user stated both, no inference
 
+## Reading recent activity (NEW)
+
+If the user-prompt block contains a "Recent activity" section, read it as
+implicit memory. Heuristics:
+  - Repeated leftward clip nudges → user wants earlier moments. Bias next
+    plan toward earlier-source signals.
+  - Repeated removals of clips of one scenario → that scenario is weak;
+    consider removing it from the plan or lowering its weight.
+  - User extended clips multiple times → bump maxClipSeconds slightly.
+  - User just rendered → assume they're satisfied with the structure;
+    propose minor refinements, not a fresh re-plan.
+  - System "quota.warning" present → keep responses concise, prefer
+    plans that reuse the predictions cache (don't change scenarios
+    unless the user clearly asked for it).
+
+Reference these signals briefly in "rationale" when they shape your plan
+("inferred from your recent edits that you prefer earlier-in-source
+clips") so the user understands the connection.
+
 `;
 
 /** Build the user-facing turn payload. */
@@ -145,6 +164,8 @@ export function buildPlannerUserPrompt(args: {
   videoMeta?: { duration: number; width: number; height: number };
   memory?: SessionMemory;
   hint?: IntentHint;
+  /** Optional summary of recent activity events. See lib/log/summarize.ts. */
+  recentActivity?: string;
 }): string {
   const lines: string[] = [];
 
@@ -207,6 +228,12 @@ export function buildPlannerUserPrompt(args: {
     if (hintLines.length) {
       lines.push(`Heuristic hints (advisory): ${hintLines.join("; ")}.`);
     }
+  }
+
+  // --- Recent activity (implicit memory) ----------------------------
+  if (args.recentActivity && args.recentActivity.trim()) {
+    lines.push("");
+    lines.push(args.recentActivity.trim());
   }
 
   // --- Conversation history -----------------------------------------

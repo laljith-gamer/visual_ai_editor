@@ -1,18 +1,32 @@
 "use client";
 
-import { Sparkles, Plus } from "lucide-react";
+import { Sparkles, Plus, Activity as ActivityIcon } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
+import { useActivityLog } from "@/hooks/useActivityLog";
+import { logUser } from "@/lib/log/recorders";
 import { formatTime } from "@/lib/util/time";
 import { ModeBadge } from "./ModeBadge";
 import styles from "./Topbar.module.css";
 
-export function Topbar() {
+interface Props {
+  /** Open the activity drawer. Owned by app/page.tsx. */
+  onOpenActivity: () => void;
+  /** Number of new events since the user last opened the drawer. */
+  newActivityCount?: number;
+}
+
+export function Topbar({ onOpenActivity, newActivityCount = 0 }: Props) {
   const status = useEditorStore((s) => s.status);
   const highlights = useEditorStore((s) => s.highlights);
   const plan = useEditorStore((s) => s.plan);
   const mode = useEditorStore((s) => s.mode);
   const inferred = useEditorStore((s) => s.inferred);
   const newSession = useEditorStore((s) => s.newSession);
+  const sessionId = useEditorStore((s) => s.sessionId);
+
+  // Make sure the activity log stays bound even on this lightweight component;
+  // the read is cheap and ensures the singleton is initialized for the active session.
+  useActivityLog(sessionId);
 
   const totalDuration = highlights.reduce(
     (acc, h) => acc + (h.end - h.start),
@@ -35,10 +49,48 @@ export function Topbar() {
       </div>
 
       <div className={styles.actions}>
-        <button className="btn" onClick={newSession}>
+        <button
+          className="btn"
+          onClick={() => {
+            logUser({
+              sessionId,
+              kind: "session.reset",
+              payload: {},
+              summary: "Started a new chat (state reset)"
+            });
+            newSession();
+          }}
+        >
           <Plus size={14} />
           New chat
         </button>
+
+        <button
+          className="btn"
+          onClick={onOpenActivity}
+          aria-label="Open activity log"
+          title="Activity log"
+          style={{ position: "relative" }}
+        >
+          <ActivityIcon size={14} />
+          Activity
+          {newActivityCount > 0 && (
+            <span
+              aria-hidden
+              style={{
+                position: "absolute",
+                top: 4,
+                right: 6,
+                width: 8,
+                height: 8,
+                borderRadius: 999,
+                background: "var(--accent)",
+                boxShadow: "0 0 0 2px var(--bg-2)"
+              }}
+            />
+          )}
+        </button>
+
         <ModeBadge mode={mode} />
         {inferred.length > 0 && (
           <span
