@@ -1,0 +1,105 @@
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.track {
+  position: relative;
+  height: 64px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+  border: 1px solid var(--line);
+  user-select: none;
+  touch-action: none;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 0 var(--space-4);
+}
+
+.clip {
+  position: absolute;
+  top: 8px;
+  bottom: 24px;
+  background: linear-gradient(180deg, rgba(99, 216, 149, 0.4), rgba(99, 216, 149, 0.18));
+  border: 1px solid rgba(99, 216, 149, 0.6);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  cursor: grab;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.clip:active {
+  cursor: grabbing;
+}
+.clip.selected {
+  border-color: var(--info);
+  box-shadow: 0 0 0 2px rgba(117, 167, 255, 0.4) inset;
+}
+
+.clipBody {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  min-width: 0;
+}
+
+.clipName {
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.clipDuration {
+  font-size: 11px;
+  color: rgba(11, 26, 18, 0.7);
+}
+
+.handle {
+  width: 8px;
+  height: 100%;
+  background: rgba(11, 26, 18, 0.4);
+  cursor: ew-resize;
+  border-radius: 8px 0 0 8px;
+  flex: 0 0 auto;
+}
+.handle.right {
+  border-radius: 0 8px 8px 0;
+}
+
+.tickRow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22px;
+  pointer-events: none;
+}
+.tick {
+  position: absolute;
+  bottom: 4px;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.tick em {
+  font-style: normal;
+}

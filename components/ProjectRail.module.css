@@ -1,0 +1,99 @@
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.uploadBtn {
+  width: 100%;
+  justify-content: center;
+}
+
+.fileSummary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.fileName {
+  margin: 0;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.progressNum {
+  font-size: 36px;
+  font-weight: 600;
+  color: var(--warn);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.progressUnit {
+  font-size: 16px;
+  color: var(--text-faint);
+  margin-left: 4px;
+}
+
+.progressMeter {
+  margin: var(--space-3) 0 var(--space-2) 0;
+  height: 6px;
+  background: var(--bg-1);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progressFill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--warn), #ffe085);
+  transition: width 240ms ease;
+}
+
+.memoryTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.historyList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.historyItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.historyButton {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-input);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.historyButton:hover {
+  background: var(--bg-2);
+  border-color: var(--line-2);
+}
+
+.historyTitle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

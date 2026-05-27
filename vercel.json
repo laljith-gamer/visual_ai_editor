@@ -1,17 +1,10 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/index.py"
-    },
-    {
-      "source": "/media/(.*)",
-      "destination": "/api/index.py"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/api/index.py"
-    }
-  ]
+  "framework": "nextjs",
+  "buildCommand": "next build",
+  "regions": ["iad1"],
+  "functions": {
+    "app/api/agent/route.ts": { "maxDuration": 30 },
+    "app/api/vision/window/route.ts": { "maxDuration": 30 },
+    "app/api/vision/frame/route.ts": { "maxDuration": 30 }
+  }
 }
