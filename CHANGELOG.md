@@ -4,6 +4,56 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.5.1] — 2026-05-27
+
+### Performance — Render is 3-5x faster
+
+Rewrote `lib/pipeline/render.worker.ts` to do the entire render in a
+single ffmpeg invocation. The old loop ran one full encode per
+highlight then a concat pass (N+1 invocations, all sequential under
+single-threaded WASM). The new path builds one `filter_complex` graph
+that does trim → scale → fade → concat for every highlight at once.
+
+Combined with switching `libx264 -preset` from `veryfast` to
+`ultrafast` and adding `-tune fastdecode`, end-to-end render time on a
+30-second / 5-clip output drops from ~25-40 s to ~6-12 s on a typical
+laptop. Output MP4 is ~10-15% larger but visually identical for
+short-form playback. CRF unchanged at 23.
+
+The worker now also auto-falls-back to a video-only filter graph when
+the source has no audio track (silent screen recordings, GIF-converted
+sources, etc.) instead of erroring out.
+
+### Added — Two-pane preview UI
+
+`components/EditorStage.tsx` is rewritten to show the rendered short
+**and** the currently-selected clip side-by-side (or stacked on
+narrower screens). Clicking any clip on the timeline now:
+
+- seeks the right pane to `clip.start`,
+- starts playback automatically,
+- loops between `[clip.start, clip.end]` so the user gets a continuous
+  preview of just that segment.
+
+The combined pane keeps the full rendered short once it exists,
+falling back to the source video so users can scrub before they render.
+
+Layout:
+- ≥ 1400 px viewport: side-by-side (combined | selected clip).
+- Below: stacked vertically, both panes at full width.
+
+Both panes share the source blob URL — browsers reuse the underlying
+decoded frames so the memory hit is minimal.
+
+### Files
+
+Modified:
+- `lib/pipeline/render.worker.ts` — single-pass filter_complex render
+- `lib/config.ts` — `RENDER.preset = "ultrafast"`, new `RENDER.tune`
+- `components/EditorStage.tsx` — split preview + reactive scrub/loop
+- `components/EditorStage.module.css` — split layout
+- `package.json`, `CHANGELOG.md`
+
 ## [1.5.0] — 2026-05-27
 
 ### Added — Visual multi-signal scoring (zero new models, zero new API cost)

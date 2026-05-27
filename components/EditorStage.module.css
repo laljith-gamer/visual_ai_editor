@@ -5,6 +5,40 @@
   min-width: 0;
 }
 
+/* Two-pane preview surface (v1.5.1).
+ *
+ * Stacked by default — preserves a usable size on laptops where the
+ * main column is ~700-800 px wide. Side-by-side only on wider screens
+ * where each pane still has ≥ 600 px to render in. */
+.previewSplit {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+@media (min-width: 1400px) {
+  .previewSplit {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.paneHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 4px;
+  font-size: 12px;
+}
+
 .videoFrame {
   position: relative;
   width: 100%;
@@ -28,6 +62,7 @@
   display: grid;
   place-items: center;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.2));
+  padding: var(--space-4);
 }
 .placeholder p {
   margin: 4px 0;

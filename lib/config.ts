@@ -133,8 +133,12 @@ export const RENDER = {
   fps: 30,
   /** Constant Rate Factor for libx264. */
   crf: 23,
-  /** ffmpeg preset. */
-  preset: "veryfast",
+  /** libx264 preset. v1.5.1: "ultrafast" cuts encode time ~2x in WASM
+   *  for ~10-15% larger output. Acceptable trade-off for shorts. */
+  preset: "ultrafast",
+  /** libx264 tune. "fastdecode" lowers decoder cost on the destination
+   *  device — mobile playback is smoother on the rendered output. */
+  tune: "fastdecode",
   /** Audio bitrate. */
   audioBitrate: "128k",
   /** Maximum fade duration as a fraction of clip length. */
