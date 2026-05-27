@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { sessionOptions, type SessionData } from "@/lib/session/cookie";
 import { checkRateLimit } from "@/lib/ratelimit";
 import { hasAnyChatProvider, hasGemini, serverEnv } from "@/lib/env";
-import { geminiJson } from "@/lib/providers/gemini";
+import { geminiJson, isTransientError } from "@/lib/providers/gemini";
 import { groqJson } from "@/lib/providers/groq";
 import {
   PLANNER_SYSTEM_PROMPT,
@@ -88,9 +88,13 @@ export async function POST(req: NextRequest) {
         throw err;
       }
     } catch (e2) {
+      const transient = isTransientError(e2);
+      const message = transient
+        ? "The chat model is temporarily overloaded. Please try again in a few seconds."
+        : `Planner failed: ${(e2 as Error).message}`;
       return NextResponse.json(
-        { error: `Planner failed: ${(e2 as Error).message}` },
-        { status: 502 }
+        { error: message, transient },
+        { status: transient ? 503 : 502 }
       );
     }
   }
