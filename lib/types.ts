@@ -248,6 +248,10 @@ export type AgentResponse =
       planPatch?: PlanPatch;
       /** Conversational message to render in chat. */
       message: string;
+      /** v1.4.0 — user tier classified by the LLM from tone/vocabulary.
+       *  Persisted client-side and forwarded into the pipeline so the
+       *  same widen-or-narrow decision drives every selection step. */
+      userTier?: UserTier;
       /** Fields filled by inference; UI surfaces these as overridable chips. */
       inferred: InferredField[];
       /** Soft warnings (e.g., "fell back to Groq"). */
@@ -263,6 +267,8 @@ export type AgentResponse =
       /** Verbatim moment description from the user. */
       momentDescription: string;
       message: string;
+      /** v1.4.0 — see plan branch. */
+      userTier?: UserTier;
       inferred: InferredField[];
       warnings: string[];
       quotaWarning?: { usage: number; limit: number; fraction: number };
@@ -288,8 +294,10 @@ export type AgentResponse =
 // Adaptive selection (NEW in v1.3.0)
 // ---------------------------------------------------------------------
 
-/** v1.3.0 — distinguishes beginners from pros. Inferred from prompt
- *  characteristics in lib/plan/intent.ts → classifyUserTier. */
+/** v1.4.0 — distinguishes beginners from pros. The chat planner emits
+ *  this directly via structured JSON; no client- or server-side regex
+ *  classification anymore. Used by the pipeline to widen the candidate
+ *  net for novices and respect specificity for advanced users. */
 export type UserTier = "novice" | "advanced";
 
 /** v1.3.0 — frame-score distribution summary. Powers adaptive selection. */

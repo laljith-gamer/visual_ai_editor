@@ -20,10 +20,10 @@ interface Props {
 }
 
 const STARTER_PROMPTS = [
-  "Make a 30s vertical reel of the funniest moments",
-  "Find the most action-packed clip",
+  "Make a 30s vertical reel of the funniest bits",
   "60s YouTube short of the highlights",
-  "Find the part where ___"
+  "Find the moment where ___",
+  "Just give me the best parts"
 ];
 
 export function AssistantPanel({ onSubmit, onOpenClips, onRunPlan, isBusy }: Props) {

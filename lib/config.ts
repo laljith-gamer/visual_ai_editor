@@ -41,12 +41,10 @@ export const CONTACT_SHEET = {
   jpegQuality: 0.82
 } as const;
 
-/** Candidate-window detection (lib/pipeline/events.ts). */
+/** Candidate-window detection (lib/pipeline/events.ts).
+ *  All score thresholds are now adaptive — see ADAPT below. These are
+ *  only the structural knobs for grouping frames into windows. */
 export const EVENT_DETECTION = {
-  /** threshold = mean(scores) + N * stddev(scores) */
-  thresholdStddevMultiplier: 0.5,
-  /** Absolute floor below which we never accept a frame as "interesting". */
-  thresholdFloor: 0.15,
   /** Frames within this many sample-periods are treated as one window. */
   gapToleranceSamplePeriods: 2.5,
   /** Minimum window duration as a fraction of plan.minClipSeconds. */
@@ -96,50 +94,6 @@ export const PLAN_BOUNDS = {
   scenarioCount: { min: 1, max: 6 },
   styleCount: { min: 0, max: 8 },
   scenarioWeight: { min: 0, max: 5 }
-} as const;
-
-/** Inference heuristics (lib/plan/intent.ts). */
-export const INFERENCE_HEURISTICS = {
-  /** Aspect ratio cutoff: width/height < this → portrait. */
-  portraitAspectMax: 0.95,
-  /** Aspect ratio cutoff: width/height > this → landscape. */
-  landscapeAspectMin: 1.4,
-
-  /** Source-duration → target buckets. */
-  sourceLength: {
-    veryShortMaxSeconds: 60,
-    shortMaxSeconds: 5 * 60,
-    longMinSeconds: 30 * 60
-  },
-
-  /** Target seconds chosen by source length when user didn't say. */
-  inferredTarget: {
-    veryShortFractionOfSource: 0.4,
-    veryShortHardCap: 30,
-    short: 30,
-    medium: 45,
-    long: 60
-  },
-
-  /** Keyword → format / pacing hints. */
-  keywords: {
-    vertical: ["tiktok", "reel", "reels", "shorts", "youtube short", "instagram"],
-    horizontal: ["youtube long", "long form", "long-form", "presentation", "lecture", "webinar"],
-    square: ["instagram feed", "linkedin"],
-    sports: ["sports", "highlight", "highlights", "action", "goal", "dunk", "score", "match", "game", "play"],
-    talking: ["podcast", "interview", "talking head", "lecture", "talk", "speech", "vlog"]
-  },
-
-  /** Pacing applied when sports keywords matched. */
-  sportsOverrides: {
-    maxClipSeconds: 6,
-    sampleEverySeconds: 0.5
-  },
-  /** Pacing applied when talking-head keywords matched. */
-  talkingOverrides: {
-    maxClipSeconds: 12,
-    sampleEverySeconds: 2.0
-  }
 } as const;
 
 /** Moment-retrieval pipeline (lib/pipeline/moment.ts). */

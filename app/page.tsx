@@ -19,7 +19,6 @@ import { runTemporalPass } from "@/lib/pipeline/temporal";
 import { buildHighlights } from "@/lib/pipeline/highlights";
 import { buildMomentHighlight } from "@/lib/pipeline/moment";
 import { planSignaturePayload } from "@/lib/plan/normalize";
-import { classifyUserTier } from "@/lib/plan/intent";
 import {
   getPredictions,
   savePredictions,
@@ -73,6 +72,7 @@ export default function Home() {
   const setInferred = useEditorStore((s) => s.setInferred);
   const setPendingClarify = useEditorStore((s) => s.setPendingClarify);
   const setPendingExecution = useEditorStore((s) => s.setPendingExecution);
+  const setUserTier = useEditorStore((s) => s.setUserTier);
   const persist = useEditorStore((s) => s.persist);
 
   // ---- Track unread activity events while the drawer is closed ------------
@@ -144,30 +144,48 @@ export default function Home() {
           setStatus("temporal", "Finding the exact moment");
           setProgress(0.65);
           const t1 = Date.now();
-          const built = await buildMomentHighlight({
+          // v1.4.0: pass userTier through so moment-mode also gets the
+          // novice force-min fallback. The store value was set from the
+          // last agent response (or defaults to "novice").
+          const momentTier = useEditorStore.getState().userTier;
+          const buildResult = await buildMomentHighlight({
             videoBlob,
             frameScores,
             plan: activePlan,
             videoDuration: videoMeta.duration,
+            userTier: momentTier,
+            videoMeta,
             onProgress: (done, total) =>
               setProgress(0.65 + (done / Math.max(total, 1)) * 0.3)
           });
+          const built = buildResult.highlights;
           if (built.length === 0) {
             pushMessage({
               role: "assistant",
               content:
-                "I couldn't find a strong match for that moment. Try rewording it (describe what you'd see in the frame)."
+                "I couldn't lock onto that moment. Try describing what you'd actually see on screen \u2014 colours, action, who or what is doing what."
             });
             setStatus("ready", "No moment found");
             setProgress(0);
-            logSession.ai("moment.localized", { found: false }, "Moment not found");
+            logSession.ai(
+              "moment.localized",
+              { found: false, userTier: momentTier },
+              "Moment not found"
+            );
             return;
           }
           setHighlights(built);
-          pushMessage({
-            role: "assistant",
-            content: `Found it. Picked a ${(built[0].end - built[0].start).toFixed(1)}s clip.`
-          });
+          if (buildResult.weakOnly) {
+            pushMessage({
+              role: "assistant",
+              content: `Picked the closest match I could find (${(built[0].end - built[0].start).toFixed(1)}s) \u2014 confidence is on the low side. Reword the moment for a tighter pick.`
+            });
+          } else {
+            pushMessage({
+              role: "assistant",
+              content: `Found it. Picked a ${(built[0].end - built[0].start).toFixed(1)}s clip.`
+            });
+          }
           setStatus("ready", "Ready to render");
           setProgress(1);
           logSession.ai(
@@ -176,9 +194,11 @@ export default function Home() {
               found: true,
               start: built[0].start,
               end: built[0].end,
-              score: built[0].score
+              score: built[0].score,
+              weakOnly: buildResult.weakOnly,
+              userTier: momentTier
             },
-            `Moment localized: ${built[0].start.toFixed(1)}s \u2192 ${built[0].end.toFixed(1)}s`,
+            `Moment localized: ${built[0].start.toFixed(1)}s \u2192 ${built[0].end.toFixed(1)}s${buildResult.weakOnly ? " (low confidence)" : ""}`,
             Date.now() - t1
           );
           return;
@@ -188,18 +208,10 @@ export default function Home() {
         setStatus("temporal", "Finding event windows");
         setProgress(0.62);
 
-        // v1.3.0: classify the user tier from the latest prompt. The
-        // detector and the highlights builder use this to widen / narrow
-        // selection adaptively. Read from the store so this works for
-        // both the auto-run and the PlanPreview confirm path.
-        const allMsgs = useEditorStore.getState().messages;
-        const latestUserMsg = [...allMsgs]
-          .reverse()
-          .find((m) => m.role === "user");
-        const userTier = classifyUserTier(
-          latestUserMsg?.content ?? "",
-          allMsgs
-        );
+        // v1.4.0: tier comes straight from the LLM via the store (no
+        // server- or client-side regex). The detector and the highlights
+        // builder use this to widen / narrow selection adaptively.
+        const userTier = useEditorStore.getState().userTier;
 
         const detectionResult = detectCandidateWindows(
           frameScores,
@@ -277,10 +289,12 @@ export default function Home() {
         );
 
         if (built.length === 0) {
-          // Advanced tier with no usable matches — be honest.
+          // Only happens for advanced tier with no usable matches OR
+          // a pathological zero-frame scoring run. Be honest, but keep
+          // the copy human.
           pushMessage({
             role: "assistant",
-            content: `I couldn't find windows that strongly match (top score ${scoreStats.max.toFixed(2)}). Try broader scenarios, or describe a single moment ("find the part where ___").`
+            content: `Nothing in this video matched strongly enough (top frame score ${scoreStats.max.toFixed(2)}). Try broader scenarios, or describe a single moment ("find the part where ___").`
           });
           setStatus("ready", "No strong matches");
           setProgress(0);
@@ -290,7 +304,7 @@ export default function Home() {
         if (buildResult.weakOnly) {
           pushMessage({
             role: "assistant",
-            content: `Picked ${built.length} clip${built.length === 1 ? "" : "s"} but match confidence is low (top score ${scoreStats.max.toFixed(2)}). Try broader scenarios for stronger picks.`
+            content: `Picked ${built.length} clip${built.length === 1 ? "" : "s"} but match confidence is on the low side (top score ${scoreStats.max.toFixed(2)}). Try broader scenarios for stronger picks.`
           });
         } else {
           pushMessage({
@@ -440,6 +454,18 @@ export default function Home() {
           setQuota(data.quotaWarning);
         }
 
+        // ---- LLM-classified user tier (v1.4.0) ----------------------------
+        // The planner emits userTier directly from tone/vocabulary —
+        // there is no client-side classification anymore. Persist it so
+        // both the auto-run and the PlanPreview confirm path read the
+        // same value.
+        if (
+          (data.mode === "plan" || data.mode === "moment") &&
+          data.userTier
+        ) {
+          setUserTier(data.userTier);
+        }
+
         // ---- clarify mode -------------------------------------------------
         if (data.mode === "clarify") {
           setMode("clarify");
@@ -565,6 +591,7 @@ export default function Home() {
       setInferred,
       setPendingClarify,
       setPendingExecution,
+      setUserTier,
       runPipeline,
       logSession
     ]

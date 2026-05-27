@@ -4,6 +4,57 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.4.0] — 2026-05-27
+
+### Changed
+- **No more regex on the server.** The conversational planner now does
+  100% of intent understanding through the LLM:
+  - Mode classification (`plan` / `moment` / `clarify`) is emitted
+    directly in the structured JSON response.
+  - User tier (`novice` / `advanced`) is classified by the LLM from
+    tone and vocabulary, not from a keyword list — and is forwarded to
+    the client through `AgentResponse.userTier`.
+  - Format / duration / pacing inference moves entirely into the
+    planner prompt.
+- The system prompt is rewritten to a warmer, conversational voice and
+  no longer references heuristic hints, intent regexes, or any
+  internal keyword lists.
+
+### Fixed
+- **Moment mode no longer dead-ends novice users.** The
+  `buildMomentHighlight` pipeline now mirrors the v1.3.0 force-min
+  fallback from `buildHighlights`: when no candidate window crosses the
+  strong-match bar AND the user is novice tier, it returns the best
+  available window flagged `weakOnly: true` with `confidence: "low"`
+  instead of an empty array. Advanced users still get an honest
+  "no match" because their queries are typically narrow on purpose.
+- The chat copy that used to read *"I couldn't find any windows that
+  strongly match…"* is replaced with friendlier guidance that suggests
+  what the user could change. The "couldn't find" path now only fires
+  when the pipeline truly has nothing to show.
+
+### Removed
+- `lib/plan/intent.ts` and every regex it contained
+  (`MOMENT_PHRASES`, `ADVANCED_PATTERNS`, `REFINEMENT_PHRASES`,
+  `RESET_PHRASES`, `VAGUE_PHRASES`, `extractDurationSeconds`,
+  `extractFormat`, `inferFormatFromSource`, `inferTargetSecondsFromSource`,
+  `inferPacing`, `classifyUserTier`, `inferIntent`).
+- `INFERENCE_HEURISTICS` from `lib/config.ts` (keyword lists,
+  source-length buckets, sports/talking pacing overrides) — the LLM
+  now decides all of these per-turn from context.
+- Two unused fields on `EVENT_DETECTION` (`thresholdStddevMultiplier`,
+  `thresholdFloor`) that were superseded by the adaptive percentile
+  detector in v1.3.0 but never deleted.
+
+### Added
+- `userTier` slice in `useEditorStore` (defaults to `novice`),
+  populated from each agent response and read by every pipeline step.
+- `MomentBuildResult` interface (`{ highlights, weakOnly,
+  consideredCount, scoreStats }`) so the moment pipeline returns the
+  same shape as `buildHighlights`'s `BuildResult`.
+- New starter prompts in `AssistantPanel` that match the cleaned-up
+  intent semantics (no more bare-word "find" trap).
+
 ## [1.3.0] — 2026-05-27
 
 ### Added

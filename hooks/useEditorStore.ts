@@ -11,7 +11,8 @@ import type {
   JobStatus,
   PlanPatch,
   Session,
-  SessionMemory
+  SessionMemory,
+  UserTier
 } from "@/lib/types";
 import { newId } from "@/lib/util/id";
 import { GREETINGS } from "@/lib/config";
@@ -45,6 +46,12 @@ interface EditorState {
   mode: IntentMode | null;
   inferred: InferredField[];
   pendingClarify: { message: string; questions: ClarifyQuestion[] } | null;
+
+  /** v1.4.0 — user tier as classified by the LLM on the most recent
+   *  agent turn. Drives adaptive selection in events.ts / highlights.ts
+   *  / moment.ts. Defaults to "novice" so the wide-net behavior is in
+   *  effect even before the first chat turn. */
+  userTier: UserTier;
 
   /** Plan exists but the analysis pipeline has NOT yet been executed.
    *  Set after a fresh plan or scenarios-changed refinement so the UI can
@@ -97,6 +104,8 @@ interface EditorState {
     p: { message: string; questions: ClarifyQuestion[] } | null
   ) => void;
   setPendingExecution: (v: boolean) => void;
+  /** v1.4.0 — set after each agent turn that returned a tier. */
+  setUserTier: (tier: UserTier) => void;
 
   // History
   refreshHistory: () => Promise<void>;
@@ -124,6 +133,7 @@ function freshState() {
     inferred: [] as InferredField[],
     pendingClarify: null as EditorState["pendingClarify"],
     pendingExecution: false,
+    userTier: "novice" as UserTier,
     messages: [
       {
         id: newId("m"),
@@ -273,6 +283,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setInferred: (fields) => set({ inferred: fields }),
   setPendingClarify: (p) => set({ pendingClarify: p }),
   setPendingExecution: (v) => set({ pendingExecution: v }),
+  setUserTier: (tier) => set({ userTier: tier }),
 
   refreshHistory: async () => {
     const sessions = await listSessions();
@@ -300,6 +311,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       mode: s.mode ?? null,
       inferred: [],
       pendingClarify: null,
+      userTier: "novice",
       messages: s.messages,
       status: s.status,
       progress: s.progress,

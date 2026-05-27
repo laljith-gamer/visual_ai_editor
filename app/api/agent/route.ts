@@ -16,7 +16,6 @@ import {
 } from "@/lib/plan/prompt";
 import { normalizePlan, normalizePlanPatch } from "@/lib/plan/normalize";
 import { mergePlan } from "@/lib/plan/merge";
-import { inferIntent } from "@/lib/plan/intent";
 import { extractJsonObject } from "@/lib/util/safeJson";
 import { newId } from "@/lib/util/id";
 import { CONVERSATION, RATE_LIMITS } from "@/lib/config";
@@ -27,7 +26,8 @@ import type {
   EditPlan,
   InferredField,
   PlanPatch,
-  RateLimitDecision
+  RateLimitDecision,
+  UserTier
 } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -83,22 +83,16 @@ export async function POST(req: NextRequest) {
   const latest = messages[messages.length - 1];
   const userText = latest.content;
 
-  // ---- Heuristic hint (advisory) ------------------------------------
-  const hint = inferIntent({
-    userMessage: userText,
-    conversationHistory: messages.slice(0, -1),
-    currentPlan: body.currentPlan ?? null,
-    videoMeta: body.videoMeta,
-    memory: body.memory ?? { styles: [], keep: [], skip: [] }
-  });
-
+  // ---- Build the planner prompt -------------------------------------
+  // No regex / keyword heuristics on the server. The LLM does ALL intent
+  // understanding from the user's words + the structured context below.
   const userPrompt = buildPlannerUserPrompt({
     messages,
     currentPlan: body.currentPlan ?? null,
     videoMeta: body.videoMeta,
     memory: body.memory,
-    hint,
-    recentActivity: typeof body.recentActivity === "string" ? body.recentActivity : undefined
+    recentActivity:
+      typeof body.recentActivity === "string" ? body.recentActivity : undefined
   });
 
   // ---- Call LLM with circuit-aware fallback chain --------------------
@@ -146,6 +140,7 @@ export async function POST(req: NextRequest) {
   }
 
   const mode = parsed.mode;
+  const userTier = normalizeUserTier(parsed.userTier);
 
   // ---- CLARIFY -------------------------------------------------------
   if (mode === "clarify") {
@@ -201,6 +196,7 @@ export async function POST(req: NextRequest) {
             ? parsed.momentDescription.slice(0, 400)
             : userText,
         message: stringOr(parsed.message, "Locating the moment in your video."),
+        userTier,
         inferred,
         warnings,
         ...(quotaWarning ? { quotaWarning } : {})
@@ -212,6 +208,7 @@ export async function POST(req: NextRequest) {
       plan: buildResult.plan,
       planPatch: buildResult.planPatch,
       message: stringOr(parsed.message, "Plan ready."),
+      userTier,
       inferred,
       warnings,
       ...(quotaWarning ? { quotaWarning } : {})
@@ -345,6 +342,10 @@ function resolvePlan(args: {
   }
 
   return { ok: false, missing: ["plan"] };
+}
+
+function normalizeUserTier(raw: unknown): UserTier {
+  return raw === "advanced" ? "advanced" : "novice";
 }
 
 function normalizeInferred(raw: unknown): InferredField[] {
