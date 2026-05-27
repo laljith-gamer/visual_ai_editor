@@ -4,13 +4,36 @@
  *
  * Receives:
  *   { id, type: "init" }
- *   { id, type: "render", videoBytes: Uint8Array, highlights, format, transition }
+ *   { id, type: "render", videoBytes, highlights, format, transition }
  *
  * Emits progress events ({ id, progress }) during render and a final
  * { id, payload: Uint8Array } with the encoded MP4.
+ *
+ * All ffmpeg knobs (codec settings, output dimensions, fade timing) live
+ * in lib/config.ts → RENDER. Workers can't import non-relative paths, so
+ * we maintain a parallel local copy that mirrors lib/config.ts. If you
+ * change one, change the other.
  */
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { toBlobURL } from "@ffmpeg/util";
+
+// Mirror of lib/config.ts → RENDER. Web Workers can't reliably resolve the
+// "@/" alias because the bundler treats them as separate entry points; the
+// canonical config is in lib/config.ts and this duplicate is intentional.
+const RENDER = {
+  ffmpegCoreBaseUrl: "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd",
+  fps: 30,
+  crf: 23,
+  preset: "veryfast",
+  audioBitrate: "128k",
+  fadeFractionOfClip: 0.25,
+  fadeMaxSeconds: 0.4,
+  outputDimensions: {
+    vertical: { w: 1080, h: 1920 },
+    horizontal: { w: 1920, h: 1080 },
+    square: { w: 1080, h: 1080 }
+  }
+} as const;
 
 interface Highlight {
   id: string;
@@ -38,9 +61,7 @@ let initialized = false;
 
 async function init() {
   if (initialized) return;
-  // Load core from a CDN. Single source of truth so we don't need to commit
-  // ~30MB of binaries into the repo.
-  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
+  const baseURL = RENDER.ffmpegCoreBaseUrl;
   await ffmpeg.load({
     coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
     wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm")
@@ -80,7 +101,6 @@ async function renderShort(msg: RenderMessage): Promise<Uint8Array> {
   const inputName = msg.inputName.endsWith(".mp4") ? msg.inputName : "input.mp4";
   await ffmpeg.writeFile(inputName, msg.videoBytes);
 
-  // 1) Trim each highlight into its own segment with -c:v libx264, -c:a aac.
   const segmentNames: string[] = [];
   for (let i = 0; i < msg.highlights.length; i++) {
     const h = msg.highlights[i];
@@ -90,7 +110,6 @@ async function renderShort(msg: RenderMessage): Promise<Uint8Array> {
     segmentNames.push(segName);
   }
 
-  // 2) Build a concat list and concat with -c copy (we already encoded uniformly).
   const concatList = segmentNames.map((n) => `file '${n}'`).join("\n");
   await ffmpeg.writeFile("concat.txt", new TextEncoder().encode(concatList));
   await ffmpeg.exec([
@@ -110,7 +129,6 @@ async function renderShort(msg: RenderMessage): Promise<Uint8Array> {
 
   const data = (await ffmpeg.readFile("output.mp4")) as Uint8Array;
 
-  // Cleanup so subsequent renders don't blow memory.
   await Promise.all([
     ffmpeg.deleteFile(inputName).catch(() => {}),
     ffmpeg.deleteFile("concat.txt").catch(() => {}),
@@ -129,7 +147,7 @@ function buildSegmentArgs(
 ): string[] {
   const fade = msg.transition === "fade" || msg.transition === "crossfade";
   const dur = Math.max(0.1, h.end - h.start);
-  const fadeDur = Math.min(0.4, dur / 4);
+  const fadeDur = Math.min(RENDER.fadeMaxSeconds, dur * RENDER.fadeFractionOfClip);
 
   let vf = scaleFilterFor(msg.format);
   if (fade) {
@@ -150,31 +168,31 @@ function buildSegmentArgs(
     "-vf",
     vf,
     "-r",
-    "30",
+    String(RENDER.fps),
     "-c:v",
     "libx264",
     "-preset",
-    "veryfast",
+    RENDER.preset,
     "-crf",
-    "23",
+    String(RENDER.crf),
     "-pix_fmt",
     "yuv420p"
   ];
   if (af) args.push("-af", af);
-  args.push("-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", segName);
+  args.push("-c:a", "aac", "-b:a", RENDER.audioBitrate, "-movflags", "+faststart", segName);
   return args;
 }
 
 function scaleFilterFor(format: RenderMessage["format"]): string {
+  const d = RENDER.outputDimensions[format] ?? RENDER.outputDimensions.horizontal;
   switch (format) {
     case "vertical":
-      // Scale to fill 1080x1920, then pad/crop center.
-      return "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920";
     case "square":
-      return "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080";
+      // Fill, then center-crop.
+      return `scale=${d.w}:${d.h}:force_original_aspect_ratio=increase,crop=${d.w}:${d.h}`;
     case "horizontal":
     default:
-      return "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black";
+      return `scale=${d.w}:${d.h}:force_original_aspect_ratio=decrease,pad=${d.w}:${d.h}:(ow-iw)/2:(oh-ih)/2:black`;
   }
 }
 

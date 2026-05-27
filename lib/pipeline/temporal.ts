@@ -5,6 +5,7 @@ import type {
 } from "@/lib/types";
 import { sampleFrames, blobToBase64 } from "@/lib/pipeline/sample";
 import { buildContactSheet } from "@/lib/vision/contact-sheet";
+import { CONTACT_SHEET, HIGHLIGHT_SCORING } from "@/lib/config";
 
 interface RunArgs {
   videoBlob: Blob;
@@ -15,12 +16,12 @@ interface RunArgs {
 }
 
 /**
- * For each candidate window: build a 12-cell contact sheet, post it to
+ * For each candidate window: build a contact sheet, post it to
  * /api/vision/window, collect a keep_score in [0,1] and a short reason.
  *
  * On any per-window failure we synthesize a neutral verdict so the pipeline
- * still completes. The aggregate quality of the short is barely affected if
- * 1–2 windows fall back, but we never block on a single 5xx.
+ * still completes. Aggregate quality of the short is barely affected if 1–2
+ * windows fall back, but we never block on a single 5xx.
  */
 export async function runTemporalPass({
   videoBlob,
@@ -35,15 +36,20 @@ export async function runTemporalPass({
     const c = candidates[i];
     onProgress?.(i, candidates.length);
     try {
-      // Re-sample at finer granularity inside the window for the contact sheet.
+      const denseEvery = Math.max(
+        (c.end - c.start) / CONTACT_SHEET.framesPerWindow,
+        CONTACT_SHEET.minDenseSampleSeconds
+      );
       const dense = await sampleFrames(videoBlob, {
-        every: Math.max((c.end - c.start) / 12, 0.2),
-        width: 256,
-        maxFrames: 12,
+        every: denseEvery,
+        width: CONTACT_SHEET.cellWidth,
+        maxFrames: CONTACT_SHEET.framesPerWindow,
         signal
       });
-      // Filter to within the candidate range.
-      const within = dense.filter((f) => f.t >= c.start - 0.1 && f.t <= c.end + 0.1);
+      // Constrain to within the candidate range with a small padding.
+      const within = dense.filter(
+        (f) => f.t >= c.start - 0.1 && f.t <= c.end + 0.1
+      );
       if (within.length === 0) {
         verdicts.push(neutralVerdict(c));
         continue;
@@ -74,7 +80,10 @@ export async function runTemporalPass({
       verdicts.push({
         start: c.start,
         end: c.end,
-        keepScore: typeof json.keepScore === "number" ? clamp01(json.keepScore) : 0.5,
+        keepScore:
+          typeof json.keepScore === "number"
+            ? clamp01(json.keepScore)
+            : HIGHLIGHT_SCORING.neutralKeepScore,
         reason: json.reason ?? "Strong window",
         label: json.label
       });
@@ -91,7 +100,7 @@ function neutralVerdict(c: CandidateWindow): TemporalVerdict {
   return {
     start: c.start,
     end: c.end,
-    keepScore: 0.5,
+    keepScore: HIGHLIGHT_SCORING.neutralKeepScore,
     reason: "Vision verdict unavailable; defaulted to neutral"
   };
 }

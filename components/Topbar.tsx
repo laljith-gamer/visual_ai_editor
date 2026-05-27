@@ -3,15 +3,21 @@
 import { Sparkles, Plus } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { formatTime } from "@/lib/util/time";
+import { ModeBadge } from "./ModeBadge";
 import styles from "./Topbar.module.css";
 
 export function Topbar() {
   const status = useEditorStore((s) => s.status);
   const highlights = useEditorStore((s) => s.highlights);
   const plan = useEditorStore((s) => s.plan);
+  const mode = useEditorStore((s) => s.mode);
+  const inferred = useEditorStore((s) => s.inferred);
   const newSession = useEditorStore((s) => s.newSession);
 
-  const totalDuration = highlights.reduce((acc, h) => acc + (h.end - h.start), 0);
+  const totalDuration = highlights.reduce(
+    (acc, h) => acc + (h.end - h.start),
+    0
+  );
   const sampleCount = plan
     ? Math.floor((plan.targetShortSeconds * 4) / plan.sampleEverySeconds)
     : 0;
@@ -33,11 +39,24 @@ export function Topbar() {
           <Plus size={14} />
           New chat
         </button>
+        <ModeBadge mode={mode} />
+        {inferred.length > 0 && (
+          <span
+            className="pill info"
+            title={inferred.map((f) => `${f.field}: ${f.reason}`).join("\n")}
+          >
+            {inferred.length} inferred
+          </span>
+        )}
         {sampleCount > 0 && <span className="pill">{sampleCount} samples</span>}
         {totalDuration > 0 && (
-          <span className="pill accent">{formatTime(totalDuration)} selected</span>
+          <span className="pill accent">
+            {formatTime(totalDuration)} selected
+          </span>
         )}
-        <span className={`pill ${statusToClass(status)}`}>{labelStatus(status)}</span>
+        <span className={`pill ${statusToClass(status)}`}>
+          {labelStatus(status)}
+        </span>
       </div>
     </header>
   );

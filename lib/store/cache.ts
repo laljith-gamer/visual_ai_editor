@@ -1,5 +1,6 @@
 import type { PredictionsCacheEntry } from "@/lib/types";
 import { idbCache } from "./idb";
+import { CACHE } from "@/lib/config";
 
 function key(videoHash: string, signature: string): string {
   return `pred:${videoHash}:${signature}`;
@@ -19,7 +20,7 @@ export async function savePredictions(
 }
 
 /** Trim cache to the most recent N entries to bound IndexedDB usage. */
-export async function trimCache(maxEntries = 50): Promise<void> {
+export async function trimCache(maxEntries: number = CACHE.maxEntries): Promise<void> {
   const keys = (await idbCache.keys()).filter((k): k is string =>
     typeof k === "string" && k.startsWith("pred:")
   );

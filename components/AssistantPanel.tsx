@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Film, Download } from "lucide-react";
+import { Send, Film, Download, Sparkles } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { useShare } from "@/hooks/useShare";
 import { CapabilityBadge } from "./CapabilityBadge";
+import { QuickReplies } from "./QuickReplies";
+import type { ClarifyQuestion, InferredField } from "@/lib/types";
 import styles from "./AssistantPanel.module.css";
 
 interface Props {
@@ -13,9 +15,20 @@ interface Props {
   isBusy: boolean;
 }
 
+const STARTER_PROMPTS = [
+  "Make a 30s vertical reel of the funniest moments",
+  "Find the most action-packed clip",
+  "60s YouTube short of the highlights",
+  "Find the part where ___"
+];
+
 export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
   const messages = useEditorStore((s) => s.messages);
   const renderedBlob = useEditorStore((s) => s.renderedBlob);
+  const inferred = useEditorStore((s) => s.inferred);
+  const pendingClarify = useEditorStore((s) => s.pendingClarify);
+  const hasVideo = useEditorStore((s) => Boolean(s.videoBlob));
+
   const [text, setText] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const share = useShare();
@@ -24,14 +37,16 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, pendingClarify]);
 
-  async function send() {
-    const trimmed = text.trim();
+  async function send(value?: string) {
+    const trimmed = (value ?? text).trim();
     if (!trimmed || isBusy) return;
     setText("");
     await onSubmit(trimmed);
   }
+
+  const onlyOneAssistantMessage = messages.length === 1 && messages[0]?.role === "assistant";
 
   return (
     <aside className={`assistant ${styles.panel}`}>
@@ -52,12 +67,42 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
             <div className={styles.bubble}>{m.content}</div>
           </div>
         ))}
+
+        {/* Inferred-fields badges below the latest assistant bubble */}
+        {inferred.length > 0 && !pendingClarify && (
+          <InferredBadges fields={inferred} />
+        )}
+
+        {/* Clarify questions with quick-reply chips */}
+        {pendingClarify && (
+          <QuickReplies
+            questions={pendingClarify.questions}
+            disabled={isBusy}
+            onPick={(suggestion) => void send(suggestion)}
+          />
+        )}
+
+        {/* Empty-state starter chips when there's only the greeting */}
+        {onlyOneAssistantMessage && !pendingClarify && (
+          <StarterSuggestions
+            disabled={isBusy}
+            requireVideo={!hasVideo}
+            onPick={(s) => {
+              if (!hasVideo) return;
+              void send(s);
+            }}
+          />
+        )}
       </div>
 
       <div className={styles.composer}>
         <textarea
           className="textarea"
-          placeholder="Describe the short you want…"
+          placeholder={
+            pendingClarify
+              ? "Type a custom answer, or tap a suggestion above…"
+              : "Describe the short you want, or say \u201Cfind the part where…\u201D"
+          }
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -73,7 +118,7 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
           onClick={() => void send()}
           disabled={isBusy || !text.trim()}
         >
-          <Send size={14} /> {isBusy ? "Working…" : "Run"}
+          <Send size={14} /> {isBusy ? "Working\u2026" : "Run"}
         </button>
       </div>
 
@@ -99,4 +144,69 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
       </div>
     </aside>
   );
+}
+
+function InferredBadges({ fields }: { fields: InferredField[] }) {
+  return (
+    <div className={styles.inferred}>
+      <div className={styles.inferredHeader}>
+        <Sparkles size={11} />
+        <span>I assumed:</span>
+      </div>
+      <div className={styles.inferredList}>
+        {fields.map((f, i) => (
+          <span
+            key={`${f.field}-${i}`}
+            className={`pill ${styles.inferredPill}`}
+            title={f.reason}
+          >
+            <strong>{f.field}</strong>
+            <span className="faint"> = </span>
+            <span>{formatInferredValue(f.value)}</span>
+          </span>
+        ))}
+      </div>
+      <p className={styles.inferredHint}>
+        Tap a chip above to reply, or just say what you want changed.
+      </p>
+    </div>
+  );
+}
+
+function StarterSuggestions({
+  onPick,
+  disabled,
+  requireVideo
+}: {
+  onPick: (s: string) => void;
+  disabled?: boolean;
+  requireVideo: boolean;
+}) {
+  return (
+    <div className={styles.starter}>
+      <p className={styles.starterHint}>
+        {requireVideo
+          ? "Upload a video on the left first, then try one of these:"
+          : "Try one of these:"}
+      </p>
+      <div className={styles.starterRow}>
+        {STARTER_PROMPTS.map((p) => (
+          <button
+            key={p}
+            type="button"
+            className={`btn ${styles.starterChip}`}
+            onClick={() => onPick(p)}
+            disabled={disabled || requireVideo}
+          >
+            {p}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function formatInferredValue(v: ClarifyQuestion | InferredField["value"]): string {
+  if (Array.isArray(v)) return v.join(", ");
+  return String(v);
 }

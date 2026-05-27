@@ -3,13 +3,19 @@
 import { create } from "zustand";
 import type {
   ChatMessage,
+  ClarifyQuestion,
   EditPlan,
   Highlight,
+  InferredField,
+  IntentMode,
   JobStatus,
+  PlanPatch,
   Session,
   SessionMemory
 } from "@/lib/types";
 import { newId } from "@/lib/util/id";
+import { GREETINGS } from "@/lib/config";
+import { mergePlan } from "@/lib/plan/merge";
 import {
   deleteSession,
   listSessions,
@@ -35,6 +41,11 @@ interface EditorState {
   highlights: Highlight[];
   selectedClipId: string | null;
 
+  // Conversation state (NEW in v1.1.0)
+  mode: IntentMode | null;
+  inferred: InferredField[];
+  pendingClarify: { message: string; questions: ClarifyQuestion[] } | null;
+
   // Chat + status
   messages: ChatMessage[];
   status: JobStatus;
@@ -55,16 +66,30 @@ interface EditorState {
   newSession: () => void;
   setVideo: (blob: Blob, meta: Session["videoMeta"], hash: string) => void;
   clearVideo: () => void;
+
+  /** Replace the entire plan (fresh-plan path). */
   setPlan: (plan: EditPlan) => void;
+  /** Apply a partial patch to the current plan. Returns the new plan. */
+  applyPlanPatch: (patch: PlanPatch) => EditPlan | null;
+
   setHighlights: (h: Highlight[]) => void;
   updateHighlight: (id: string, patch: Partial<Highlight>) => void;
   removeHighlight: (id: string) => void;
   selectClip: (id: string | null) => void;
+
   pushMessage: (m: Omit<ChatMessage, "id" | "timestamp">) => ChatMessage;
+
   setStatus: (s: JobStatus, detail?: string) => void;
   setProgress: (p: number) => void;
   setMemory: (patch: Partial<SessionMemory>) => void;
   setRendered: (blob: Blob | null) => void;
+
+  /** Conversation-state setters (NEW). */
+  setMode: (mode: IntentMode | null) => void;
+  setInferred: (fields: InferredField[]) => void;
+  setPendingClarify: (
+    p: { message: string; questions: ClarifyQuestion[] } | null
+  ) => void;
 
   // History
   refreshHistory: () => Promise<void>;
@@ -88,12 +113,14 @@ function freshState() {
     plan: null,
     highlights: [],
     selectedClipId: null,
+    mode: null as IntentMode | null,
+    inferred: [] as InferredField[],
+    pendingClarify: null as EditorState["pendingClarify"],
     messages: [
       {
         id: newId("m"),
         role: "assistant" as const,
-        content:
-          "Hey — I'm your editor. Drop a video into the rail, then tell me what kind of short you want. I'll plan the cuts, score every frame, and assemble the highlight reel.",
+        content: GREETINGS.initial,
         timestamp: Date.now()
       }
     ],
@@ -103,6 +130,18 @@ function freshState() {
     memory: emptyMemory,
     renderedBlob: null,
     renderedUrl: null
+  };
+}
+
+/** Memory derived from a plan — duration/format/styles/avoid carry forward
+ *  silently across turns. */
+function memoryFromPlan(prev: SessionMemory, plan: EditPlan): SessionMemory {
+  return {
+    ...prev,
+    duration: plan.targetShortSeconds,
+    format: plan.format,
+    styles: Array.from(new Set([...(prev.styles || []), ...plan.styles])).slice(0, 8),
+    skip: Array.from(new Set([...(prev.skip || []), ...plan.avoid])).slice(0, 8)
   };
 }
 
@@ -134,6 +173,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   clearVideo: () => {
     const cur = get();
     if (cur.videoUrl) URL.revokeObjectURL(cur.videoUrl);
+    if (cur.renderedUrl) URL.revokeObjectURL(cur.renderedUrl);
     set({
       videoBlob: null,
       videoUrl: null,
@@ -141,32 +181,47 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       videoHash: undefined,
       highlights: [],
       plan: null,
+      mode: null,
+      inferred: [],
+      pendingClarify: null,
       renderedBlob: null,
-      renderedUrl: null
+      renderedUrl: null,
+      progress: 0,
+      status: "idle"
     });
   },
 
   setPlan: (plan) =>
     set((s) => ({
       plan,
-      memory: {
-        ...s.memory,
-        duration: plan.targetShortSeconds,
-        format: plan.format,
-        styles: Array.from(new Set([...s.memory.styles, ...plan.styles])).slice(0, 8),
-        skip: Array.from(new Set([...s.memory.skip, ...plan.avoid])).slice(0, 8)
-      },
+      memory: memoryFromPlan(s.memory, plan),
+      pendingClarify: null,
       updatedAt: Date.now()
     })),
 
+  applyPlanPatch: (patch) => {
+    const s = get();
+    if (!s.plan) return null;
+    const merged = mergePlan(s.plan, patch);
+    set({
+      plan: merged,
+      memory: memoryFromPlan(s.memory, merged),
+      pendingClarify: null,
+      updatedAt: Date.now()
+    });
+    return merged;
+  },
+
   setHighlights: (highlights) =>
-    set({ highlights, selectedClipId: highlights[0]?.id ?? null, updatedAt: Date.now() }),
+    set({
+      highlights,
+      selectedClipId: highlights[0]?.id ?? null,
+      updatedAt: Date.now()
+    }),
 
   updateHighlight: (id, patch) =>
     set((s) => ({
-      highlights: s.highlights.map((h) =>
-        h.id === id ? { ...h, ...patch } : h
-      ),
+      highlights: s.highlights.map((h) => (h.id === id ? { ...h, ...patch } : h)),
       updatedAt: Date.now()
     })),
 
@@ -205,6 +260,10 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     set({ renderedBlob: blob, renderedUrl: URL.createObjectURL(blob) });
   },
 
+  setMode: (mode) => set({ mode }),
+  setInferred: (fields) => set({ inferred: fields }),
+  setPendingClarify: (p) => set({ pendingClarify: p }),
+
   refreshHistory: async () => {
     const sessions = await listSessions();
     set({ history: sessions });
@@ -228,6 +287,9 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       plan: s.plan ?? null,
       highlights: s.highlights,
       selectedClipId: s.highlights[0]?.id ?? null,
+      mode: s.mode ?? null,
+      inferred: [],
+      pendingClarify: null,
       messages: s.messages,
       status: s.status,
       progress: s.progress,
@@ -256,8 +318,20 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       highlights: s.highlights,
       messages: s.messages,
       status: s.status,
-      progress: s.progress
+      progress: s.progress,
+      mode: s.mode ?? undefined
     });
     await s.refreshHistory();
   }
 }));
+
+/** Compare scenario id sets to decide whether the scoring cache is still valid. */
+export function scenariosChanged(a: EditPlan | null, b: EditPlan | null): boolean {
+  if (!a || !b) return true;
+  if (a.scenarios.length !== b.scenarios.length) return true;
+  const aIds = new Set(a.scenarios.map((s) => s.id));
+  for (const s of b.scenarios) if (!aIds.has(s.id)) return true;
+  if (a.sampleEverySeconds !== b.sampleEverySeconds) return true;
+  if (a.inferenceWidth !== b.inferenceWidth) return true;
+  return false;
+}

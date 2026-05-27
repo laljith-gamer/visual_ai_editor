@@ -1,6 +1,10 @@
 // =====================================================================
-// Shared types — single source of truth for the whole app
+// Shared types — single source of truth for the whole app.
 // =====================================================================
+
+// ---------------------------------------------------------------------
+// Plan & pipeline
+// ---------------------------------------------------------------------
 
 /** A user-described scenario the AI should look for in frames. */
 export interface Scenario {
@@ -14,7 +18,7 @@ export interface Scenario {
 export interface EditPlan {
   /** Vision targets the per-frame scorer matches against. */
   scenarios: Scenario[];
-  /** Map: scenario id → desired weight contribution (0–1). */
+  /** Map: scenario id → desired weight contribution (0–1, summing to ~1). */
   labelWeights: Record<string, number>;
   /** Final short duration target in seconds. */
   targetShortSeconds: number;
@@ -79,6 +83,10 @@ export interface Highlight {
   transition?: EditPlan["transition"];
 }
 
+// ---------------------------------------------------------------------
+// Session, memory, history
+// ---------------------------------------------------------------------
+
 /** Memory chips persisted across edits in a session. */
 export interface SessionMemory {
   duration?: number;
@@ -87,6 +95,19 @@ export interface SessionMemory {
   keep: string[];
   skip: string[];
 }
+
+/** Current pipeline phase (UI status pill). */
+export type JobStatus =
+  | "idle"
+  | "planning"
+  | "sampling"
+  | "scoring"
+  | "temporal"
+  | "selecting"
+  | "ready"
+  | "rendering"
+  | "completed"
+  | "failed";
 
 /** A full session row in IndexedDB. */
 export interface Session {
@@ -109,30 +130,25 @@ export interface Session {
   messages: ChatMessage[];
   status: JobStatus;
   progress: number;
+  /** Most recent intent the planner classified for this session. */
+  mode?: IntentMode;
 }
 
-export type JobStatus =
-  | "idle"
-  | "planning"
-  | "sampling"
-  | "scoring"
-  | "temporal"
-  | "selecting"
-  | "ready"
-  | "rendering"
-  | "completed"
-  | "failed";
+export type ChatRole = "user" | "assistant" | "system";
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: ChatRole;
   content: string;
   timestamp: number;
-  /** Attached structured data (a plan, an error, etc.) */
+  /** Attached structured data (a plan, an error, clarify question, etc.). */
   attachment?: Record<string, unknown>;
 }
 
-/** Capability tier detected at startup. */
+// ---------------------------------------------------------------------
+// Capability detection
+// ---------------------------------------------------------------------
+
 export type CapabilityTier = "high" | "mid" | "low";
 
 export interface Capability {
@@ -144,7 +160,10 @@ export interface Capability {
   isMobile: boolean;
 }
 
-/** Predictions cache entry (per video + scenario signature). */
+// ---------------------------------------------------------------------
+// Predictions cache
+// ---------------------------------------------------------------------
+
 export interface PredictionsCacheEntry {
   videoHash: string;
   scenarioSignature: string;
@@ -152,3 +171,97 @@ export interface PredictionsCacheEntry {
   frames: FrameScore[];
   createdAt: number;
 }
+
+// ---------------------------------------------------------------------
+// Conversational planner (NEW in v1.1.0)
+// ---------------------------------------------------------------------
+
+/** Three intent modes the planner can return. See
+ *  .kiro/steering/conversation-patterns.md for the full policy. */
+export type IntentMode = "plan" | "moment" | "clarify";
+
+/** A field the planner inferred from context (rather than the user
+ *  stating it explicitly). Surfaced in the UI so the user can override. */
+export interface InferredField {
+  /** "format" | "targetShortSeconds" | "scenarios" | etc. */
+  field: string;
+  /** The inferred value. Stringified for display when not primitive. */
+  value: string | number | boolean | string[];
+  /** Why we inferred it ("source video is portrait", "you said 'TikTok'"). */
+  reason: string;
+}
+
+/** A clarify-mode question with quick-reply suggestions. */
+export interface ClarifyQuestion {
+  /** Stable id for the question — "duration", "format", "topic", etc. */
+  id: string;
+  prompt: string;
+  /** Quick-reply chips. Always include at least one suggestion. */
+  suggestions: string[];
+  kind: "single-choice" | "free-text";
+}
+
+/** Partial plan returned by the LLM on refinement turns. */
+export type PlanPatch = Partial<EditPlan> & {
+  /** When provided, indicates how to merge `scenarios`:
+   *    "replace" → swap the whole array (default)
+   *    "append"  → add new ones, dedupe by id
+   *    "remove"  → drop matching ids */
+  scenariosOp?: "replace" | "append" | "remove";
+};
+
+/** What POST /api/agent expects in the request body. */
+export interface AgentRequest {
+  /** Full conversation history. The latest user turn is the last item. */
+  messages: ChatMessage[];
+  /** The currently-active plan, if any. Enables refinement turns. */
+  currentPlan?: EditPlan | null;
+  /** Source video metadata for inference. */
+  videoMeta?: {
+    duration: number;
+    width: number;
+    height: number;
+  };
+  /** Cross-turn memory chips. */
+  memory?: SessionMemory;
+}
+
+/** Discriminated union returned by POST /api/agent. */
+export type AgentResponse =
+  | {
+      mode: "plan";
+      /** Fully resolved plan (after any merge against currentPlan). */
+      plan: EditPlan;
+      /** Patch the planner emitted, if this was a refinement turn. */
+      planPatch?: PlanPatch;
+      /** Conversational message to render in chat. */
+      message: string;
+      /** Fields filled by inference; UI surfaces these as overridable chips. */
+      inferred: InferredField[];
+      /** Soft warnings (e.g., "fell back to Groq"). */
+      warnings: string[];
+    }
+  | {
+      mode: "moment";
+      /** Single-target plan with exactly one scenario. */
+      plan: EditPlan;
+      planPatch?: PlanPatch;
+      /** Verbatim moment description from the user. */
+      momentDescription: string;
+      message: string;
+      inferred: InferredField[];
+      warnings: string[];
+    }
+  | {
+      mode: "clarify";
+      message: string;
+      /** 1–2 questions to ask before running the pipeline. */
+      questions: ClarifyQuestion[];
+      warnings: string[];
+    }
+  | {
+      mode: "error";
+      error: string;
+      /** True when the error is transient (overload, network) and a retry helps. */
+      transient?: boolean;
+    };

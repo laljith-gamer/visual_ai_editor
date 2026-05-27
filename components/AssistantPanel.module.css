@@ -55,6 +55,68 @@
   border-color: rgba(99, 216, 149, 0.4);
 }
 
+/* Inferred-fields block */
+.inferred {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-3);
+  border-radius: var(--radius-card);
+  background: rgba(169, 147, 255, 0.06);
+  border: 1px solid rgba(169, 147, 255, 0.25);
+}
+.inferredHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--violet);
+}
+.inferredList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.inferredPill {
+  border-color: rgba(169, 147, 255, 0.4);
+  color: var(--text);
+  background: rgba(169, 147, 255, 0.08);
+}
+.inferredHint {
+  margin: 2px 0 0 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* Starter suggestions */
+.starter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-3);
+  border-radius: var(--radius-card);
+  background: rgba(99, 216, 149, 0.04);
+  border: 1px dashed rgba(99, 216, 149, 0.25);
+}
+.starterHint {
+  margin: 0 0 4px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.starterRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.starterChip {
+  padding: 6px 10px;
+  height: auto;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
 .composer {
   display: flex;
   flex-direction: column;

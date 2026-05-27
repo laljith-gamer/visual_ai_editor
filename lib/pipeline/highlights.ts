@@ -6,6 +6,7 @@ import type {
 } from "@/lib/types";
 import { newId } from "@/lib/util/id";
 import { clamp } from "@/lib/util/time";
+import { HIGHLIGHT_SCORING } from "@/lib/config";
 
 interface BuildArgs {
   candidates: CandidateWindow[];
@@ -16,8 +17,9 @@ interface BuildArgs {
 
 /**
  * Combine candidate windows with their temporal verdicts and pick the final
- * highlight set. Port of build_highlights from the old Python processor,
- * preserving the bucketed selection + length bonus + transition application.
+ * highlight set. All weights and selection knobs live in lib/config.ts →
+ * HIGHLIGHT_SCORING. Pipeline behaviour is therefore tunable without code
+ * changes.
  */
 export function buildHighlights({
   candidates,
@@ -28,28 +30,27 @@ export function buildHighlights({
   if (candidates.length === 0) return [];
 
   const verdictMap = new Map<string, TemporalVerdict>();
-  for (const v of verdicts) verdictMap.set(`${v.start.toFixed(2)}:${v.end.toFixed(2)}`, v);
+  for (const v of verdicts) {
+    verdictMap.set(`${v.start.toFixed(2)}:${v.end.toFixed(2)}`, v);
+  }
 
-  // Score each candidate by: 0.55 * vision_score + 0.30 * keep_score + 0.15 * length_bonus
+  const w = HIGHLIGHT_SCORING.weights;
   const scored = candidates
     .map((c) => {
       const v = verdictMap.get(`${c.start.toFixed(2)}:${c.end.toFixed(2)}`);
-      const keep = v?.keepScore ?? 0.5;
+      const keep = v?.keepScore ?? HIGHLIGHT_SCORING.neutralKeepScore;
       const dur = c.end - c.start;
       const lengthBonus = clamp(dur / Math.max(plan.maxClipSeconds, 1), 0, 1);
-      const score = 0.55 * c.meanScore + 0.3 * keep + 0.15 * lengthBonus;
-      return {
-        candidate: c,
-        verdict: v,
-        score,
-        duration: dur
-      };
+      const score =
+        w.perFrameMean * c.meanScore +
+        w.temporalKeep * keep +
+        w.lengthBonus * lengthBonus;
+      return { candidate: c, verdict: v, score, duration: dur };
     })
     .filter((s) => s.duration >= plan.minClipSeconds);
 
   if (scored.length === 0) return [];
 
-  // Selection
   const targetSeconds = plan.targetShortSeconds;
   const selected: typeof scored = [];
 
@@ -64,12 +65,18 @@ export function buildHighlights({
     }
   } else {
     // Balanced: bucket by timeline position so we don't pick everything from
-    // one chunk of the video.
+    // one stretch of the video.
     const desiredCount = Math.max(
-      3,
-      Math.ceil(targetSeconds / Math.max(plan.maxClipSeconds * 0.6, 2))
+      HIGHLIGHT_SCORING.minDesiredClipCount,
+      Math.ceil(
+        targetSeconds /
+          Math.max(plan.maxClipSeconds * 0.6, HIGHLIGHT_SCORING.minBucketSeconds)
+      )
     );
-    const bucketSeconds = Math.max(videoDuration / desiredCount, 1);
+    const bucketSeconds = Math.max(
+      videoDuration / desiredCount,
+      HIGHLIGHT_SCORING.minBucketSeconds
+    );
     const buckets = new Map<number, typeof scored>();
     for (const s of scored) {
       const b = Math.floor(s.candidate.start / bucketSeconds);
@@ -83,7 +90,7 @@ export function buildHighlights({
 
     let total = 0;
     let round = 0;
-    while (total < targetSeconds && round < 4) {
+    while (total < targetSeconds && round < HIGHLIGHT_SCORING.maxSelectionRounds) {
       let progressed = false;
       for (const list of sortedBuckets) {
         const pick = list.shift();

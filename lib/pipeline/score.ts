@@ -2,6 +2,7 @@ import type { EditPlan, FrameScore } from "@/lib/types";
 import type { SampledFrame } from "@/lib/pipeline/sample";
 import { blobToBase64 } from "@/lib/pipeline/sample";
 import { aggregateFrameScore, toFrameScores } from "@/lib/vision/score-local";
+import { CLOUD_FRAME } from "@/lib/config";
 
 interface ScoreArgs {
   frames: SampledFrame[];
@@ -13,11 +14,8 @@ interface ScoreArgs {
 
 /**
  * Per-frame scoring orchestrator. Routes to the local SigLIP worker or to
- * the cloud fallback Route Handler based on the chosen tier.
- *
- * The worker pattern: we lazily spin up a single Web Worker, post every
- * frame's blob to it, and aggregate results. The worker runs SigLIP via
- * @huggingface/transformers in WebGPU mode (falls back internally to wasm).
+ * the cloud fallback Route Handler based on the chosen tier. All knobs in
+ * lib/config.ts.
  */
 export async function scoreFrames({
   frames,
@@ -52,7 +50,6 @@ async function scoreLocal({
   const worker = getWorker();
   const out: FrameScore[] = [];
 
-  // Initialize the worker with the scenario list.
   await postToWorker(worker, {
     type: "init",
     labels: plan.scenarios.map((s) => s.prompt),
@@ -79,10 +76,9 @@ async function scoreCloud({
   signal,
   onProgress
 }: Omit<ScoreArgs, "tier">): Promise<FrameScore[]> {
-  // Cloud path: batch frames into groups of 8 contact-sheet calls to the
-  // /api/vision/frame endpoint to stay well within Gemini per-minute caps.
+  // Cloud path: batch frames to /api/vision/frame to stay within Gemini RPM.
   const out: Array<{ t: number; labels: Record<string, number> }> = [];
-  const batchSize = 8;
+  const batchSize = CLOUD_FRAME.batchSize;
   for (let i = 0; i < frames.length; i += batchSize) {
     if (signal?.aborted) throw new DOMException("aborted", "AbortError");
     const batch = frames.slice(i, i + batchSize);
@@ -102,7 +98,6 @@ async function scoreCloud({
       signal
     });
     if (!resp.ok) {
-      // Soft-fail: emit zero-scores for this batch so the pipeline continues.
       for (const f of batch) out.push({ t: f.t, labels: {} });
     } else {
       const json = (await resp.json()) as {

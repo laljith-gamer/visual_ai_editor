@@ -1,18 +1,26 @@
 import type { SampledFrame } from "@/lib/pipeline/sample";
+import { CONTACT_SHEET } from "@/lib/config";
 
 /**
- * Build a single image (4 columns × 3 rows by default) from up to 12 frames.
- * The temporal pass gets ONE Gemini call instead of 12, dramatically cutting
+ * Build a single image from up to N frames. Default grid (4×3 = 12 cells)
+ * is configured in lib/config.ts → CONTACT_SHEET.
+ *
+ * The temporal pass gets ONE Gemini call instead of N, dramatically cutting
  * cost while still letting the VLM see motion across the window.
  */
 export async function buildContactSheet(
   frames: SampledFrame[],
   options: { columns?: number; rows?: number; cellWidth?: number } = {}
 ): Promise<Blob> {
-  const cols = options.columns ?? 4;
-  const rows = options.rows ?? 3;
-  const cellW = options.cellWidth ?? 256;
-  const cellH = Math.round(cellW * (frames[0]?.height / Math.max(frames[0]?.width || 1, 1) || 0.5625));
+  const cols = options.columns ?? CONTACT_SHEET.cols;
+  const rows = options.rows ?? CONTACT_SHEET.rows;
+  const cellW = options.cellWidth ?? CONTACT_SHEET.cellWidth;
+
+  const aspect =
+    frames[0]?.height && frames[0]?.width
+      ? frames[0].height / Math.max(frames[0].width, 1)
+      : 9 / 16;
+  const cellH = Math.max(2, Math.round(cellW * aspect));
 
   const sheetW = cellW * cols;
   const sheetH = cellH * rows;
@@ -35,7 +43,7 @@ export async function buildContactSheet(
       const x = c * cellW;
       const y = r * cellH;
       ctx.drawImage(bitmap, x, y, cellW, cellH);
-      // overlay timestamp for the LLM to reference
+      // Overlay timestamp so the VLM can refer to specific frames.
       ctx.fillStyle = "rgba(0,0,0,0.55)";
       ctx.fillRect(x, y + cellH - 16, 60, 16);
       ctx.fillStyle = "#f4f2ed";
@@ -46,5 +54,8 @@ export async function buildContactSheet(
     }
   }
 
-  return await canvas.convertToBlob({ type: "image/jpeg", quality: 0.82 });
+  return await canvas.convertToBlob({
+    type: "image/jpeg",
+    quality: CONTACT_SHEET.jpegQuality
+  });
 }

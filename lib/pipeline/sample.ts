@@ -1,12 +1,9 @@
 /**
  * Frame sampling using mediabunny. Returns evenly-spaced JPEG thumbnails
- * downscaled to inferenceWidth.
- *
- * Notes on the mediabunny API surface: this wrapper assumes the package
- * exposes Input/BlobSource/CanvasSink. If your version differs, adjust the
- * imports accordingly — the rest of the pipeline only depends on the shape
- * of the output (SampledFrame[]).
+ * downscaled to inferenceWidth. JPEG quality + caps live in lib/config.ts →
+ * SAMPLE_DEFAULTS.
  */
+import { SAMPLE_DEFAULTS } from "@/lib/config";
 
 export interface SampledFrame {
   /** Timestamp in seconds. */
@@ -114,7 +111,7 @@ export async function sampleFrames(
     const t = timestamps[i];
     const result = await sink.getCanvas(t);
     if (!result) continue;
-    const jpeg = await canvasToJpeg(result.canvas, 0.82);
+    const jpeg = await canvasToJpeg(result.canvas, SAMPLE_DEFAULTS.jpegQuality);
     out.push({ t: result.timestamp, blob: jpeg, width, height });
     opts.onProgress?.((i + 1) / timestamps.length);
   }
