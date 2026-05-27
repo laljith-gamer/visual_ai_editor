@@ -18,6 +18,7 @@ import { detectCandidateWindows } from "@/lib/pipeline/events";
 import { runTemporalPass } from "@/lib/pipeline/temporal";
 import { buildHighlights } from "@/lib/pipeline/highlights";
 import { buildMomentHighlight } from "@/lib/pipeline/moment";
+import { buildExtractedHighlight } from "@/lib/pipeline/extract";
 import { planSignaturePayload } from "@/lib/plan/normalize";
 import {
   getPredictions,
@@ -138,6 +139,17 @@ export default function Home() {
             "Cache miss — fresh sample+score pass"
           );
           frameScores = await sampleAndScore(activePlan);
+        }
+
+        // v1.5.0: when the plan carries an extractRange, narrow the scored
+        // frames to that range before selection. Cached frames cover the
+        // full video, so this is a post-filter on cache hits and a
+        // pre-filter on cache misses (sampleAndScore reads the range too).
+        if (activePlan.extractRange) {
+          const r = activePlan.extractRange;
+          const start = r.kind === "last" ? Math.max(0, videoMeta.duration - (r.endSeconds - r.startSeconds)) : r.startSeconds;
+          const end = r.kind === "last" ? videoMeta.duration : r.endSeconds;
+          frameScores = frameScores.filter((f) => f.t >= start && f.t < end);
         }
 
         if (mode === "moment") {
@@ -337,9 +349,28 @@ export default function Home() {
         }
         setStatus("sampling", "Extracting frames");
         const tA = Date.now();
+        // v1.5.0: pass the plan's extractRange so we don't decode frames
+        // outside the user-asked range. Saves ~80% of work on a 10-min
+        // source when the prompt was "first 1 min".
+        const range = p.extractRange
+          ? p.extractRange.kind === "last"
+            ? {
+                startSeconds: Math.max(
+                  0,
+                  (videoMeta?.duration ?? 0) -
+                    (p.extractRange.endSeconds - p.extractRange.startSeconds)
+                ),
+                endSeconds: videoMeta?.duration ?? 0
+              }
+            : {
+                startSeconds: p.extractRange.startSeconds,
+                endSeconds: p.extractRange.endSeconds
+              }
+          : undefined;
         const frames = await sampleFrames(videoBlob, {
           every: p.sampleEverySeconds,
           width: p.inferenceWidth,
+          range,
           onProgress: (pp) => setProgress(0.05 + pp * 0.2)
         });
         logSession.ai(
@@ -464,6 +495,58 @@ export default function Home() {
           data.userTier
         ) {
           setUserTier(data.userTier);
+        }
+
+        // ---- EXTRACT mode (v1.5.0) ----------------------------------------
+        // Verbatim time slice. No scoring, no Gemini vision call. The
+        // pipeline emits exactly one Highlight for the requested range.
+        if (data.mode === "extract") {
+          if (!videoBlob || !videoHash || !videoMeta) {
+            pushMessage({
+              role: "assistant",
+              content: "Upload a video first, then I can grab that slice."
+            });
+            setStatus("idle", "Awaiting video");
+            setProgress(0);
+            return;
+          }
+          setMode("extract");
+          setInferred(data.inferred ?? []);
+          setPendingClarify(null);
+          pushMessage({
+            role: "assistant",
+            content: data.message || "Grabbing that slice."
+          });
+          const built = buildExtractedHighlight({
+            range: data.extractRange,
+            videoDuration: videoMeta.duration,
+            transition: "none"
+          });
+          if (built.length === 0) {
+            pushMessage({
+              role: "assistant",
+              content:
+                "That range doesn't fit inside this video. Try a different start or end."
+            });
+            setStatus("ready", "Range out of bounds");
+            setProgress(0);
+            return;
+          }
+          setHighlights(built);
+          setStatus("ready", "Ready to render");
+          setProgress(1);
+          logSession.ai(
+            "extract.applied",
+            {
+              kind: data.extractRange.kind,
+              start: built[0].start,
+              end: built[0].end,
+              durationSec: built[0].end - built[0].start
+            },
+            `Extracted ${built[0].start.toFixed(1)}s \u2192 ${built[0].end.toFixed(1)}s verbatim`,
+            plannerMs
+          );
+          return;
         }
 
         // ---- clarify mode -------------------------------------------------

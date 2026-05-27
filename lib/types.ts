@@ -39,18 +39,56 @@ export interface EditPlan {
   /** Sampling parameters. */
   sampleEverySeconds: number;
   inferenceWidth: number;
+  /** v1.5.0 — multi-signal fusion weights. Optional in older sessions;
+   *  defaults applied in normalizePlan when missing. */
+  signals?: SignalWeights;
+  /** v1.5.0 — when present, the pipeline filters frames to this range
+   *  BEFORE scoring + selection. Used for "first 2 min and pick best". */
+  extractRange?: ExtractRange;
   /** Optional human-readable explanation from the planner. */
   rationale?: string;
 }
 
-/** A scored frame from the per-frame pass. */
+/** A scored frame from the per-frame pass.
+ *  v1.5.0: `score` is now the COMPOSITE score (semantic + motion + saliency
+ *  fused via plan.signals weights). The individual signals are kept on
+ *  the frame so the UI / activity log can show why a frame ranked. */
 export interface FrameScore {
   /** Frame timestamp in seconds. */
   t: number;
-  /** Aggregate score after applying labelWeights. */
+  /** Composite score driving selection. 0..1. */
   score: number;
+  /** SigLIP-derived semantic match against scenarios. 0..1. */
+  semantic?: number;
+  /** Frame-to-frame pixel-difference (motion / scene change). 0..1. */
+  motion?: number;
+  /** Histogram-entropy visual saliency. 0..1. */
+  saliency?: number;
   /** Per-label raw scores (debug + UI). */
   labels: Record<string, number>;
+}
+
+/** v1.5.0 — multi-signal weights the LLM emits per turn. The pipeline
+ *  fuses semantic + motion + saliency using these. When `semantic` is 0
+ *  the pipeline skips the (expensive) SigLIP pass entirely. */
+export interface SignalWeights {
+  /** SigLIP semantic match. 0 → skip SigLIP. */
+  semantic: number;
+  /** Frame-to-frame motion / scene change. */
+  motion: number;
+  /** Histogram-entropy visual saliency. */
+  saliency: number;
+}
+
+/** v1.5.0 — time-bound extract. Either a verbatim slice (mode="extract")
+ *  or a filter applied before scoring (`EditPlan.extractRange`). */
+export interface ExtractRange {
+  /** "first": start at 0; "last": resolve from videoDuration; "absolute": as given. */
+  kind: "first" | "last" | "absolute";
+  startSeconds: number;
+  endSeconds: number;
+  /** Verbatim user phrasing — kept for the activity log. */
+  spoken?: string;
 }
 
 /** A candidate window detected from contiguous high-score frames. */
@@ -180,9 +218,10 @@ export interface PredictionsCacheEntry {
 // Conversational planner (NEW in v1.1.0)
 // ---------------------------------------------------------------------
 
-/** Three intent modes the planner can return. See
- *  .kiro/steering/conversation-patterns.md for the full policy. */
-export type IntentMode = "plan" | "moment" | "clarify";
+/** Intent modes the planner can return. v1.5.0 added "extract" for
+ *  time-bound verbatim slices ("first 2 min", "last 90 seconds",
+ *  "from 0:30 to 1:45"). */
+export type IntentMode = "plan" | "moment" | "extract" | "clarify";
 
 /** A field the planner inferred from context (rather than the user
  *  stating it explicitly). Surfaced in the UI so the user can override. */
@@ -272,6 +311,19 @@ export type AgentResponse =
       inferred: InferredField[];
       warnings: string[];
       quotaWarning?: { usage: number; limit: number; fraction: number };
+    }
+  | {
+      mode: "extract";
+      /** Verbatim time slice — the pipeline emits exactly one Highlight
+       *  for this range without sampling, scoring, or hitting the
+       *  cloud at all. v1.5.0. */
+      extractRange: ExtractRange;
+      message: string;
+      inferred: InferredField[];
+      warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
+      /** Optional plan that may carry across to follow-up turns. */
+      plan?: EditPlan;
     }
   | {
       mode: "clarify";

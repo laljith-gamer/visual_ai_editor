@@ -1,8 +1,8 @@
-import type { EditPlan, FrameScore } from "@/lib/types";
+import type { EditPlan, FrameScore, SignalWeights } from "@/lib/types";
 import type { SampledFrame } from "@/lib/pipeline/sample";
 import { blobToBase64 } from "@/lib/pipeline/sample";
-import { aggregateFrameScore, toFrameScores } from "@/lib/vision/score-local";
-import { CLOUD_FRAME } from "@/lib/config";
+import { aggregateFrameScore } from "@/lib/vision/score-local";
+import { CLOUD_FRAME, SIGNAL_DEFAULTS } from "@/lib/config";
 
 interface ScoreArgs {
   frames: SampledFrame[];
@@ -13,9 +13,20 @@ interface ScoreArgs {
 }
 
 /**
- * Per-frame scoring orchestrator. Routes to the local SigLIP worker or to
- * the cloud fallback Route Handler based on the chosen tier. All knobs in
- * lib/config.ts.
+ * Per-frame scoring orchestrator. v1.5.0 routes by signal weights:
+ *
+ *   - if plan.signals.semantic > 0 AND scenarios.length > 0 → run SigLIP
+ *     (locally or via the cloud fallback) for the semantic score.
+ *   - if plan.signals.semantic === 0 OR scenarios is empty → skip SigLIP
+ *     entirely. The composite score falls back to motion + saliency only,
+ *     which is enough to rank "best part" / "interesting bits" queries
+ *     without paying the SigLIP cost.
+ *
+ * The composite score that drives selection is:
+ *   score = w_sem · semantic + w_mot · motion + w_sal · saliency
+ *
+ * Each component is already 0..1; weights normalize so the result is too.
+ * All knobs in lib/config.ts → SIGNAL_DEFAULTS.
  */
 export async function scoreFrames({
   frames,
@@ -24,10 +35,25 @@ export async function scoreFrames({
   signal,
   onProgress
 }: ScoreArgs): Promise<FrameScore[]> {
-  if (tier === "siglip-local") {
-    return scoreLocal({ frames, plan, signal, onProgress });
+  const weights = resolveSignalWeights(plan);
+  const needsSemantic = weights.semantic > 0 && plan.scenarios.length > 0;
+
+  if (!needsSemantic) {
+    // Visual-interest-only path: motion + saliency from sampling, no model.
+    return frames.map<FrameScore>((f) => ({
+      t: f.t,
+      labels: {},
+      semantic: 0,
+      motion: f.motion,
+      saliency: f.saliency,
+      score: composite(0, f.motion, f.saliency, weights)
+    }));
   }
-  return scoreCloud({ frames, plan, signal, onProgress });
+
+  if (tier === "siglip-local") {
+    return scoreLocalWithCompose({ frames, plan, weights, signal, onProgress });
+  }
+  return scoreCloudWithCompose({ frames, plan, weights, signal, onProgress });
 }
 
 let workerSingleton: Worker | null = null;
@@ -41,12 +67,21 @@ function getWorker(): Worker {
   return workerSingleton;
 }
 
-async function scoreLocal({
+interface ComposeArgs {
+  frames: SampledFrame[];
+  plan: EditPlan;
+  weights: SignalWeights;
+  signal?: AbortSignal;
+  onProgress?: (done: number, total: number) => void;
+}
+
+async function scoreLocalWithCompose({
   frames,
   plan,
+  weights,
   signal,
   onProgress
-}: Omit<ScoreArgs, "tier">): Promise<FrameScore[]> {
+}: ComposeArgs): Promise<FrameScore[]> {
   const worker = getWorker();
   const out: FrameScore[] = [];
 
@@ -64,20 +99,29 @@ async function scoreLocal({
       blob: f.blob,
       t: f.t
     });
-    out.push({ t: f.t, labels, score: aggregateFrameScore(labels, plan) });
+    const semantic = aggregateFrameScore(labels, plan);
+    out.push({
+      t: f.t,
+      labels,
+      semantic,
+      motion: f.motion,
+      saliency: f.saliency,
+      score: composite(semantic, f.motion, f.saliency, weights)
+    });
     onProgress?.(i + 1, frames.length);
   }
   return out;
 }
 
-async function scoreCloud({
+async function scoreCloudWithCompose({
   frames,
   plan,
+  weights,
   signal,
   onProgress
-}: Omit<ScoreArgs, "tier">): Promise<FrameScore[]> {
+}: ComposeArgs): Promise<FrameScore[]> {
   // Cloud path: batch frames to /api/vision/frame to stay within Gemini RPM.
-  const out: Array<{ t: number; labels: Record<string, number> }> = [];
+  const cloudResults: Array<{ t: number; labels: Record<string, number> }> = [];
   const batchSize = CLOUD_FRAME.batchSize;
   for (let i = 0; i < frames.length; i += batchSize) {
     if (signal?.aborted) throw new DOMException("aborted", "AbortError");
@@ -98,16 +142,61 @@ async function scoreCloud({
       signal
     });
     if (!resp.ok) {
-      for (const f of batch) out.push({ t: f.t, labels: {} });
+      for (const f of batch) cloudResults.push({ t: f.t, labels: {} });
     } else {
       const json = (await resp.json()) as {
         results: Array<{ t: number; labels: Record<string, number> }>;
       };
-      out.push(...(json.results ?? []));
+      cloudResults.push(...(json.results ?? []));
     }
     onProgress?.(Math.min(i + batchSize, frames.length), frames.length);
   }
-  return toFrameScores(out, plan);
+  // Match cloud results back to sampled frames so we keep motion + saliency.
+  const semanticByT = new Map<number, Record<string, number>>();
+  for (const r of cloudResults) semanticByT.set(round2(r.t), r.labels);
+  return frames.map<FrameScore>((f) => {
+    const labels = semanticByT.get(round2(f.t)) ?? {};
+    const semantic = aggregateFrameScore(labels, plan);
+    return {
+      t: f.t,
+      labels,
+      semantic,
+      motion: f.motion,
+      saliency: f.saliency,
+      score: composite(semantic, f.motion, f.saliency, weights)
+    };
+  });
+}
+
+// ---------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------
+
+function resolveSignalWeights(plan: EditPlan): SignalWeights {
+  if (plan.signals) {
+    const w = plan.signals;
+    const sum = w.semantic + w.motion + w.saliency;
+    if (sum > 0) {
+      return {
+        semantic: w.semantic / sum,
+        motion: w.motion / sum,
+        saliency: w.saliency / sum
+      };
+    }
+  }
+  // Fallback: pick a profile based on whether scenarios are concrete.
+  if (plan.scenarios.length === 0) return SIGNAL_DEFAULTS.visualInterest;
+  return SIGNAL_DEFAULTS.scenarioHeavy;
+}
+
+function composite(
+  semantic: number,
+  motion: number,
+  saliency: number,
+  w: SignalWeights
+): number {
+  const score = w.semantic * semantic + w.motion * motion + w.saliency * saliency;
+  return Math.max(0, Math.min(1, score));
 }
 
 interface WorkerRequest {
@@ -130,4 +219,8 @@ function postToWorker<T = unknown>(worker: Worker, msg: WorkerRequest): Promise<
     worker.addEventListener("message", onMsg);
     worker.postMessage({ ...msg, id });
   });
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }

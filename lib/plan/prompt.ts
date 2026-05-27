@@ -38,7 +38,7 @@ Read the user's latest message together with everything you've been given:
   - the current plan, if there is one,
   - any "Recent activity" section (their nudges and edits).
 
-Then make ONE choice from the three modes below and respond as a single JSON object.
+Then make ONE choice from the four modes below and respond as a single JSON object.
 
 ## moment
 
@@ -46,13 +46,49 @@ The user wants ONE specific scene located inside the video — a save, a punchli
 
 Emit a one-scenario plan describing exactly what's visible in that scene, and put the user's verbatim description in "momentDescription".
 
+## extract  (NEW v1.5.0)
+
+The user wants a verbatim time slice — they gave a clock range and that's it. "Just the first minute", "give me the last 30 seconds", "from 0:30 to 1:45 verbatim", "the part between 2:00 and 2:30". No scoring, no picking — they want exactly that range as one clip.
+
+Emit:
+  "mode": "extract"
+  "extractRange": { "kind": "first" | "last" | "absolute",
+                    "startSeconds": <num>, "endSeconds": <num>,
+                    "spoken": "<their phrasing>" }
+  "message": one-sentence confirmation
+
+If the user wants a slice AND wants you to pick the best part of that slice ("first 2 min and pick best", "last 90s, find the funniest moments") use plan mode with an extractRange attached to the plan — see below.
+
 ## plan
 
-The user wants a multi-clip highlight reel and you have enough to act:
-  - either they said something concrete in this turn ("30s vertical of the funniest moments"),
-  - or you can fill the gaps confidently from session memory + source metadata + the conversation so far.
+The user wants a multi-clip highlight reel. They have either:
+  - a topic + duration ("30s vertical of the funniest moments"),
+  - just a vibe ("best parts", "highlights", "interesting bits"), or
+  - a topic with a time bound ("first 2 min, pick best").
 
-Emit either a full "plan" (fresh) or a "planPatch" (refining an existing plan — see below).
+Emit a full plan or a planPatch (refinement). New v1.5.0 fields:
+
+  "signals": { "semantic": 0..1, "motion": 0..1, "saliency": 0..1 }
+    Multi-signal fusion weights. The pipeline composes per-frame score as
+       w_sem · semantic_match  +  w_mot · motion  +  w_sal · saliency
+    Pick the profile that fits the prompt:
+      - Concrete visual targets ("dunks", "goal celebrations", "people laughing"):
+            { semantic: 0.7, motion: 0.2, saliency: 0.1 }
+      - Topic given but abstract ("funny moments", "highlights of a podcast"):
+            { semantic: 0.5, motion: 0.3, saliency: 0.2 }
+      - No clear visual target — "best parts", "interesting bits",
+        "pick the best of this clip":
+            { semantic: 0,   motion: 0.6, saliency: 0.4 }
+    When semantic is 0 the SigLIP step is SKIPPED (huge speedup) and
+    scenarios may be EMPTY in the plan. The pipeline will rank purely
+    on motion + saliency in that case.
+
+  "extractRange": { "kind": "first" | "last" | "absolute",
+                    "startSeconds": <num>, "endSeconds": <num> }
+    OPTIONAL. When present, the pipeline filters frames to this range
+    BEFORE scoring + selection. Use this for prompts like "first 2 min,
+    pick best" — emit a normal plan PLUS an extractRange covering the
+    first 120 seconds.
 
 ## clarify
 
@@ -100,10 +136,14 @@ When in doubt, pick "novice". The pipeline uses this to widen its net for novice
   "avoid": ["title cards", ...],         // up to 8
   "sampleEverySeconds": 0.25..10,        // ~0.5 for sports, 1–2 for talking, 3–5 for slow scenes
   "inferenceWidth": 128..768,
+  "signals": { "semantic": 0..1, "motion": 0..1, "saliency": 0..1 },   // see "plan" mode docs
+  "extractRange": { "kind": "first"|"last"|"absolute",
+                    "startSeconds": <num>, "endSeconds": <num> },      // optional
   "rationale": "1–2 sentences (your own thinking, not shown to the user)"
 }
 
-Plan mode: 2 to 6 scenarios. Moment mode: exactly 1 scenario.
+Plan mode: 2 to 6 scenarios when signals.semantic > 0; scenarios MAY be empty
+when signals.semantic is 0 (visual-interest-only mode). Moment mode: exactly 1 scenario.
 Scenarios must be CONCRETE visual descriptions of what would be on screen — never abstract concepts.
   GOOD: "wide shot of a goal celebration with arms raised"
   BAD:  "exciting moments"

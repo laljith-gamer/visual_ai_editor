@@ -246,12 +246,32 @@ export const SECURITY_HEADERS = {
 
 
 
-// =====================================================================
-// v1.3.0 — adaptive selection. Replaces hardcoded thresholds in
-// events.ts / highlights.ts. Every constant here is a *default input*
-// to the derivation functions in lib/pipeline/adapt.ts, NOT a fixed
-// cutoff that gets used directly by the pipeline.
-// =====================================================================
+/** v1.5.0 — default signal-fusion weights. The planner emits
+ *  per-turn `signals` overrides; these only kick in when the LLM
+ *  forgets to specify or the user is on an old session.
+ *
+ *  Three preset profiles guide the LLM in the prompt:
+ *    - SCENARIO_HEAVY: user described concrete visual targets
+ *    - BALANCED:       user gave a topic but no clear visual cue
+ *    - VISUAL_INTEREST: user said "best part" / "interesting bits" /
+ *                      time-bounded "pick best of X" with no scenarios
+ */
+export const SIGNAL_DEFAULTS = {
+  /** Used when scenarios are present and concrete. */
+  scenarioHeavy: { semantic: 0.7, motion: 0.2, saliency: 0.1 },
+  /** Used when scenarios exist but are abstract. */
+  balanced: { semantic: 0.5, motion: 0.3, saliency: 0.2 },
+  /** Used when no scenarios — pure visual-interest scoring.
+   *  semantic: 0 → SigLIP is skipped entirely (huge speedup). */
+  visualInterest: { semantic: 0, motion: 0.6, saliency: 0.4 },
+  /** Boost factor applied to motion before clamping. Raw frame-diff
+   *  values rarely exceed 0.25 even on action shots, so we expand the
+   *  dynamic range so motion is comparable to semantic on its scale. */
+  motionGain: 4,
+  /** Stride (in pixels) for motion + saliency sampling. Lower = more
+   *  accurate, slower. 4 means we sample 1/16th of pixels. */
+  pixelStride: 4
+} as const;
 
 export const ADAPT = {
   /** Candidate-percentile defaults (top-X% of frames by score). */

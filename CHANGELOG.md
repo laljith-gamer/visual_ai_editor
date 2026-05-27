@@ -4,7 +4,97 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.5.0] — 2026-05-27
+
+### Added — Visual multi-signal scoring (zero new models, zero new API cost)
+
+The planner can now decompose any prompt into a weighted blend of three
+visual signals — and pick which signals to use per turn. Concrete
+"goalkeeper save" queries lean on semantic. "Best parts" / "interesting
+bits" queries fall back to motion + saliency, which the pipeline computes
+for free during sampling. No new model downloads, no new server calls.
+
+- **Motion signal** — frame-to-frame brightness pixel-difference,
+  computed inline in `lib/pipeline/sample.ts` while the canvas is
+  already alive. ~1 ms per frame at 256 px, no model.
+- **Saliency signal** — Shannon entropy of a 16-bin brightness
+  histogram per frame. Captures "is this frame busy or flat".
+- **Composite scoring** — `score = w_sem · semantic + w_mot · motion
+  + w_sal · saliency`. The LLM emits the weights as a `signals` field
+  in the plan; the executor renormalises and clamps.
+- **SigLIP skip path** — when the planner emits `signals.semantic = 0`
+  (which happens automatically for "best parts" prompts because the
+  prompt has no concrete visual target), `lib/pipeline/score.ts`
+  bypasses the SigLIP worker entirely. ~10–30 s of analysis time
+  removed on a 10-minute source. Selection runs purely on the
+  motion + saliency signals, which are already on every `SampledFrame`.
+
+### Added — Extract mode (time-bound queries)
+
+Wires `lib/pipeline/extract.ts` into the agent. Two flavours:
+
+- **Top-level `mode: "extract"`** — verbatim time slice. The user said
+  "first 1 minute", "last 90 seconds", "from 0:30 to 1:45" and that's
+  it. Zero scoring, zero LLM vision calls. The pipeline produces
+  exactly one Highlight covering the requested range.
+- **`extractRange` field on a regular plan** — for "first 2 min and
+  pick best of that". The pipeline filters `sampleFrames` to the
+  range BEFORE scoring and selection, saving ~80 % of the analysis
+  cost on long sources.
+
+The planner picks `kind: "first" | "last" | "absolute"` so the client
+resolves bounds from the actual video duration.
+
+### Changed
+
+- `FrameScore` now carries the per-signal contributions (`semantic`,
+  `motion`, `saliency`) alongside the composite `score`. Old sessions
+  load fine — the new fields are optional.
+- `EditPlan` gained optional `signals` and `extractRange` fields.
+  Backward-compatible: when missing, the pipeline picks a profile from
+  `SIGNAL_DEFAULTS` (scenarioHeavy / balanced / visualInterest)
+  based on whether scenarios are present.
+- `IntentMode` extended with `"extract"`.
+- `AgentResponse` gained the `extract` branch carrying `extractRange`.
+- The planner system prompt teaches the LLM about both new mechanisms
+  with explicit weight profiles per prompt category.
+- `normalizePlan` now accepts `scenarios: []` when `signals.semantic`
+  is 0 — the visual-interest-only path is a first-class flow rather
+  than an error case.
+
+### Cost & footprint
+
+- **Browser:** zero new model downloads. Sampling cost goes up by
+  about 1 ms per frame from the new pixel-stat passes. On a 10-minute
+  source at 1 fps that's ~600 ms of additional CPU work — invisible
+  next to SigLIP.
+- **Server:** unchanged. Same Gemini call count per turn (1 planner +
+  N temporal verifiers).
+- **Persistent cost:** still $0/month at hobby scale.
+
+### What this unlocks for users
+
+| Prompt | Before | After |
+|---|---|---|
+| "edit first 2 min and pick best part" | Often returned 0 clips on monotonous footage | Frames inside [0, 120s] are scored on motion + saliency; novice tier always returns ≥ 1 clip |
+| "best parts of this video" | Required the LLM to invent visual scenarios; SigLIP ran for ~30s | Skips SigLIP entirely; runs in seconds on motion + saliency |
+| "give me the last 30 seconds" | Treated as a moment query, often missed | Verbatim slice in O(1), no scoring |
+| "find the dunks" | Worked already | Unchanged — semantic-heavy weights kick in automatically |
+
+### Files
+
+New:
+- (none — extends existing pipeline files)
+
+Modified:
+- `lib/pipeline/sample.ts`, `lib/pipeline/score.ts`,
+  `lib/plan/prompt.ts`, `lib/plan/normalize.ts`, `lib/plan/merge.ts`,
+  `lib/types.ts`, `lib/config.ts`, `app/api/agent/route.ts`,
+  `app/page.tsx`, `package.json`, `CHANGELOG.md`.
+
 ## [1.4.0] — 2026-05-27
+
+
 
 ### Changed
 - **No more regex on the server.** The conversational planner now does

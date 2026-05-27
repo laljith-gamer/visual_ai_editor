@@ -1,7 +1,13 @@
-import type { EditPlan, PlanPatch, Scenario } from "@/lib/types";
+import type {
+  EditPlan,
+  ExtractRange,
+  PlanPatch,
+  Scenario,
+  SignalWeights
+} from "@/lib/types";
 import { newId } from "@/lib/util/id";
 import { clamp } from "@/lib/util/time";
-import { PLAN_BOUNDS, PLAN_DEFAULTS } from "@/lib/config";
+import { PLAN_BOUNDS, PLAN_DEFAULTS, SIGNAL_DEFAULTS } from "@/lib/config";
 
 /**
  * Validate and normalize a raw plan from the LLM into a clean EditPlan
@@ -23,8 +29,14 @@ export function normalizePlan(raw: unknown): NormalizeResult {
   const missing: string[] = [];
   const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 
+  const signals = normalizeSignals(r.signals);
+  const extractRange = normalizeExtractRange(r.extractRange);
+
   const scenarios = normalizeScenarios(r.scenarios);
-  if (scenarios.length === 0) {
+  // v1.5.0: scenarios are optional ONLY when the plan is signal-driven
+  // (semantic weight is 0). That's the "best parts" / "interesting bits"
+  // path where SigLIP is skipped and motion + saliency drive selection.
+  if (scenarios.length === 0 && (!signals || signals.semantic > 0)) {
     missing.push("scenarios");
     return { plan: null, missing, warnings };
   }
@@ -85,6 +97,8 @@ export function normalizePlan(raw: unknown): NormalizeResult {
       avoid,
       sampleEverySeconds: sampleEvery,
       inferenceWidth,
+      signals: signals ?? undefined,
+      extractRange: extractRange ?? undefined,
       rationale
     },
     missing: [],
@@ -162,6 +176,10 @@ export function normalizePlanPatch(raw: unknown): {
   if (typeof r.rationale === "string" && r.rationale.trim()) {
     patch.rationale = r.rationale.trim().slice(0, 600);
   }
+  const signals = normalizeSignals(r.signals);
+  if (signals) patch.signals = signals;
+  const extractRange = normalizeExtractRange(r.extractRange);
+  if (extractRange) patch.extractRange = extractRange;
   return { patch, warnings };
 }
 
@@ -177,6 +195,61 @@ export function planSignaturePayload(plan: EditPlan): string {
 // ---------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------
+
+/** v1.5.0 — multi-signal weights from the LLM. Returns null if the
+ *  caller should fall back to a SIGNAL_DEFAULTS profile in score.ts. */
+function normalizeSignals(raw: unknown): SignalWeights | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const sem = nonNegOrUndefined(r.semantic);
+  const mot = nonNegOrUndefined(r.motion);
+  const sal = nonNegOrUndefined(r.saliency);
+  // Need at least one explicit numeric to consider this a deliberate set.
+  if (sem === undefined && mot === undefined && sal === undefined) return null;
+  const semantic = sem ?? SIGNAL_DEFAULTS.scenarioHeavy.semantic;
+  const motion = mot ?? SIGNAL_DEFAULTS.scenarioHeavy.motion;
+  const saliency = sal ?? SIGNAL_DEFAULTS.scenarioHeavy.saliency;
+  const sum = semantic + motion + saliency;
+  if (sum <= 0) return null;
+  return {
+    semantic: semantic / sum,
+    motion: motion / sum,
+    saliency: saliency / sum
+  };
+}
+
+function nonNegOrUndefined(v: unknown): number | undefined {
+  if (typeof v !== "number" || !isFinite(v)) return undefined;
+  return Math.max(0, v);
+}
+
+/** v1.5.0 — time-bound extract range from the LLM. Validates kind +
+ *  numeric bounds; rejects reversed or zero-length ranges. */
+function normalizeExtractRange(raw: unknown): ExtractRange | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const kind =
+    r.kind === "first" || r.kind === "last" || r.kind === "absolute"
+      ? r.kind
+      : "absolute";
+  const start =
+    typeof r.startSeconds === "number" && isFinite(r.startSeconds)
+      ? Math.max(0, r.startSeconds)
+      : 0;
+  const end =
+    typeof r.endSeconds === "number" && isFinite(r.endSeconds)
+      ? Math.max(0, r.endSeconds)
+      : 0;
+  if (end <= start && kind !== "last") return null;
+  // For "last", the LLM may pass startSeconds=0 endSeconds=length.
+  // Caller (extract.ts) resolves the actual start from videoDuration.
+  if (kind === "last" && end <= 0) return null;
+  const spoken =
+    typeof r.spoken === "string" && r.spoken.trim()
+      ? r.spoken.trim().slice(0, 120)
+      : undefined;
+  return { kind, startSeconds: start, endSeconds: end, spoken };
+}
 
 function normalizeScenarios(raw: unknown): Scenario[] {
   if (!Array.isArray(raw)) return [];

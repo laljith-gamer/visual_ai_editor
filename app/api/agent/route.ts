@@ -24,6 +24,7 @@ import type {
   AgentResponse,
   ClarifyQuestion,
   EditPlan,
+  ExtractRange,
   InferredField,
   PlanPatch,
   RateLimitDecision,
@@ -141,6 +142,45 @@ export async function POST(req: NextRequest) {
 
   const mode = parsed.mode;
   const userTier = normalizeUserTier(parsed.userTier);
+
+  // ---- EXTRACT (v1.5.0) ---------------------------------------------
+  // Verbatim time-slice mode. No scoring, no scenarios required. The
+  // pipeline emits exactly one Highlight for the requested range.
+  if (mode === "extract") {
+    const range = normalizeExtractRangeForResponse(parsed.extractRange);
+    if (!range) {
+      // The LLM said extract but didn't give a usable range — fall back
+      // to clarify so we don't silently slice the wrong window.
+      return NextResponse.json<AgentResponse>({
+        mode: "clarify",
+        message: "Tell me which seconds to grab — first / last / or a range.",
+        questions: [
+          {
+            id: "range",
+            prompt: "Which part of the video?",
+            suggestions: [
+              "First 30 seconds",
+              "First minute",
+              "Last 60 seconds",
+              "From 0:30 to 1:30"
+            ],
+            kind: "single-choice"
+          }
+        ],
+        warnings,
+        ...(quotaWarning ? { quotaWarning } : {})
+      });
+    }
+    const inferred = normalizeInferred(parsed.inferred);
+    return NextResponse.json<AgentResponse>({
+      mode: "extract",
+      extractRange: range,
+      message: stringOr(parsed.message, "Grabbing that exact slice."),
+      inferred,
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
+    });
+  }
 
   // ---- CLARIFY -------------------------------------------------------
   if (mode === "clarify") {
@@ -346,6 +386,34 @@ function resolvePlan(args: {
 
 function normalizeUserTier(raw: unknown): UserTier {
   return raw === "advanced" ? "advanced" : "novice";
+}
+
+/** v1.5.0 — validate an extractRange returned at the top level of the
+ *  agent response (mode="extract" path). Mirrors the validation in
+ *  lib/plan/normalize.ts but lives here because it's used outside the
+ *  plan-resolution flow. */
+function normalizeExtractRangeForResponse(raw: unknown): ExtractRange | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const kind =
+    r.kind === "first" || r.kind === "last" || r.kind === "absolute"
+      ? r.kind
+      : "absolute";
+  const start =
+    typeof r.startSeconds === "number" && isFinite(r.startSeconds)
+      ? Math.max(0, r.startSeconds)
+      : 0;
+  const end =
+    typeof r.endSeconds === "number" && isFinite(r.endSeconds)
+      ? Math.max(0, r.endSeconds)
+      : 0;
+  if (kind !== "last" && end <= start) return null;
+  if (kind === "last" && end <= 0) return null;
+  const spoken =
+    typeof r.spoken === "string" && r.spoken.trim()
+      ? r.spoken.trim().slice(0, 120)
+      : undefined;
+  return { kind, startSeconds: start, endSeconds: end, spoken };
 }
 
 function normalizeInferred(raw: unknown): InferredField[] {

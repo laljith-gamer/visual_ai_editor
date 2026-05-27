@@ -88,6 +88,14 @@ export function mergePlan(current: EditPlan, patch: PlanPatch): EditPlan {
     out.rationale = patch.rationale.slice(0, 600);
   }
 
+  // --- v1.5.0: signals + extractRange -------------------------------
+  if (patch.signals) {
+    out.signals = patch.signals;
+  }
+  if (patch.extractRange) {
+    out.extractRange = patch.extractRange;
+  }
+
   return out;
 }
 
