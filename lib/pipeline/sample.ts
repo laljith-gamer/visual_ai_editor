@@ -35,7 +35,13 @@ async function getMediabunny() {
     Input: new (opts: { source: unknown; formats?: unknown }) => MBInput;
     BlobSource: new (blob: Blob) => unknown;
     ALL_FORMATS?: unknown;
-    CanvasSink: new (track: unknown, opts: { width: number; height: number; poolSize: number }) => MBCanvasSink;
+    CanvasSink: new (track: unknown, opts: {
+      width: number;
+      height: number;
+      poolSize: number;
+      /** Required by mediabunny when both width and height are specified. */
+      fit: "fill" | "contain" | "cover";
+    }) => MBCanvasSink;
   };
 }
 
@@ -97,7 +103,15 @@ export async function sampleFrames(
   const width = opts.width;
   const height = Math.max(2, Math.round(width * aspect));
 
-  const sink = new mb.CanvasSink(track, { width, height, poolSize: 2 });
+  // mediabunny throws "options.fit must also be provided" when both width
+  // and height are passed without a fit mode. We pre-compute height to match
+  // source aspect, so "fill" is exact (no stretching).
+  const sink = new mb.CanvasSink(track, {
+    width,
+    height,
+    fit: "fill",
+    poolSize: 2
+  });
 
   const timestamps: number[] = [];
   for (let t = 0; t < duration; t += opts.every) {

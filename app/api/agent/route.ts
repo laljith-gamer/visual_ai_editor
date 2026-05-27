@@ -157,7 +157,7 @@ export async function POST(req: NextRequest) {
       mode: "clarify",
       message:
         typeof parsed.message === "string" && parsed.message.trim()
-          ? parsed.message.trim()
+          ? cleanMessage(parsed.message.trim()) || "I need a bit more to plan the cuts."
           : "I need a bit more to plan the cuts.",
       questions,
       warnings,
@@ -431,7 +431,33 @@ function missingFieldsToQuestions(missing: string[]): ClarifyQuestion[] {
 }
 
 function stringOr(v: unknown, fallback: string): string {
-  return typeof v === "string" && v.trim() ? v.trim() : fallback;
+  return typeof v === "string" && v.trim() ? cleanMessage(v.trim()) : fallback;
+}
+
+/**
+ * Defensive cleanup of the planner's "message" field.
+ *
+ * The system prompt instructs the LLM to emit a single short conversational
+ * sentence. Sometimes (especially older Gemini models) it ignores this and
+ * dumps "Plan: ... Looking for: ... Avoiding: ... Why: ...". We strip those
+ * verbose prefixes server-side so the chat never shows the dump even on a
+ * misbehaving turn. Worst case we lose some detail that's already shown in
+ * the PlanPreview card — net win for the user.
+ */
+function cleanMessage(raw: string): string {
+  if (!raw) return "";
+  let s = raw;
+  // Drop "Plan: ..." line at the start (with or without trailing newline)
+  s = s.replace(/^\s*Plan:[^\n]*\n?/i, "");
+  // Drop section-prefixed lines anywhere
+  s = s.replace(/^\s*(?:Looking for|Avoiding|Why|Rationale|Scenarios?):[^\n]*\n?/gim, "");
+  s = s.trim();
+  if (!s) return "";
+  // Take the first sentence (or first 160 chars).
+  const firstSentenceMatch = s.match(/^.+?[.!?](?=\s|$)/);
+  let first = firstSentenceMatch ? firstSentenceMatch[0] : s;
+  if (first.length > 160) first = first.slice(0, 159) + "\u2026";
+  return first;
 }
 
 // Suppress unused-symbol warnings for re-exported types.

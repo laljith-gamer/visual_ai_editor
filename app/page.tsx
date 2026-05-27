@@ -31,7 +31,8 @@ import type {
   AgentRequest,
   AgentResponse,
   EditPlan,
-  FrameScore
+  FrameScore,
+  IntentMode
 } from "@/lib/types";
 
 interface QuotaWarning {
@@ -70,6 +71,7 @@ export default function Home() {
   const setMode = useEditorStore((s) => s.setMode);
   const setInferred = useEditorStore((s) => s.setInferred);
   const setPendingClarify = useEditorStore((s) => s.setPendingClarify);
+  const setPendingExecution = useEditorStore((s) => s.setPendingExecution);
   const persist = useEditorStore((s) => s.persist);
 
   // ---- Track unread activity events while the drawer is closed ------------
@@ -103,6 +105,225 @@ export default function Home() {
     [sessionId]
   );
 
+  // -----------------------------------------------------------------------
+  // Pipeline execution. Extracted so both handleAgent (refinement auto-run
+  // path) and handleRunPipeline (PlanPreview confirm button) can call it.
+  // Reads the *current* plan from the store, NOT a captured closure.
+  // -----------------------------------------------------------------------
+  const runPipeline = useCallback(
+    async (mode: IntentMode) => {
+      const activePlan = useEditorStore.getState().plan;
+      if (!activePlan || !videoBlob || !videoHash || !videoMeta) return;
+      const previousPlanForCacheKey = activePlan; // sig is computed against active
+
+      try {
+        const sig = await sha1String(planSignaturePayload(activePlan));
+        const cached = await getPredictions(videoHash, sig);
+        let frameScores: FrameScore[];
+
+        if (cached) {
+          logSession.system(
+            "cache.hit",
+            { signature: sig.slice(0, 12), frames: cached.frames.length },
+            `Cache hit: reused ${cached.frames.length} frame scores`
+          );
+          frameScores = cached.frames;
+          setStatus("scoring", "Reused cached predictions");
+          setProgress(0.5);
+        } else {
+          logSession.system(
+            "cache.miss",
+            { signature: sig.slice(0, 12) },
+            "Cache miss — fresh sample+score pass"
+          );
+          frameScores = await sampleAndScore(activePlan);
+        }
+
+        if (mode === "moment") {
+          setStatus("temporal", "Finding the exact moment");
+          setProgress(0.65);
+          const t1 = Date.now();
+          const built = await buildMomentHighlight({
+            videoBlob,
+            frameScores,
+            plan: activePlan,
+            videoDuration: videoMeta.duration,
+            onProgress: (done, total) =>
+              setProgress(0.65 + (done / Math.max(total, 1)) * 0.3)
+          });
+          if (built.length === 0) {
+            pushMessage({
+              role: "assistant",
+              content:
+                "I couldn't find a strong match for that moment. Try rewording it (describe what you'd see in the frame)."
+            });
+            setStatus("ready", "No moment found");
+            setProgress(0);
+            logSession.ai("moment.localized", { found: false }, "Moment not found");
+            return;
+          }
+          setHighlights(built);
+          pushMessage({
+            role: "assistant",
+            content: `Found it. Picked a ${(built[0].end - built[0].start).toFixed(1)}s clip.`
+          });
+          setStatus("ready", "Ready to render");
+          setProgress(1);
+          logSession.ai(
+            "moment.localized",
+            {
+              found: true,
+              start: built[0].start,
+              end: built[0].end,
+              score: built[0].score
+            },
+            `Moment localized: ${built[0].start.toFixed(1)}s \u2192 ${built[0].end.toFixed(1)}s`,
+            Date.now() - t1
+          );
+          return;
+        }
+
+        // PLAN mode — multi-clip pipeline.
+        setStatus("temporal", "Finding event windows");
+        setProgress(0.62);
+        const candidates = detectCandidateWindows(frameScores, activePlan);
+        logSession.ai(
+          "events.detected",
+          { candidateCount: candidates.length, framesScored: frameScores.length },
+          `${candidates.length} candidate window${candidates.length === 1 ? "" : "s"} from ${frameScores.length} frames`
+        );
+
+        if (candidates.length === 0) {
+          pushMessage({
+            role: "assistant",
+            content:
+              "I couldn't find any windows that strongly match. Try loosening the wording or adding scenarios."
+          });
+          setStatus("ready", "No candidates");
+          setProgress(0);
+          return;
+        }
+
+        const t2 = Date.now();
+        const verdicts = await runTemporalPass({
+          videoBlob,
+          candidates,
+          plan: activePlan,
+          onProgress: (done, total) =>
+            setProgress(0.65 + (done / Math.max(total, 1)) * 0.25)
+        });
+        for (const v of verdicts) {
+          logSession.ai(
+            "temporal.verdict",
+            { start: v.start, end: v.end, keepScore: v.keepScore, reason: v.reason },
+            `${v.start.toFixed(1)}s\u2013${v.end.toFixed(1)}s keep=${v.keepScore.toFixed(2)} (${v.reason})`
+          );
+        }
+
+        setStatus("selecting", "Picking the final clips");
+        setProgress(0.92);
+        const built = buildHighlights({
+          candidates,
+          verdicts,
+          plan: activePlan,
+          videoDuration: videoMeta.duration
+        });
+        setHighlights(built);
+        const totalSel = built.reduce((acc, h) => acc + (h.end - h.start), 0);
+        logSession.ai(
+          "highlights.built",
+          {
+            count: built.length,
+            totalSeconds: round1(totalSel),
+            selectionStrategy: activePlan.selectionStrategy
+          },
+          `Built ${built.length} clip${built.length === 1 ? "" : "s"} (${totalSel.toFixed(1)}s total)`,
+          Date.now() - t2
+        );
+        pushMessage({
+          role: "assistant",
+          content: `Picked ${built.length} clip${built.length === 1 ? "" : "s"} totalling ${totalSel.toFixed(1)}s. Tap "Render" to assemble the short.`
+        });
+        setStatus("ready", "Ready to render");
+        setProgress(1);
+      } catch (err) {
+        const msg = (err as Error).message;
+        pushMessage({
+          role: "assistant",
+          content: `Something went wrong: ${msg}`
+        });
+        setStatus("failed", msg);
+        logSession.system(
+          "error.unhandled",
+          { phase: "pipeline", message: msg },
+          `Unhandled error: ${msg.slice(0, 80)}`
+        );
+      } finally {
+        setPendingExecution(false);
+      }
+
+      // -- inner helper to keep both cache-hit/miss branches DRY -----
+      async function sampleAndScore(p: EditPlan): Promise<FrameScore[]> {
+        if (!videoBlob || !videoHash) {
+          throw new Error("video blob disappeared");
+        }
+        setStatus("sampling", "Extracting frames");
+        const tA = Date.now();
+        const frames = await sampleFrames(videoBlob, {
+          every: p.sampleEverySeconds,
+          width: p.inferenceWidth,
+          onProgress: (pp) => setProgress(0.05 + pp * 0.2)
+        });
+        logSession.ai(
+          "frames.sampled",
+          { count: frames.length, everySeconds: p.sampleEverySeconds, widthPx: p.inferenceWidth },
+          `Sampled ${frames.length} frames every ${p.sampleEverySeconds}s @${p.inferenceWidth}px`,
+          Date.now() - tA
+        );
+
+        setStatus("scoring", `Scoring ${frames.length} frames (${cap.tier})`);
+        const tier = cap.tier === "low" ? "cloud" : "siglip-local";
+        const tB = Date.now();
+        const scored = await scoreFrames({
+          frames,
+          plan: p,
+          tier,
+          onProgress: (done, total) =>
+            setProgress(0.25 + (done / total) * 0.35)
+        });
+        logSession.ai(
+          "frames.scored",
+          { count: scored.length, tier, cacheHit: false },
+          `Scored ${scored.length} frames via ${tier}`,
+          Date.now() - tB
+        );
+        await savePredictions({
+          videoHash,
+          scenarioSignature: await sha1String(planSignaturePayload(p)),
+          sampleEverySeconds: p.sampleEverySeconds,
+          frames: scored,
+          createdAt: Date.now()
+        });
+        await trimCache();
+        return scored;
+      }
+      // Keep typescript happy about the captured closures.
+      void previousPlanForCacheKey;
+    },
+    [
+      videoBlob,
+      videoMeta,
+      videoHash,
+      cap.tier,
+      pushMessage,
+      setStatus,
+      setProgress,
+      setHighlights,
+      setPendingExecution,
+      logSession
+    ]
+  );
+
   // ---- Submit a chat turn -------------------------------------------------
   const handleAgent = useCallback(
     async (userRequest: string) => {
@@ -114,8 +335,6 @@ export default function Home() {
         setStatus("planning", "Talking to the planner");
         setProgress(0.05);
 
-        // Build the conversation history (everything currently in store + the
-        // turn we just appended) and send to the agent route.
         const history = [...useEditorStore.getState().messages];
         const recentActivity = summarizeRecentActivity();
         const reqBody: AgentRequest = {
@@ -143,9 +362,7 @@ export default function Home() {
         // ---- error mode ---------------------------------------------------
         if (!planResp.ok || data.mode === "error") {
           const msg =
-            data.mode === "error"
-              ? data.error
-              : `Planner returned ${planResp.status}`;
+            data.mode === "error" ? data.error : `Planner returned ${planResp.status}`;
           pushMessage({ role: "assistant", content: msg });
           setStatus("failed", msg);
           setProgress(0);
@@ -164,10 +381,8 @@ export default function Home() {
           return;
         }
 
-        // ---- Soft-tier quota banner --------------------------------------
-        if (data.mode !== "clarify" && "quotaWarning" in data && data.quotaWarning) {
-          setQuota(data.quotaWarning);
-        } else if (data.mode === "clarify" && data.quotaWarning) {
+        // ---- soft-tier quota banner --------------------------------------
+        if ("quotaWarning" in data && data.quotaWarning) {
           setQuota(data.quotaWarning);
         }
 
@@ -175,10 +390,8 @@ export default function Home() {
         if (data.mode === "clarify") {
           setMode("clarify");
           setInferred([]);
-          setPendingClarify({
-            message: data.message,
-            questions: data.questions
-          });
+          setPendingClarify({ message: data.message, questions: data.questions });
+          setPendingExecution(false);
           pushMessage({ role: "assistant", content: data.message });
           setStatus("idle", "Awaiting answer");
           setProgress(0);
@@ -246,155 +459,28 @@ export default function Home() {
             "Plan ready \u2014 upload a video to run the analysis."
           );
           setProgress(0);
+          setPendingExecution(true);
           return;
         }
 
-        // ---- Decide whether the predictions cache is reusable ------------
-        const reusable = !scenariosChanged(previousPlan, activePlan);
-        const sig = await sha1String(planSignaturePayload(activePlan));
-        const cached = await getPredictions(videoHash, sig);
-        let frameScores: FrameScore[];
+        // ---- Decide auto-run vs confirm ---------------------------------
+        // Auto-run only when this is a refinement that reuses the cache.
+        // Anything else (first plan, scenarios changed) shows the
+        // PlanPreview card with a Run button to keep the UX honest about
+        // when the expensive analysis fires.
+        const cacheReusable =
+          previousPlan !== null &&
+          !scenariosChanged(previousPlan, activePlan) &&
+          useEditorStore.getState().highlights.length > 0;
 
-        if (cached) {
-          logSession.system(
-            "cache.hit",
-            { signature: sig.slice(0, 12), frames: cached.frames.length },
-            `Cache hit: reused ${cached.frames.length} frame scores`
-          );
-          frameScores = cached.frames;
-          setStatus("scoring", "Reused cached predictions");
-          setProgress(0.5);
-        } else if (reusable) {
-          logSession.system(
-            "cache.miss",
-            { signature: sig.slice(0, 12), reason: "scenarios_unchanged" },
-            "Cache miss but scenarios match — single sample+score pass"
-          );
-          frameScores = await sampleAndScore(activePlan);
+        if (cacheReusable) {
+          setPendingExecution(false);
+          await runPipeline(data.mode);
         } else {
-          logSession.system(
-            "cache.miss",
-            { signature: sig.slice(0, 12), reason: "scenarios_changed" },
-            "Scenarios changed — fresh sample+score pass"
-          );
-          frameScores = await sampleAndScore(activePlan);
-        }
-
-        // ---- Branch on mode for selection ---------------------------------
-        if (data.mode === "moment") {
-          setStatus("temporal", "Finding the exact moment");
-          setProgress(0.65);
-          const t1 = Date.now();
-          const built = await buildMomentHighlight({
-            videoBlob,
-            frameScores,
-            plan: activePlan,
-            videoDuration: videoMeta.duration,
-            onProgress: (done, total) =>
-              setProgress(0.65 + (done / Math.max(total, 1)) * 0.3)
-          });
-          if (built.length === 0) {
-            pushMessage({
-              role: "assistant",
-              content:
-                "I couldn't find a strong match for that moment. Try rewording it (e.g., describe what you'd see in the frame)."
-            });
-            setStatus("ready", "No moment found");
-            setProgress(0);
-            logSession.ai(
-              "moment.localized",
-              { found: false },
-              "Moment not found"
-            );
-            return;
-          }
-          setHighlights(built);
-          pushMessage({
-            role: "assistant",
-            content: `Found it. Picked a ${(built[0].end - built[0].start).toFixed(1)}s clip.`
-          });
-          setStatus("ready", "Ready to render");
-          setProgress(1);
-          logSession.ai(
-            "moment.localized",
-            {
-              found: true,
-              start: built[0].start,
-              end: built[0].end,
-              score: built[0].score
-            },
-            `Moment localized: ${built[0].start.toFixed(1)}s → ${built[0].end.toFixed(1)}s`,
-            Date.now() - t1
-          );
-          return;
-        }
-
-        // PLAN mode → multi-clip pipeline.
-        setStatus("temporal", "Finding event windows");
-        setProgress(0.62);
-        const candidates = detectCandidateWindows(frameScores, activePlan);
-        logSession.ai(
-          "events.detected",
-          {
-            candidateCount: candidates.length,
-            framesScored: frameScores.length
-          },
-          `${candidates.length} candidate window${candidates.length === 1 ? "" : "s"} from ${frameScores.length} frames`
-        );
-
-        if (candidates.length === 0) {
-          pushMessage({
-            role: "assistant",
-            content:
-              "I couldn't find any windows that strongly match. Try loosening the wording or adding scenarios."
-          });
-          setStatus("ready", "No candidates");
+          setPendingExecution(true);
+          setStatus("ready", "Plan ready \u2014 tap Run analysis to start.");
           setProgress(0);
-          return;
         }
-
-        const t2 = Date.now();
-        const verdicts = await runTemporalPass({
-          videoBlob,
-          candidates,
-          plan: activePlan,
-          onProgress: (done, total) =>
-            setProgress(0.65 + (done / Math.max(total, 1)) * 0.25)
-        });
-        for (const v of verdicts) {
-          logSession.ai(
-            "temporal.verdict",
-            { start: v.start, end: v.end, keepScore: v.keepScore, reason: v.reason },
-            `${v.start.toFixed(1)}s\u2013${v.end.toFixed(1)}s keep=${v.keepScore.toFixed(2)} (${v.reason})`
-          );
-        }
-
-        setStatus("selecting", "Picking the final clips");
-        setProgress(0.92);
-        const built = buildHighlights({
-          candidates,
-          verdicts,
-          plan: activePlan,
-          videoDuration: videoMeta.duration
-        });
-        setHighlights(built);
-        const totalSel = built.reduce((acc, h) => acc + (h.end - h.start), 0);
-        logSession.ai(
-          "highlights.built",
-          {
-            count: built.length,
-            totalSeconds: round1(totalSel),
-            selectionStrategy: activePlan.selectionStrategy
-          },
-          `Built ${built.length} clip${built.length === 1 ? "" : "s"} (${totalSel.toFixed(1)}s total)`,
-          Date.now() - t2
-        );
-        pushMessage({
-          role: "assistant",
-          content: `Picked ${built.length} clip${built.length === 1 ? "" : "s"} totalling ${totalSel.toFixed(1)}s. Tap "Render" to assemble the short.`
-        });
-        setStatus("ready", "Ready to render");
-        setProgress(1);
       } catch (err) {
         const msg = (err as Error).message;
         pushMessage({
@@ -404,57 +490,11 @@ export default function Home() {
         setStatus("failed", msg);
         logSession.system(
           "error.unhandled",
-          { message: msg },
+          { phase: "agent", message: msg },
           `Unhandled error: ${msg.slice(0, 80)}`
         );
       } finally {
         setBusy(false);
-      }
-
-      // -- inner helper to keep both cache-miss branches DRY -----
-      async function sampleAndScore(p: EditPlan): Promise<FrameScore[]> {
-        if (!videoBlob || !videoHash) {
-          throw new Error("video blob disappeared");
-        }
-        setStatus("sampling", "Extracting frames");
-        const tA = Date.now();
-        const frames = await sampleFrames(videoBlob, {
-          every: p.sampleEverySeconds,
-          width: p.inferenceWidth,
-          onProgress: (pp) => setProgress(0.05 + pp * 0.2)
-        });
-        logSession.ai(
-          "frames.sampled",
-          { count: frames.length, everySeconds: p.sampleEverySeconds, widthPx: p.inferenceWidth },
-          `Sampled ${frames.length} frames every ${p.sampleEverySeconds}s @${p.inferenceWidth}px`,
-          Date.now() - tA
-        );
-
-        setStatus("scoring", `Scoring ${frames.length} frames (${cap.tier})`);
-        const tier = cap.tier === "low" ? "cloud" : "siglip-local";
-        const tB = Date.now();
-        const scored = await scoreFrames({
-          frames,
-          plan: p,
-          tier,
-          onProgress: (done, total) =>
-            setProgress(0.25 + (done / total) * 0.35)
-        });
-        logSession.ai(
-          "frames.scored",
-          { count: scored.length, tier, cacheHit: false },
-          `Scored ${scored.length} frames via ${tier}`,
-          Date.now() - tB
-        );
-        await savePredictions({
-          videoHash,
-          scenarioSignature: await sha1String(planSignaturePayload(p)),
-          sampleEverySeconds: p.sampleEverySeconds,
-          frames: scored,
-          createdAt: Date.now()
-        });
-        await trimCache();
-        return scored;
       }
     },
     [
@@ -462,19 +502,56 @@ export default function Home() {
       videoMeta,
       videoHash,
       memory,
-      cap.tier,
       pushMessage,
       setStatus,
       setProgress,
       setPlan,
       applyPlanPatch,
-      setHighlights,
       setMode,
       setInferred,
       setPendingClarify,
+      setPendingExecution,
+      runPipeline,
       logSession
     ]
   );
+
+  // ---- Confirm-and-run from the PlanPreview card --------------------------
+  const handleRunPipeline = useCallback(async () => {
+    const cur = useEditorStore.getState();
+    if (!cur.plan) return;
+    if (!videoBlob || !videoHash || !videoMeta) {
+      pushMessage({
+        role: "assistant",
+        content: "Upload a video first, then I can run the analysis."
+      });
+      return;
+    }
+    setBusy(true);
+    setPendingExecution(false);
+    logUser({
+      sessionId,
+      kind: "plan.confirmed",
+      payload: {
+        targetShortSeconds: cur.plan.targetShortSeconds,
+        format: cur.plan.format
+      },
+      summary: `Confirmed plan: ${cur.plan.targetShortSeconds}s ${cur.plan.format}`
+    });
+    try {
+      await runPipeline(cur.mode === "moment" ? "moment" : "plan");
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    videoBlob,
+    videoMeta,
+    videoHash,
+    sessionId,
+    pushMessage,
+    setPendingExecution,
+    runPipeline
+  ]);
 
   // ---- Render -------------------------------------------------------------
   const handleRender = useCallback(async () => {
@@ -567,6 +644,7 @@ export default function Home() {
         <AssistantPanel
           onSubmit={handleAgent}
           onOpenClips={() => setClipsDrawerOpen(true)}
+          onRunPlan={handleRunPipeline}
           isBusy={busy}
         />
       </div>

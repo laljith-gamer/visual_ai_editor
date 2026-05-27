@@ -4,6 +4,45 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.2.1] — 2026-05-27
+
+### Fixed
+- **`When both options.width and options.height are provided, options.fit
+  must also be provided.`** — mediabunny's `CanvasSink` requires a `fit`
+  mode whenever both dimensions are passed. Added `fit: "fill"` (we
+  already pre-compute height to match source aspect, so "fill" is exact
+  with no stretching). Same fix flows through the temporal pass which
+  reuses `sampleFrames`.
+
+### Added
+- **Plan-first-then-execute confirmation step.** New `PlanPreview` card
+  (`components/PlanPreview.tsx` + `.module.css`) shows the resolved plan
+  as chips (target / format / transition / scenarios / avoid) plus a
+  primary **Run analysis** and secondary **Adjust** button. The
+  expensive frame-analysis pipeline only runs when the user confirms.
+- New `pendingExecution: boolean` slice in `useEditorStore`. Set after
+  any plan or scenarios-changed refinement; cleared on confirm or after
+  the pipeline finishes.
+- **Auto-run for cache-reusable refinements.** When a refinement
+  ("make it 60s") doesn't change scenarios, the pipeline auto-runs
+  because the predictions cache makes it instant. Only fresh plans and
+  scenarios-changed refinements wait for the Run button.
+- **Meta-question example** in the planner system prompt: "what info do
+  you need?" / "help" now correctly classifies as `clarify` mode rather
+  than emitting a fabricated default plan.
+
+### Changed
+- **Strict message format** in the planner prompt: ≤ 20 words, one
+  sentence, conversational, no `Plan:` / `Looking for:` / `Avoiding:` /
+  `Why:` prefixes. Detailed plan parameters belong in the `plan` object
+  (rendered as chips), not in the user-facing message.
+- **Defensive server-side cleanup**: `app/api/agent/route.ts` now passes
+  every planner message through `cleanMessage()` which strips section
+  prefixes and caps length at 160 chars. This keeps the chat readable
+  even when the LLM ignores the brevity rule.
+- `clearVideo` now also resets `pendingExecution` so removing the
+  source clears the confirmation card.
+
 ## [1.2.0] — 2026-05-27
 
 ### Added

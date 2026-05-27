@@ -6,6 +6,7 @@ import { useEditorStore } from "@/hooks/useEditorStore";
 import { useShare } from "@/hooks/useShare";
 import { CapabilityBadge } from "./CapabilityBadge";
 import { QuickReplies } from "./QuickReplies";
+import { PlanPreview } from "./PlanPreview";
 import { logUser } from "@/lib/log/recorders";
 import type { ClarifyQuestion, InferredField } from "@/lib/types";
 import styles from "./AssistantPanel.module.css";
@@ -13,6 +14,8 @@ import styles from "./AssistantPanel.module.css";
 interface Props {
   onSubmit: (text: string) => Promise<void>;
   onOpenClips: () => void;
+  /** Confirm the pending plan and start the analysis pipeline. */
+  onRunPlan: () => void;
   isBusy: boolean;
 }
 
@@ -23,23 +26,25 @@ const STARTER_PROMPTS = [
   "Find the part where ___"
 ];
 
-export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
+export function AssistantPanel({ onSubmit, onOpenClips, onRunPlan, isBusy }: Props) {
   const messages = useEditorStore((s) => s.messages);
   const renderedBlob = useEditorStore((s) => s.renderedBlob);
   const inferred = useEditorStore((s) => s.inferred);
   const pendingClarify = useEditorStore((s) => s.pendingClarify);
+  const pendingExecution = useEditorStore((s) => s.pendingExecution);
   const hasVideo = useEditorStore((s) => Boolean(s.videoBlob));
   const sessionId = useEditorStore((s) => s.sessionId);
 
   const [text, setText] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const share = useShare();
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, pendingClarify]);
+  }, [messages, pendingClarify, pendingExecution]);
 
   async function send(value?: string, source: "typed" | "quickreply" = "typed") {
     const trimmed = (value ?? text).trim();
@@ -90,6 +95,16 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
           <InferredBadges fields={inferred} />
         )}
 
+        {/* Plan-first confirmation card — appears after the planner returns
+            and before the analysis pipeline runs. Hidden during clarify. */}
+        {pendingExecution && !pendingClarify && (
+          <PlanPreview
+            onRun={onRunPlan}
+            onAdjust={() => composerRef.current?.focus()}
+            disabled={isBusy}
+          />
+        )}
+
         {/* Clarify questions with quick-reply chips */}
         {pendingClarify && (
           <QuickReplies
@@ -114,10 +129,13 @@ export function AssistantPanel({ onSubmit, onOpenClips, isBusy }: Props) {
 
       <div className={styles.composer}>
         <textarea
+          ref={composerRef}
           className="textarea"
           placeholder={
             pendingClarify
               ? "Type a custom answer, or tap a suggestion above…"
+              : pendingExecution
+              ? "Adjust the plan in plain English (e.g. \u201Cmake it 60s\u201D)…"
               : "Describe the short you want, or say \u201Cfind the part where…\u201D"
           }
           value={text}

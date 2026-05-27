@@ -16,7 +16,9 @@ export const SAMPLE_DEFAULTS = {
   /** JPEG quality used for sampled-frame encoding (0..1). */
   jpegQuality: 0.82,
   /** Hard cap on number of frames per sampling pass. */
-  maxFrames: 240
+  maxFrames: 240,
+  /** mediabunny CanvasSink fit mode. Required when both w+h are passed. */
+  fit: "fill" as const
 } as const;
 
 /** Cloud per-frame fallback (mobile / WebGPU-less devices). */

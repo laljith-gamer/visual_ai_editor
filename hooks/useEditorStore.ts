@@ -46,6 +46,12 @@ interface EditorState {
   inferred: InferredField[];
   pendingClarify: { message: string; questions: ClarifyQuestion[] } | null;
 
+  /** Plan exists but the analysis pipeline has NOT yet been executed.
+   *  Set after a fresh plan or scenarios-changed refinement so the UI can
+   *  show a "Run analysis" confirmation card before paying for the
+   *  expensive frame analysis. v1.2.1+. */
+  pendingExecution: boolean;
+
   // Chat + status
   messages: ChatMessage[];
   status: JobStatus;
@@ -90,6 +96,7 @@ interface EditorState {
   setPendingClarify: (
     p: { message: string; questions: ClarifyQuestion[] } | null
   ) => void;
+  setPendingExecution: (v: boolean) => void;
 
   // History
   refreshHistory: () => Promise<void>;
@@ -116,6 +123,7 @@ function freshState() {
     mode: null as IntentMode | null,
     inferred: [] as InferredField[],
     pendingClarify: null as EditorState["pendingClarify"],
+    pendingExecution: false,
     messages: [
       {
         id: newId("m"),
@@ -184,6 +192,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       mode: null,
       inferred: [],
       pendingClarify: null,
+      pendingExecution: false,
       renderedBlob: null,
       renderedUrl: null,
       progress: 0,
@@ -263,6 +272,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setMode: (mode) => set({ mode }),
   setInferred: (fields) => set({ inferred: fields }),
   setPendingClarify: (p) => set({ pendingClarify: p }),
+  setPendingExecution: (v) => set({ pendingExecution: v }),
 
   refreshHistory: async () => {
     const sessions = await listSessions();
