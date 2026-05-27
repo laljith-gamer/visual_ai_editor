@@ -19,6 +19,7 @@ import { runTemporalPass } from "@/lib/pipeline/temporal";
 import { buildHighlights } from "@/lib/pipeline/highlights";
 import { buildMomentHighlight } from "@/lib/pipeline/moment";
 import { planSignaturePayload } from "@/lib/plan/normalize";
+import { classifyUserTier } from "@/lib/plan/intent";
 import {
   getPredictions,
   savePredictions,
@@ -186,18 +187,46 @@ export default function Home() {
         // PLAN mode — multi-clip pipeline.
         setStatus("temporal", "Finding event windows");
         setProgress(0.62);
-        const candidates = detectCandidateWindows(frameScores, activePlan);
+
+        // v1.3.0: classify the user tier from the latest prompt. The
+        // detector and the highlights builder use this to widen / narrow
+        // selection adaptively. Read from the store so this works for
+        // both the auto-run and the PlanPreview confirm path.
+        const allMsgs = useEditorStore.getState().messages;
+        const latestUserMsg = [...allMsgs]
+          .reverse()
+          .find((m) => m.role === "user");
+        const userTier = classifyUserTier(
+          latestUserMsg?.content ?? "",
+          allMsgs
+        );
+
+        const detectionResult = detectCandidateWindows(
+          frameScores,
+          activePlan,
+          { userTier, videoMeta }
+        );
+        const candidates = detectionResult.windows;
+        const scoreStats = detectionResult.stats;
         logSession.ai(
           "events.detected",
-          { candidateCount: candidates.length, framesScored: frameScores.length },
-          `${candidates.length} candidate window${candidates.length === 1 ? "" : "s"} from ${frameScores.length} frames`
+          {
+            candidateCount: candidates.length,
+            framesScored: frameScores.length,
+            userTier,
+            percentile: detectionResult.percentile,
+            cutoff: round2(detectionResult.cutoff),
+            scoreMax: round2(scoreStats.max),
+            scoreMean: round2(scoreStats.mean)
+          },
+          `${candidates.length} candidate window${candidates.length === 1 ? "" : "s"} from ${frameScores.length} frames (tier=${userTier}, top ${(detectionResult.percentile * 100).toFixed(0)}%)`
         );
 
         if (candidates.length === 0) {
           pushMessage({
             role: "assistant",
             content:
-              "I couldn't find any windows that strongly match. Try loosening the wording or adding scenarios."
+              "I couldn't read frames from the video. Re-upload it and try again."
           });
           setStatus("ready", "No candidates");
           setProgress(0);
@@ -222,12 +251,15 @@ export default function Home() {
 
         setStatus("selecting", "Picking the final clips");
         setProgress(0.92);
-        const built = buildHighlights({
+        const buildResult = buildHighlights({
           candidates,
           verdicts,
           plan: activePlan,
-          videoDuration: videoMeta.duration
+          videoDuration: videoMeta.duration,
+          userTier,
+          scoreStats
         });
+        const built = buildResult.highlights;
         setHighlights(built);
         const totalSel = built.reduce((acc, h) => acc + (h.end - h.start), 0);
         logSession.ai(
@@ -235,15 +267,37 @@ export default function Home() {
           {
             count: built.length,
             totalSeconds: round1(totalSel),
-            selectionStrategy: activePlan.selectionStrategy
+            selectionStrategy: activePlan.selectionStrategy,
+            weakOnly: buildResult.weakOnly,
+            consideredCount: buildResult.consideredCount,
+            userTier
           },
-          `Built ${built.length} clip${built.length === 1 ? "" : "s"} (${totalSel.toFixed(1)}s total)`,
+          `Built ${built.length} clip${built.length === 1 ? "" : "s"} (${totalSel.toFixed(1)}s total${buildResult.weakOnly ? ", low confidence" : ""})`,
           Date.now() - t2
         );
-        pushMessage({
-          role: "assistant",
-          content: `Picked ${built.length} clip${built.length === 1 ? "" : "s"} totalling ${totalSel.toFixed(1)}s. Tap "Render" to assemble the short.`
-        });
+
+        if (built.length === 0) {
+          // Advanced tier with no usable matches — be honest.
+          pushMessage({
+            role: "assistant",
+            content: `I couldn't find windows that strongly match (top score ${scoreStats.max.toFixed(2)}). Try broader scenarios, or describe a single moment ("find the part where ___").`
+          });
+          setStatus("ready", "No strong matches");
+          setProgress(0);
+          return;
+        }
+
+        if (buildResult.weakOnly) {
+          pushMessage({
+            role: "assistant",
+            content: `Picked ${built.length} clip${built.length === 1 ? "" : "s"} but match confidence is low (top score ${scoreStats.max.toFixed(2)}). Try broader scenarios for stronger picks.`
+          });
+        } else {
+          pushMessage({
+            role: "assistant",
+            content: `Picked ${built.length} clip${built.length === 1 ? "" : "s"} totalling ${totalSel.toFixed(1)}s. Tap "Render" to assemble the short.`
+          });
+        }
         setStatus("ready", "Ready to render");
         setProgress(1);
       } catch (err) {
@@ -662,4 +716,8 @@ export default function Home() {
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }

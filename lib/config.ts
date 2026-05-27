@@ -289,3 +289,51 @@ export const SECURITY_HEADERS = {
   xFrameOptions: "DENY",
   xContentTypeOptions: "nosniff"
 } as const;
+
+
+
+// =====================================================================
+// v1.3.0 — adaptive selection. Replaces hardcoded thresholds in
+// events.ts / highlights.ts. Every constant here is a *default input*
+// to the derivation functions in lib/pipeline/adapt.ts, NOT a fixed
+// cutoff that gets used directly by the pipeline.
+// =====================================================================
+
+export const ADAPT = {
+  /** Candidate-percentile defaults (top-X% of frames by score). */
+  percentile: {
+    /** Default for novice + balanced strategy. Wide net, always returns something. */
+    novice: 0.30,
+    /** Slightly stricter for advanced users — they want precision. */
+    advanced: 0.20,
+    /** Stricter still for "best" selection strategy. */
+    bestStrategy: 0.15,
+    /** When max - mean < this, the score distribution is flat → widen percentile. */
+    flatRangeThreshold: 0.05,
+    /** How much to widen by when flat. */
+    flatBoost: 0.10,
+    /** Hard cap on widening. */
+    maxWidened: 0.50
+  },
+  /** Min clip duration derivation. */
+  minClipSeconds: {
+    /** Lowest minClip allowed regardless of inputs. */
+    absoluteFloor: 0.5,
+    /** Highest derived minClip cap. */
+    absoluteCeiling: 2.5,
+    /** Adaptive cap = sourceDuration / sourceDivisor (clamped to floor/ceiling). */
+    sourceDivisor: 60,
+    /** Multiply derived minClip by this for novice tier. */
+    noviceFactor: 0.7
+  },
+  /** Force-min highlights: how many clips MUST come back. */
+  forceMin: {
+    novice: 1,
+    advanced: 0
+  },
+  /** Score → confidence label thresholds. */
+  confidence: {
+    highMin: 0.5,
+    mediumMin: 0.25
+  }
+} as const;

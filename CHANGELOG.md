@@ -4,6 +4,38 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.3.0] — 2026-05-27
+
+### Added
+- Adaptive percentile-based candidate selection (`lib/pipeline/adapt.ts`).
+  Replaces the hardcoded 0.15 score floor with a percentile derived from
+  user tier, selection strategy, and the score distribution. The "0 clips"
+  failure mode is gone — even videos with low absolute scores produce
+  candidates.
+- User-tier classifier (`lib/plan/intent.ts → classifyUserTier`):
+  novice (vague prompts) gets a wide net + force-min so they always get
+  ≥1 clip; advanced (technical vocabulary, timestamps) gets stricter
+  matching and an honest "no match" if their query was too specific.
+- `confidence: "high" | "medium" | "low"` on every highlight, derived
+  from the composite score.
+- Force-min fallback in `buildHighlights`: if normal selection returns 0
+  for a novice user, the top candidate(s) come back with a low-confidence
+  flag so the user gets something to work with.
+
+### Changed
+- `detectCandidateWindows` now returns `DetectionResult` (windows + stats
+  + cutoff + percentile) so callers can build helpful diagnostics.
+- `buildHighlights` now returns `BuildResult` (highlights + weakOnly +
+  consideredCount) instead of `Highlight[]` directly.
+- Every selection knob now lives in `lib/config.ts → ADAPT` and is read
+  by pure derivation functions in `lib/pipeline/adapt.ts`. No fixed
+  thresholds anywhere in the pipeline.
+
+### Notes
+- `lib/pipeline/extract.ts` was added but isn't wired up to the planner
+  in this version. Time-bounded queries like "first 1 minute" still go
+  through scoring; routing them through extract is v1.3.1 work.
+
 ## [1.2.1] — 2026-05-27
 
 ### Fixed

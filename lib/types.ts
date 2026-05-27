@@ -81,6 +81,10 @@ export interface Highlight {
   reason: string;
   label?: string;
   transition?: EditPlan["transition"];
+  /** v1.3.0 — derived from composite score by `assessConfidence` in
+   *  lib/pipeline/adapt.ts. Lets the chat surface "low confidence"
+   *  picks without lying about what was chosen. */
+  confidence?: "high" | "medium" | "low";
 }
 
 // ---------------------------------------------------------------------
@@ -228,6 +232,10 @@ export interface AgentRequest {
    *  Built client-side via `summarizeRecentActivity()`. Keeps the prompt
    *  small while letting the LLM reason about implicit user preferences. */
   recentActivity?: string;
+  /** v1.3.0 — classified user tier (novice | advanced). Lets the
+   *  planner bias mode/strategy toward what the prompt actually
+   *  signals about the user's experience level. */
+  userTier?: UserTier;
 }
 
 /** Discriminated union returned by POST /api/agent. */
@@ -275,6 +283,24 @@ export type AgentResponse =
       /** Set when rate-limited; UI uses this to show a friendly retry banner. */
       retryAfterSeconds?: number;
     };
+
+// ---------------------------------------------------------------------
+// Adaptive selection (NEW in v1.3.0)
+// ---------------------------------------------------------------------
+
+/** v1.3.0 — distinguishes beginners from pros. Inferred from prompt
+ *  characteristics in lib/plan/intent.ts → classifyUserTier. */
+export type UserTier = "novice" | "advanced";
+
+/** v1.3.0 — frame-score distribution summary. Powers adaptive selection. */
+export interface ScoreStats {
+  count: number;
+  max: number;
+  mean: number;
+  p50: number;
+  p75: number;
+  p90: number;
+}
 
 // ---------------------------------------------------------------------
 // Activity log (NEW in v1.2.0)

@@ -2,7 +2,8 @@ import type {
   ChatMessage,
   EditPlan,
   IntentMode,
-  SessionMemory
+  SessionMemory,
+  UserTier
 } from "@/lib/types";
 import { INFERENCE_HEURISTICS } from "@/lib/config";
 
@@ -213,4 +214,33 @@ export function inferIntent(args: {
     userStatedFormat,
     signals
   };
+}
+
+
+// =====================================================================
+// v1.3.0 — user tier classifier. Distinguishes beginners (always-give-
+// them-something) from pros (precise matching, OK to return zero).
+// Signals that mark "advanced": editing vocabulary (crossfade, b-roll),
+// timestamp references (at 1:23), framerate / codec / bitrate mentions.
+// Everyone else is treated as novice — wide net, force-min, friendly
+// "weak match" feedback when scores are low.
+// =====================================================================
+
+const ADVANCED_PATTERNS = [
+  /\b(crossfade|b[- ]?roll|aspect ratio|frame rate|punchier|trim|key ?frame|fade in|fade out)\b/i,
+  /\bat \d+:\d+\b/,
+  /\b\d+\s*fps\b/i,
+  /\b(codec|bitrate|kbps|mbps|encode|export)\b/i
+];
+
+export function classifyUserTier(
+  text: string,
+  history: ChatMessage[] = []
+): UserTier {
+  if (ADVANCED_PATTERNS.some((re) => re.test(text))) return "advanced";
+  if (history.length > 2) {
+    const allText = history.map((m) => m.content).join(" ");
+    if (ADVANCED_PATTERNS.some((re) => re.test(allText))) return "advanced";
+  }
+  return "novice";
 }

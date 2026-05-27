@@ -1,29 +1,68 @@
-import type { CandidateWindow, EditPlan, FrameScore } from "@/lib/types";
+import type {
+  CandidateWindow,
+  EditPlan,
+  FrameScore,
+  ScoreStats,
+  UserTier
+} from "@/lib/types";
 import { clamp } from "@/lib/util/time";
 import { EVENT_DETECTION } from "@/lib/config";
+import {
+  computeScoreStats,
+  deriveCandidatePercentile,
+  deriveMinClipSeconds
+} from "@/lib/pipeline/adapt";
+
+export interface DetectionResult {
+  windows: CandidateWindow[];
+  stats: ScoreStats;
+  cutoff: number;
+  percentile: number;
+  minClipSeconds: number;
+}
+
+export interface DetectionOptions {
+  userTier?: UserTier;
+  videoMeta?: { duration: number; width: number; height: number };
+}
 
 /**
- * Detect candidate windows from per-frame scores.
- * Algorithm: walk frames left-to-right; group contiguous frames whose score
- * exceeds a dynamic threshold (mean + N*stddev, floored) into windows.
- *
- * All thresholds and tolerances live in lib/config.ts → EVENT_DETECTION.
+ * v1.3.0: Percentile-based candidate detection. Replaces the hardcoded
+ * 0.15 threshold floor with an adaptive cutoff derived from user tier,
+ * selection strategy, and the actual score distribution.
  */
 export function detectCandidateWindows(
   frames: FrameScore[],
-  plan: EditPlan
-): CandidateWindow[] {
-  if (frames.length === 0) return [];
+  plan: EditPlan,
+  options: DetectionOptions = {}
+): DetectionResult {
+  if (frames.length === 0) {
+    return {
+      windows: [],
+      stats: { count: 0, max: 0, mean: 0, p50: 0, p75: 0, p90: 0 },
+      cutoff: 0,
+      percentile: 0,
+      minClipSeconds: plan.minClipSeconds
+    };
+  }
+
   const sorted = [...frames].sort((a, b) => a.t - b.t);
   const scores = sorted.map((f) => f.score);
-  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
-  const variance =
-    scores.reduce((acc, s) => acc + (s - mean) ** 2, 0) / scores.length;
-  const stddev = Math.sqrt(variance);
-  const threshold = Math.max(
-    EVENT_DETECTION.thresholdFloor,
-    mean + EVENT_DETECTION.thresholdStddevMultiplier * stddev
-  );
+  const stats = computeScoreStats(scores);
+
+  const ctx = {
+    plan,
+    videoMeta: options.videoMeta,
+    scoreStats: stats,
+    userTier: options.userTier
+  };
+  const percentile = deriveCandidatePercentile(ctx);
+  const minClip = deriveMinClipSeconds(ctx);
+
+  // Cutoff = score at the (percentile)-th position in descending order.
+  const sortedDesc = [...scores].sort((a, b) => b - a);
+  const cutoffIdx = Math.max(0, Math.floor(scores.length * percentile) - 1);
+  const cutoff = sortedDesc[cutoffIdx] ?? 0;
 
   const windows: CandidateWindow[] = [];
   let cursor: FrameScore[] = [];
@@ -35,13 +74,8 @@ export function detectCandidateWindows(
     const meanScore =
       cursor.reduce((acc, f) => acc + f.score, 0) / cursor.length;
     const duration = end - start;
-    if (duration >= plan.minClipSeconds * EVENT_DETECTION.minDurationFractionOfMinClip) {
-      windows.push({
-        start,
-        end,
-        meanScore,
-        frames: cursor.slice()
-      });
+    if (duration >= minClip * EVENT_DETECTION.minDurationFractionOfMinClip) {
+      windows.push({ start, end, meanScore, frames: cursor.slice() });
     }
     cursor = [];
   };
@@ -49,7 +83,7 @@ export function detectCandidateWindows(
   let prevT = -Infinity;
   for (const f of sorted) {
     const gap = f.t - prevT;
-    if (f.score >= threshold) {
+    if (f.score >= cutoff) {
       if (
         cursor.length > 0 &&
         gap > plan.sampleEverySeconds * EVENT_DETECTION.gapToleranceSamplePeriods
@@ -67,8 +101,13 @@ export function detectCandidateWindows(
   }
   flush();
 
-  // Cap each window to maxClipSeconds, keeping the highest-density center.
-  return windows.map((w) => trimWindowToMax(w, plan.maxClipSeconds));
+  return {
+    windows: windows.map((w) => trimWindowToMax(w, plan.maxClipSeconds)),
+    stats,
+    cutoff,
+    percentile,
+    minClipSeconds: minClip
+  };
 }
 
 function trimWindowToMax(

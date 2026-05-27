@@ -46,7 +46,9 @@ export async function buildMomentHighlight({
   // 1) Detect candidate windows with the standard threshold logic.
   //    Even though we want one clip, using the same detector ensures we
   //    don't miss a real peak surrounded by noise.
-  const candidates = detectCandidateWindows(frameScores, plan);
+  //    v1.3.0: detectCandidateWindows now returns DetectionResult; we
+  //    only need the windows array here.
+  const candidates = detectCandidateWindows(frameScores, plan).windows;
   if (candidates.length === 0) return [];
 
   // Keep the top 3 by mean score so the temporal pass cost stays bounded.
