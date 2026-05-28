@@ -34,6 +34,7 @@ import { buildMomentHighlight } from "./moment";
 import { planSignaturePayload } from "@/lib/plan/normalize";
 import { sha1String } from "@/lib/util/hash";
 import { getPredictions, savePredictions, trimCache } from "@/lib/store/cache";
+import { PLAN_DEFAULTS } from "@/lib/config";
 
 /** Activity-log fan-out passed in by the orchestrator. */
 export interface SourceLogger {
@@ -369,7 +370,42 @@ export function mergeAcrossSources(
     return { highlights: [winner], weakOnly, scoreMax };
   }
 
-  // Plan mode — merge to fit the target budget.
+  // v1.7.1 — Plan mode without an explicit user duration: skip budget
+  // enforcement entirely. Each per-source result already ran the
+  // quality-floor selection in buildHighlights; here we just collect
+  // them, dedupe across sources by overlap, and cap at the global
+  // unbudgeted limits. This is what makes "best parts" return a
+  // natural-feeling reel instead of a hard-trimmed 30s slice.
+  if (!plan.userSpecifiedDuration) {
+    // Sort globally by start so duplicate-overlap detection is stable.
+    const ranked = [...all].sort((a, b) => b.score - a.score);
+    const out: Highlight[] = [];
+    let total = 0;
+    for (const h of ranked) {
+      if (out.length >= PLAN_DEFAULTS.maxClipsWithoutBudget) break;
+      const dur = h.end - h.start;
+      if (total + dur > PLAN_DEFAULTS.maxTotalSecondsWithoutBudget) continue;
+      // Cross-source dedupe: drop a clip if another picked one
+      // already covers >50% of its time on the same source.
+      const overlap = out.find((x) => {
+        if ((x.sourceId ?? null) !== (h.sourceId ?? null)) return false;
+        const o = Math.max(0, Math.min(x.end, h.end) - Math.max(x.start, h.start));
+        return o / dur > 0.5;
+      });
+      if (overlap) continue;
+      out.push(h);
+      total += dur;
+    }
+    out.sort((a, b) => {
+      const sa = a.sourceId ?? "";
+      const sb = b.sourceId ?? "";
+      if (sa !== sb) return sa.localeCompare(sb);
+      return a.start - b.start;
+    });
+    return { highlights: out, weakOnly, scoreMax };
+  }
+
+  // ---------- Budgeted path (existing behaviour) ----------
   const budget = plan.targetShortSeconds;
   const sorted = [...all].sort((a, b) => b.score - a.score);
 

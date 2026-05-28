@@ -20,8 +20,33 @@ export interface EditPlan {
   scenarios: Scenario[];
   /** Map: scenario id → desired weight contribution (0–1, summing to ~1). */
   labelWeights: Record<string, number>;
-  /** Final short duration target in seconds. */
+  /** Final short duration target in seconds.
+   *  v1.7.1 — only ENFORCED by the pipeline when `userSpecifiedDuration`
+   *  is true. Otherwise this is a soft hint kept for future activation
+   *  ("the user might say 30s later"); selection runs on the
+   *  quality-floor path instead. */
   targetShortSeconds: number;
+  /** v1.7.1 — true ONLY when the user explicitly named a duration this
+   *  session ("30s", "minute and a half", "0:45") or used a platform
+   *  whose duration is universally fixed (TikTok, YouTube Shorts).
+   *
+   *  When false:
+   *    - The pipeline IGNORES targetShortSeconds and runs the
+   *      quality-floor selection path (PLAN_DEFAULTS.qualityFloor).
+   *    - mergeAcrossSources skips the budget-fitting step.
+   *    - The planner is instructed never to ask "how long?" — total
+   *      length is emergent from clip quality.
+   *
+   *  When true:
+   *    - Existing fit-to-budget behaviour applies.
+   *    - Append refinements that push past the budget surface a soft
+   *      over-budget notice rather than auto-trimming.
+   *    - Memory facts persist this preference across turns. */
+  userSpecifiedDuration: boolean;
+  /** v1.7.1 — minimum composite score for a clip to be retained when
+   *  the pipeline is in quality-floor mode (userSpecifiedDuration =
+   *  false). Optional; falls back to PLAN_DEFAULTS.qualityFloor. */
+  qualityFloor?: number;
   /** Single clip max length in seconds. */
   maxClipSeconds: number;
   /** Single clip min length. */

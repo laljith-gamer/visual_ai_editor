@@ -81,7 +81,21 @@ export const PLAN_DEFAULTS = {
   transition: "fade" as const,
   selectionStrategy: "balanced" as const,
   sampleEverySeconds: SAMPLE_DEFAULTS.everySeconds,
-  inferenceWidth: SAMPLE_DEFAULTS.width
+  inferenceWidth: SAMPLE_DEFAULTS.width,
+  /** v1.7.1 — score threshold below which a clip is dropped when the
+   *  pipeline runs in quality-floor mode (userSpecifiedDuration =
+   *  false). Calibrated against typical SigLIP+motion+saliency fusion
+   *  output: 0.55 keeps roughly the top third of well-matched clips
+   *  on a strong scenario, fewer when the match is weak. */
+  qualityFloor: 0.55,
+  /** v1.7.1 — hard upper bound on number of clips kept when no budget
+   *  is enforced. Stops a 30-minute video from spawning 25+ clips and
+   *  breaking ffmpeg.wasm's input list. */
+  maxClipsWithoutBudget: 12,
+  /** v1.7.1 — hard upper bound on total duration (seconds) when no
+   *  budget is enforced. Lets quality-floor runs return naturally
+   *  short OR naturally long results, but caps the worst case. */
+  maxTotalSecondsWithoutBudget: 180
 } as const;
 
 /** Plan validation bounds. */

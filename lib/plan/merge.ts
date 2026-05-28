@@ -48,6 +48,17 @@ export function mergePlan(current: EditPlan, patch: PlanPatch): EditPlan {
       patch.targetShortSeconds,
       PLAN_BOUNDS.targetShortSeconds
     );
+    // v1.7.1 — any explicit duration on a patch flips the plan into
+    // user-specified mode (the pipeline now enforces budget). The
+    // patch may also set userSpecifiedDuration explicitly; we honour
+    // that below if the planner emitted it.
+    out.userSpecifiedDuration = true;
+  }
+  if (typeof patch.userSpecifiedDuration === "boolean") {
+    out.userSpecifiedDuration = patch.userSpecifiedDuration;
+  }
+  if (typeof patch.qualityFloor === "number") {
+    out.qualityFloor = clamp(patch.qualityFloor, 0, 1);
   }
   if (typeof patch.maxClipSeconds === "number") {
     out.maxClipSeconds = clampBound(patch.maxClipSeconds, PLAN_BOUNDS.maxClipSeconds);

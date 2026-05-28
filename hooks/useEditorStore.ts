@@ -125,6 +125,14 @@ interface EditorState {
   applyPlanPatch: (patch: PlanPatch) => EditPlan | null;
 
   setHighlights: (h: Highlight[]) => void;
+  /** v1.7.1 — Append new highlights to the existing timeline without
+   *  replacing them. Used by append-style refinements ("add the
+   *  celebration too") so previously-curated clips are preserved.
+   *  Returns the number of clips that were actually added (some may
+   *  be skipped due to overlap dedupe or hard caps). */
+  mergeHighlights: (
+    incoming: Highlight[]
+  ) => { added: number; skipped: number };
   updateHighlight: (id: string, patch: Partial<Highlight>) => void;
   removeHighlight: (id: string) => void;
   selectClip: (id: string | null) => void;
@@ -169,6 +177,13 @@ interface EditorState {
 }
 
 const emptyMemory: SessionMemory = { styles: [], keep: [], skip: [] };
+
+/** v1.7.1 — Hard cap on the total number of highlights kept on the
+ *  timeline. mergeHighlights skips incoming clips once the total
+ *  reaches this number, preferring higher-scoring ones. ffmpeg.wasm's
+ *  input-list limit + UX (a 24-clip reel is unwieldy in the timeline
+ *  panel) both motivated this number. */
+const MERGE_HIGHLIGHTS_CAP = 24;
 
 function freshState() {
   return {
@@ -433,6 +448,79 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       selectedClipId: highlights[0]?.id ?? null,
       updatedAt: Date.now()
     }),
+
+  /** v1.7.1 — Merge new highlights into the existing timeline.
+   *
+   *  Policy:
+   *    - Overlap dedupe: an incoming clip is dropped if it overlaps
+   *      an existing one on the SAME source by more than 50% of its
+   *      duration. Cross-source clips never overlap-dedupe.
+   *    - Hard cap: total clip count is capped at MERGE_HIGHLIGHTS_CAP
+   *      so unbounded appends don't break ffmpeg.wasm input lists.
+   *      When the cap is reached, lower-scoring incoming clips are
+   *      dropped first.
+   *    - Sort: the merged array is re-sorted by source id then start
+   *      time, matching mergeAcrossSources' "chronological chapters
+   *      per source" convention.
+   *    - Selection: existing selection survives the merge unless it
+   *      gets evicted; in that case we fall back to the first clip.
+   */
+  mergeHighlights: (incoming) => {
+    if (!Array.isArray(incoming) || incoming.length === 0) {
+      return { added: 0, skipped: 0 };
+    }
+    const cur = get();
+    const existing = cur.highlights;
+
+    // Score-rank the incoming first so the cap-eviction step keeps the
+    // best candidates if we're already near the limit.
+    const incomingRanked = [...incoming].sort((a, b) => b.score - a.score);
+
+    const merged: Highlight[] = [...existing];
+    let added = 0;
+    let skipped = 0;
+    for (const h of incomingRanked) {
+      // Cap reached — bail before adding more.
+      if (merged.length >= MERGE_HIGHLIGHTS_CAP) {
+        skipped += 1;
+        continue;
+      }
+      // Overlap dedupe vs same-source clips already in the timeline.
+      const dur = Math.max(0.001, h.end - h.start);
+      const conflict = merged.find((x) => {
+        if ((x.sourceId ?? null) !== (h.sourceId ?? null)) return false;
+        const o = Math.max(0, Math.min(x.end, h.end) - Math.max(x.start, h.start));
+        return o / dur > 0.5;
+      });
+      if (conflict) {
+        skipped += 1;
+        continue;
+      }
+      merged.push(h);
+      added += 1;
+    }
+
+    // Stable sort: by sourceId (groups multi-source chapters) then by
+    // start time within the source.
+    merged.sort((a, b) => {
+      const sa = a.sourceId ?? "";
+      const sb = b.sourceId ?? "";
+      if (sa !== sb) return sa.localeCompare(sb);
+      return a.start - b.start;
+    });
+
+    // Preserve existing selection if it's still in the merged set;
+    // otherwise pick the first clip so the preview pane has something.
+    const selectedStillThere =
+      cur.selectedClipId &&
+      merged.some((x) => x.id === cur.selectedClipId);
+    set({
+      highlights: merged,
+      selectedClipId: selectedStillThere ? cur.selectedClipId : merged[0]?.id ?? null,
+      updatedAt: Date.now()
+    });
+    return { added, skipped };
+  },
 
   updateHighlight: (id, patch) =>
     set((s) => ({
