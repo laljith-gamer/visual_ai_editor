@@ -1,0 +1,92 @@
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 clamp(16px, 4vw, 32px);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  background: linear-gradient(
+    180deg,
+    rgba(11, 13, 16, 0.72),
+    rgba(11, 13, 16, 0.32)
+  );
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logoMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #07120c;
+  box-shadow: 0 4px 14px rgba(99, 216, 149, 0.35);
+}
+
+.brandName {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-size: 14px;
+}
+
+.brandTag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.navLink {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+.navLink:hover {
+  color: var(--text);
+}
+
+.openEditor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+  border-radius: 999px;
+  text-decoration: none;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.openEditor:hover {
+  background: var(--bg-3);
+  border-color: rgba(99, 216, 149, 0.4);
+  text-decoration: none;
+}
+
+@media (max-width: 640px) {
+  .navLink { display: none; }
+}

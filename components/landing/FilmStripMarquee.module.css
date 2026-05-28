@@ -1,0 +1,89 @@
+.wrap {
+  margin-top: clamp(48px, 8vw, 96px);
+  width: 100%;
+  overflow: hidden;
+  /* Soft fade on the edges so the loop doesn't feel like a hard cut. */
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    black 8%,
+    black 92%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    black 8%,
+    black 92%,
+    transparent 100%
+  );
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.track {
+  display: flex;
+  width: max-content;
+  gap: 14px;
+  padding: 8px 0 36px;
+  animation: marquee 38s linear infinite;
+}
+
+.cell {
+  position: relative;
+  flex: 0 0 auto;
+  width: 168px;
+  height: 96px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  animation: bob 6s ease-in-out infinite;
+}
+
+/* Sprocket holes top + bottom — the "film strip" cue. */
+.sprocketTop,
+.sprocketBot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background-image: radial-gradient(
+    circle at 6px 3px,
+    rgba(0, 0, 0, 0.6) 0 1.6px,
+    transparent 2.2px
+  );
+  background-size: 12px 6px;
+  background-repeat: repeat-x;
+}
+.sprocketTop { top: 0; }
+.sprocketBot { bottom: 0; }
+
+.gloss {
+  position: absolute;
+  inset: 6px 6px 6px 6px;
+  border-radius: 4px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.08),
+    rgba(255, 255, 255, 0) 30%,
+    rgba(0, 0, 0, 0) 70%,
+    rgba(0, 0, 0, 0.18) 100%
+  );
+}
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@keyframes bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .track, .cell { animation: none; }
+}

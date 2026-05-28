@@ -1,0 +1,219 @@
+.shell {
+  position: relative;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--bg-0);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Same gradient mesh as the landing — keeps the transition consistent. */
+.bg {
+  position: absolute;
+  inset: -10%;
+  z-index: -1;
+  background:
+    radial-gradient(40% 60% at 18% 12%, rgba(99, 216, 149, 0.18), transparent 60%),
+    radial-gradient(45% 55% at 82% 8%, rgba(117, 167, 255, 0.14), transparent 60%),
+    radial-gradient(60% 60% at 50% 110%, rgba(169, 147, 255, 0.12), transparent 60%);
+  filter: blur(40px) saturate(120%);
+  animation: drift 28s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+@keyframes drift {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(-3%, -1%, 0) scale(1.04); }
+  100% { transform: translate3d(2%, 2%, 0) scale(1.02); }
+}
+
+/* ── Top-left brand chip ─────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 24px;
+}
+
+.brandIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #07120c;
+}
+
+.brandText {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-muted);
+}
+
+/* ── Stage: ring + checklist ─────────────────────────────────── */
+
+.stage {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: clamp(32px, 6vw, 80px);
+  align-items: center;
+  justify-items: center;
+  padding: clamp(16px, 4vw, 36px) clamp(16px, 6vw, 60px);
+  max-width: 1080px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+@media (max-width: 880px) {
+  .stage {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+  .checklistCol {
+    width: 100%;
+    max-width: 480px;
+  }
+}
+
+.checklistCol {
+  width: 100%;
+}
+
+/* ── Frame strip docked at the bottom ────────────────────────── */
+
+.stripWrap {
+  display: flex;
+  justify-content: center;
+  padding: 0 clamp(16px, 4vw, 36px) clamp(28px, 5vw, 56px);
+}
+
+/* ── Full-screen wipe panel ──────────────────────────────────── */
+
+.wipe {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 100dvh;
+  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  transform: translateY(100%);
+  z-index: 100;
+  pointer-events: none;
+  box-shadow: 0 -20px 80px rgba(99, 216, 149, 0.35);
+}
+
+.shell.wiping .wipe {
+  animation: wipeIn 600ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+
+@keyframes wipeIn {
+  0%   { transform: translateY(100%); }
+  60%  { transform: translateY(0); }
+  100% { transform: translateY(0); }
+}
+
+/* Once the wipe is in, briefly fade the page contents to white-on-green
+   so the eye doesn't try to read the layout that's about to change. */
+.shell.wiping .stage,
+.shell.wiping .stripWrap,
+.shell.wiping .header {
+  animation: fadeOut 500ms ease-out 100ms forwards;
+}
+
+@keyframes fadeOut {
+  to { opacity: 0; transform: translateY(-6px); }
+}
+
+/* ── Error state ─────────────────────────────────────────────── */
+
+.errorBox {
+  margin: auto;
+  max-width: 480px;
+  padding: 32px 28px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(23, 28, 34, 0.85), rgba(17, 21, 26, 0.85));
+  border: 1px solid rgba(255, 115, 115, 0.35);
+  text-align: center;
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.45);
+}
+
+.errorIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  background: rgba(255, 115, 115, 0.12);
+  border: 1px solid rgba(255, 115, 115, 0.4);
+  color: var(--danger);
+}
+
+.errorTitle {
+  margin: 0 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.errorBody {
+  margin: 0 0 20px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.errorActions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.errorPrimary,
+.errorSecondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.errorPrimary {
+  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  color: #07120c;
+  border: 1px solid var(--accent-strong);
+  font-weight: 600;
+}
+.errorPrimary:hover {
+  filter: brightness(1.08);
+}
+
+.errorSecondary {
+  background: var(--bg-2);
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+}
+.errorSecondary:hover {
+  background: var(--bg-3);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg { animation: none; }
+  .shell.wiping .wipe { animation-duration: 1ms; }
+  .shell.wiping .stage,
+  .shell.wiping .stripWrap,
+  .shell.wiping .header { animation: none; opacity: 0; }
+}

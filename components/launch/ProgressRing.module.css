@@ -1,0 +1,100 @@
+.wrap {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  display: grid;
+  place-items: center;
+}
+
+.svg {
+  position: relative;
+  z-index: 1;
+}
+
+.fill {
+  transition: stroke-dashoffset 220ms cubic-bezier(0.2, 0.7, 0.1, 1);
+  filter: drop-shadow(0 0 8px rgba(99, 216, 149, 0.45));
+}
+
+.halo {
+  position: absolute;
+  inset: -20px;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    rgba(99, 216, 149, calc(0.18 + 0.22 * var(--p, 0))),
+    transparent 80%
+  );
+  filter: blur(18px);
+  z-index: 0;
+  animation: pulse 3s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+
+.center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  z-index: 2;
+}
+
+.percent {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.percentNum {
+  font-size: 56px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  background: linear-gradient(180deg, #ffffff, #b8c2cf);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.percentSign {
+  font-size: 18px;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-left: 2px;
+}
+
+.label {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.detail {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-faint);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.done .fill {
+  filter: drop-shadow(0 0 14px rgba(99, 216, 149, 0.7));
+}
+.done .halo { animation-play-state: paused; }
+
+@media (prefers-reduced-motion: reduce) {
+  .halo, .fill { animation: none; transition: none; }
+}
