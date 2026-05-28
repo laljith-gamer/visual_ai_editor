@@ -790,6 +790,175 @@ export default function Home() {
           return;
         }
 
+        // ---- BRIEFING mode (v1.7.0) ---------------------------------------
+        // The user wants the AI to *describe* the video / call out best
+        // parts WITHOUT producing a render. The planner forwarded a
+        // sample plan + the question; we sample frames here and POST
+        // them to /api/agent/briefing for the structured analysis. The
+        // result is pushed into chat as an assistant message carrying
+        // the BriefingResult as an attachment so AssistantPanel can
+        // render the BriefingCard. Plan + clip state stay untouched.
+        if (data.mode === "briefing") {
+          const storeState = useEditorStore.getState();
+          const active =
+            storeState.sources.find((s) => s.id === storeState.activeSourceId) ??
+            storeState.sources[0];
+          if (!active) {
+            pushMessage({
+              role: "assistant",
+              content:
+                "Upload a video first, then I can describe what's in it."
+            });
+            setStatus("idle", "Awaiting video");
+            setProgress(0);
+            return;
+          }
+
+          // Show the warm waiting message immediately; the structured
+          // briefing result lands as a follow-up message once the
+          // vision call returns.
+          pushMessage({
+            role: "assistant",
+            content: data.message || "Watching the whole thing now\u2026"
+          });
+          if (data.inferred && data.inferred.length > 0) {
+            setInferred(data.inferred);
+          }
+
+          try {
+            setStatus("scoring", "Reading frames\u2026");
+            setProgress(0.2);
+
+            const duration = active.meta.duration;
+            const rangeStart = data.samplePlan.range
+              ? Math.max(0, data.samplePlan.range.startSeconds)
+              : 0;
+            const rangeEnd = data.samplePlan.range
+              ? Math.min(duration, data.samplePlan.range.endSeconds)
+              : duration;
+            const targetCount = data.samplePlan.count;
+            const span = Math.max(0.5, rangeEnd - rangeStart);
+            const every = Math.max(0.5, span / Math.max(1, targetCount - 1));
+
+            const { sampleFrames, blobToBase64 } = await import(
+              "@/lib/pipeline/sample"
+            );
+            const frames = await sampleFrames(active.blob, {
+              every,
+              width: 384,
+              range: { startSeconds: rangeStart, endSeconds: rangeEnd },
+              maxFrames: targetCount + 2
+            });
+            const sliced = frames.slice(0, targetCount);
+            if (sliced.length < 3) {
+              pushMessage({
+                role: "assistant",
+                content:
+                  "I couldn't pull enough frames to brief you on this video. Try a longer source."
+              });
+              setStatus("idle", undefined);
+              setProgress(0);
+              return;
+            }
+            setProgress(0.6);
+
+            const framesB64: Array<{ t: number; imageBase64: string }> = [];
+            for (const f of sliced) {
+              framesB64.push({ t: f.t, imageBase64: await blobToBase64(f.blob) });
+            }
+
+            const resp = await fetch("/api/agent/briefing", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                question: data.question,
+                sourceName: active.meta.name,
+                duration,
+                range: data.samplePlan.range,
+                frames: framesB64
+              })
+            });
+            const json = (await resp.json().catch(() => ({}))) as {
+              overview?: string;
+              bestParts?: Array<{
+                id: string;
+                startSeconds: number;
+                endSeconds: number;
+                label: string;
+                why: string;
+                sourceId?: string;
+              }>;
+              followUps?: string[];
+              error?: string;
+              transient?: boolean;
+            };
+            if (!resp.ok || json.error) {
+              pushMessage({
+                role: "assistant",
+                content:
+                  json.error ||
+                  "Couldn't analyse the video right now \u2014 try again in a sec."
+              });
+              setStatus(
+                storeState.highlights.length > 0 ? "ready" : "idle",
+                undefined
+              );
+              setProgress(0);
+              return;
+            }
+
+            // Tag the assistant message with a briefing attachment so
+            // AssistantPanel can render the structured card. The
+            // visible content is the overview text — the card adds
+            // bestParts + followUps below it.
+            pushMessage({
+              role: "assistant",
+              content: json.overview || "Here's what I see.",
+              attachment: {
+                mode: "briefing",
+                bestParts: json.bestParts ?? [],
+                followUps: json.followUps ?? [],
+                sourceId: active.id
+              }
+            });
+
+            setStatus(
+              storeState.highlights.length > 0 ? "ready" : "idle",
+              undefined
+            );
+            setProgress(1);
+            logSession.ai(
+              "briefing.delivered",
+              {
+                question: data.question.slice(0, 120),
+                framesSent: framesB64.length,
+                rangeStart,
+                rangeEnd,
+                bestPartsCount: json.bestParts?.length ?? 0,
+                followUpsCount: json.followUps?.length ?? 0
+              },
+              `Briefed ${(rangeEnd - rangeStart).toFixed(0)}s of "${active.meta.name}"`,
+              plannerMs
+            );
+          } catch (err) {
+            pushMessage({
+              role: "assistant",
+              content: `Briefing failed: ${(err as Error).message}`
+            });
+            setStatus(
+              useEditorStore.getState().highlights.length > 0 ? "ready" : "idle",
+              undefined
+            );
+            setProgress(0);
+            logSession.system(
+              "error.unhandled",
+              { phase: "briefing", message: (err as Error).message },
+              `Briefing failed: ${(err as Error).message.slice(0, 80)}`
+            );
+          }
+          return;
+        }
+
         // ---- EXTRACT mode (v1.5.0) ----------------------------------------
         // Verbatim time slice. No scoring, no Gemini vision call. The
         // pipeline emits exactly one Highlight for the requested range.

@@ -10,17 +10,21 @@ import {
   RotateCcw,
   Sparkles,
   ThumbsDown,
-  ThumbsUp,
-  Wand2,
-  Zap
+  ThumbsUp
 } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { useShare } from "@/hooks/useShare";
 import { CapabilityBadge } from "./CapabilityBadge";
 import { QuickReplies } from "./QuickReplies";
 import { PlanPreview } from "./PlanPreview";
+import { BriefingCard } from "./BriefingCard";
 import { logUser } from "@/lib/log/recorders";
-import type { ChatMessage, ClarifyQuestion, InferredField } from "@/lib/types";
+import type {
+  BestPart,
+  ChatMessage,
+  ClarifyQuestion,
+  InferredField
+} from "@/lib/types";
 import styles from "./AssistantPanel.module.css";
 
 interface Props {
@@ -39,11 +43,14 @@ interface Props {
  * previous panel — every behaviour (clarify questions, plan preview,
  * inferred badges, starter prompts, share/export buttons) still works.
  *
- * Two new affordances:
- *   - Think / Fast mode toggle: a UI-only hint that adjusts the
- *     placeholder, button label, and "thinking" status copy. The
- *     backend isn't aware of it (deliberately — no API changes), so
- *     it's a perceptual nudge rather than a parameter.
+ * v1.7.0 changes:
+ *   - Removed the Fast / Think toggle. Auto-mode is implicit: the
+ *     server-side planner decides per-turn how proactive to be, and
+ *     the new memory layer carries user intent across turns so the
+ *     assistant doesn't re-ask templated questions.
+ *   - Renders a BriefingCard inline for assistant messages whose
+ *     attachment.mode === "briefing" (overview + best parts +
+ *     follow-up actions).
  *   - Per-message action bar: Copy / Regenerate / Thumbs up / down.
  *     Copy uses the Clipboard API. Regenerate re-sends the most recent
  *     user turn through the existing onSubmit pipe. Thumbs feedback is
@@ -53,13 +60,11 @@ interface Props {
  */
 
 const STARTER_PROMPTS = [
-  "Make a 30s vertical reel of the funniest bits",
-  "60s YouTube short of the highlights",
-  "Find the moment where ___",
-  "Just give me the best parts"
+  "Describe what's in this video",
+  "Pick the best parts for me",
+  "Make a 30s vertical reel",
+  "Find a specific moment"
 ];
-
-type ChatMode = "think" | "fast";
 
 export function AssistantPanel({
   onSubmit,
@@ -76,7 +81,6 @@ export function AssistantPanel({
   const sessionId = useEditorStore((s) => s.sessionId);
 
   const [text, setText] = useState("");
-  const [mode, setMode] = useState<ChatMode>("fast");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Record<string, "up" | "down">>({});
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -132,7 +136,7 @@ export function AssistantPanel({
       logUser({
         sessionId,
         kind: "chat.sent",
-        payload: { text: trimmed, mode },
+        payload: { text: trimmed },
         summary: `Said: "${truncate(trimmed, 60)}"`
       });
     }
@@ -171,27 +175,23 @@ export function AssistantPanel({
     ? "Type a custom answer, or tap a suggestion above\u2026"
     : pendingExecution
       ? "Adjust the plan in plain English (e.g. \u201Cmake it 60s\u201D)\u2026"
-      : mode === "think"
-        ? "Describe in detail what you want\u2026"
-        : "Ask me anything";
+      : "Ask me anything";
 
-  const sendLabel = isBusy
-    ? mode === "think"
-      ? "Thinking\u2026"
-      : "Working\u2026"
-    : "Send";
+  const sendLabel = isBusy ? "Working\u2026" : "Send";
 
   return (
     <aside className={`assistant ${styles.panel}`}>
-      {/* ─── Compact header with mode toggle ──────────────────── */}
+      {/* ─── Compact header ────────────────────────────────────── */}
       <div className={styles.header}>
         <div className={styles.title}>
           <span className={styles.titleIcon} aria-hidden>
             <Sparkles size={14} />
           </span>
           <span className={styles.titleText}>Smart Chat</span>
+          <span className={styles.autoTag} title="Auto mode: the assistant decides per turn how deeply to think">
+            Auto
+          </span>
         </div>
-        <ModeSwitch mode={mode} onChange={setMode} />
         <CapabilityBadge />
       </div>
 
@@ -200,6 +200,10 @@ export function AssistantPanel({
         {messages.map((m, i) => {
           const isAssistant = m.role === "assistant";
           const isLast = i === messages.length - 1;
+          // v1.7.0 — the editor page tags briefing-mode replies with a
+          // structured attachment so AssistantPanel can render them as
+          // a Smart-summary card instead of a flat text bubble.
+          const briefingAttachment = readBriefingAttachment(m.attachment);
           return (
             <div
               key={m.id}
@@ -212,6 +216,14 @@ export function AssistantPanel({
               )}
               <div className={styles.bubbleWrap}>
                 <div className={styles.bubble}>{m.content}</div>
+                {isAssistant && briefingAttachment && (
+                  <BriefingCard
+                    bestParts={briefingAttachment.bestParts}
+                    followUps={briefingAttachment.followUps}
+                    onPickFollowUp={(s) => void send(s, "quickreply")}
+                    disabled={isBusy}
+                  />
+                )}
                 {isAssistant && (
                   <MessageActions
                     copied={copiedId === m.id}
@@ -240,9 +252,7 @@ export function AssistantPanel({
                 <span className={styles.dot} />
                 <span className={styles.dot} />
                 <span className={styles.dot} />
-                <span className={styles.typingLabel}>
-                  {mode === "think" ? "Thinking deeply\u2026" : "Working\u2026"}
-                </span>
+                <span className={styles.typingLabel}>Working\u2026</span>
               </div>
             </div>
           </div>
@@ -345,39 +355,25 @@ export function AssistantPanel({
 // Sub-components
 // ---------------------------------------------------------------------
 
-function ModeSwitch({
-  mode,
-  onChange
-}: {
-  mode: ChatMode;
-  onChange: (m: ChatMode) => void;
-}) {
-  return (
-    <div className={styles.modeSwitch} role="tablist" aria-label="Chat mode">
-      <button
-        type="button"
-        role="tab"
-        aria-selected={mode === "fast"}
-        className={`${styles.modeBtn} ${mode === "fast" ? styles.modeBtnActive : ""}`}
-        onClick={() => onChange("fast")}
-        title="Quick replies, snappier feel"
-      >
-        <Zap size={11} strokeWidth={2.5} />
-        Fast
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={mode === "think"}
-        className={`${styles.modeBtn} ${mode === "think" ? styles.modeBtnActive : ""}`}
-        onClick={() => onChange("think")}
-        title="More thoughtful, longer answers"
-      >
-        <Wand2 size={11} strokeWidth={2.5} />
-        Think
-      </button>
-    </div>
-  );
+/**
+ * Read a chat message's attachment as a briefing payload, or return
+ * null if the shape doesn't match. Defensive about runtime types
+ * because attachments survive session restore (IDB) and could be
+ * partially populated by older code paths.
+ */
+function readBriefingAttachment(
+  raw: ChatMessage["attachment"]
+): { bestParts: BestPart[]; followUps: string[] } | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (raw.mode !== "briefing") return null;
+  const bp = Array.isArray(raw.bestParts) ? (raw.bestParts as BestPart[]) : [];
+  const fu = Array.isArray(raw.followUps)
+    ? ((raw.followUps as unknown[]).filter(
+        (s): s is string => typeof s === "string"
+      ))
+    : [];
+  if (bp.length === 0 && fu.length === 0) return null;
+  return { bestParts: bp, followUps: fu };
 }
 
 function MessageActions({

@@ -1,0 +1,254 @@
+/* =====================================================================
+   BriefingCard — the "Smart summary" card rendered inline under an
+   assistant briefing message. Replaces the templated clarify-card
+   experience; each item is clickable, follow-ups route through chat.
+   ===================================================================== */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 14px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(99, 216, 149, 0.22);
+  background: linear-gradient(
+    180deg,
+    rgba(99, 216, 149, 0.07),
+    rgba(99, 216, 149, 0.02)
+  );
+  margin-top: 4px;
+}
+
+/* ── Section header ─────────────────────────────────────────── */
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sectionIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  background: rgba(99, 216, 149, 0.12);
+  border: 1px solid rgba(99, 216, 149, 0.3);
+}
+
+.sectionLabel {
+  flex: 0 0 auto;
+}
+
+.sectionCount {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--text-faint);
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  letter-spacing: 0.04em;
+}
+
+/* ── Best-parts list ────────────────────────────────────────── */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.item {
+  margin: 0;
+}
+
+.itemBody {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+}
+
+.itemBody:hover {
+  background: rgba(99, 216, 149, 0.08);
+  border-color: rgba(99, 216, 149, 0.32);
+}
+
+.itemBody:active {
+  transform: translateY(1px);
+}
+
+.rank {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: rgba(99, 216, 149, 0.14);
+  border: 1px solid rgba(99, 216, 149, 0.32);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.itemMain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.itemTitle {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.itemMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.itemMeta svg {
+  color: var(--accent);
+}
+
+.dotSep {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  display: inline-block;
+}
+
+.itemWhy {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.itemPlay {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(99, 216, 149, 0.14);
+  border: 1px solid rgba(99, 216, 149, 0.32);
+  color: var(--accent);
+  align-self: center;
+  transition: background 120ms ease, transform 100ms ease;
+}
+
+.itemBody:hover .itemPlay {
+  background: var(--accent);
+  color: #07120c;
+  transform: scale(1.08);
+}
+
+/* ── Follow-up actions ──────────────────────────────────────── */
+
+.followUps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.followLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+
+.followLabel svg {
+  color: var(--warn);
+}
+
+.followRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.followBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  border-radius: 999px;
+  border: 1px solid rgba(99, 216, 149, 0.32);
+  background: rgba(99, 216, 149, 0.06);
+  color: var(--text);
+  transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+  cursor: pointer;
+}
+
+.followBtn:hover:not(:disabled) {
+  background: rgba(99, 216, 149, 0.16);
+  border-color: var(--accent);
+}
+
+.followBtn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.followBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.followBtn svg {
+  color: var(--accent);
+}
+
+/* ── Footer hint ────────────────────────────────────────────── */
+
+.foot {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+}

@@ -1,9 +1,15 @@
 import type { SessionOptions } from "iron-session";
+import type { MemoryFact } from "@/lib/types";
 import { serverEnv } from "@/lib/env";
 
 export interface SessionData {
   sid?: string;
   createdAt?: number;
+  /** v1.7.0 — Persistent memory facts extracted from prior planner
+   *  turns. Capped at ~10 entries by lib/memory/store.ts so the
+   *  encrypted iron-session cookie stays comfortably under 4 KB.
+   *  See lib/memory/* for read/merge/inject lifecycle. */
+  facts?: MemoryFact[];
 }
 
 // In dev with no secret set, fall back to a stable but obviously-insecure

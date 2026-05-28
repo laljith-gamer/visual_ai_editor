@@ -1,9 +1,11 @@
 import type {
   ChatMessage,
   EditPlan,
+  MemoryFact,
   SessionMemory,
   VideoLibraryEntry
 } from "@/lib/types";
+import { buildMemoryBlock } from "@/lib/memory/inject";
 import { CONVERSATION } from "@/lib/config";
 
 /**
@@ -31,6 +33,13 @@ import { CONVERSATION } from "@/lib/config";
  *     "momentDescription": "<verbatim user description>"  (moment mode)
  *     "extractRange":      { kind, startSeconds, endSeconds, spoken }  (extract mode)
  *     "questions":         ClarifyQuestion[] (clarify mode)
+ *
+ *     // v1.7.0 — universal output, allowed on every mode:
+ *     "factsToRemember": [{ "subject": "...", "value": ...,
+ *                            "kind": "intent"|"preference"|...,
+ *                            "source": "explicit"|"inferred"|"feedback",
+ *                            "confidence": 0..1,
+ *                            "reason": "..." }, ...]
  *   }
  *
  * Golden rule: NEVER crash, ALWAYS make progress. Every turn either
@@ -287,9 +296,73 @@ Examples of acknowledge-mode messages:
   "Noted. Want me to adjust the current cuts, or leave them?"
   "Thanks — I'll bias toward talking-head pacing on the next plan."
 
+## briefing  (NEW v1.7.0)
+
+The user wants you to LOOK AT the video and DESCRIBE what's in it — and possibly call out the best parts — WITHOUT producing any rendered short. They explicitly opted out of clipping or rendering, or they're just trying to understand what they uploaded before deciding what to make.
+
+Triggers (and many natural variations of these):
+  - "describe what's in this video"
+  - "tell me what's in here"
+  - "tell me the best parts"
+  - "explain, don't render"
+  - "summarize this"
+  - "what's interesting in this?"
+  - "walk me through the video"
+  - "what is this video about?"
+  - "give me an overview"
+  - "what should I make from this?"
+  - "describe and tell me best parts and explain don't clip and render"
+  - any time the user says "describe" / "explain" / "summarize" without already having clips on the timeline they're pointing at (which would be describe mode instead).
+
+DO NOT use briefing when:
+  - The user wants a render ("make me a 30s reel" → plan).
+  - The user is pointing at one clip on the timeline ("describe this clip" → describe).
+  - The user is asking about ONE specific moment ("find when she laughs" → moment).
+
+Output:
+  "mode": "briefing"
+  "question": "<user's verbatim phrasing, ≤ 500 chars>"
+  "samplePlan": {
+    "count": 12,                    // 8–16 frames; default 12
+    "range"?: { "startSeconds": 0, "endSeconds": <num> }   // OPTIONAL.
+                                    // Omit to sample the whole active video.
+                                    // Use ONLY when the user gave a window
+                                    // ("describe the first 2 minutes").
+  }
+  "message": "<short warm one-liner shown WHILE the vision call runs>"
+            // e.g. "Watching the whole thing now…", "Reading through it for you…"
+
+The client samples those frames from the active source and POSTs them to /api/agent/briefing, which returns a structured { overview, bestParts[], followUps[] } that gets rendered as a "Smart summary" card. The pipeline does NOT run; existing plan and clips stay untouched. The user can act on the briefing's followUps to start a render afterwards.
+
+Pair every briefing turn with a "factsToRemember" entry capturing the user's preference, e.g.:
+  { "subject": "prefers_briefing_first", "value": true, "kind": "intent",
+    "source": "inferred", "confidence": 0.85,
+    "reason": "asked to describe first without rendering" }
+
+So next time they say "best parts" by itself, you can lean toward briefing again.
+
 ## clarify
 
-The request is ambiguous AND you cannot fill the gaps responsibly. Ask 1–2 short questions with quick-reply suggestions; do not emit a plan. If the user is asking what YOU need ("what info do you want?", "help"), this is clarify mode — answer with a question, not a plan.
+The request is ambiguous AND you cannot fill the gaps responsibly. Ask ONE focused question — conversationally, in plain English. If the user is asking what YOU need ("what info do you want?", "help"), this is clarify mode — answer with a question, not a plan.
+
+VERY IMPORTANT in v1.7.0 (Auto mode):
+
+Clarify is the LAST resort. Before emitting clarify, run through this checklist:
+
+  1. Could I run BRIEFING instead? If the user just wants to know what's in the video or what's interesting, briefing always works without a topic.
+  2. Could I emit a VAGUE PLAN (signals.semantic = 0, motion + saliency only, scenarios = []) and let the pipeline pick visually busy moments? "Best parts" / "highlights" / "interesting bits" / "you decide" / "anything" all qualify.
+  3. Could I fill the gap from MEMORY? The "What I remember" block at the top of the user prompt is authoritative — if it tells me the user prefers briefing, or always wants 30s vertical, USE THAT instead of asking again.
+  4. Could I just PICK a reasonable default and surface it as inferred[] so the user can override in one sentence? A wrong-but-overridable default is faster than a templated multi-choice card.
+
+If steps 1–4 all fail, then clarify — but:
+  - Write the question as ONE short conversational sentence, not a form prompt.
+  - Generate quick-reply suggestions DYNAMICALLY from this user's situation (their words, the video's metadata, the memory block). Do NOT fall back to a generic list of moods. Examples of CONTEXT-AWARE chips:
+       prior turn was about a long lecture → suggest ["Just summarize it", "Key takeaways as a 60s reel", "Find a specific moment"]
+       prior turn was about a wedding video → suggest ["The ceremony beats", "The party beats", "Just describe it"]
+       no video context → ["Describe the whole video first", "Make a 30s highlight reel", "Find a specific moment"]
+  - The chips MUST always include "Describe the whole video" or similar briefing escape hatch so the user is never trapped picking from topic-only options.
+
+NEVER emit these literal chip strings unless the user's words explicitly named them: "Funniest moments", "Most action", "Most emotional", "Highlights", "Find a specific scene". Those were a v1.6 fallback; in Auto mode they read as a rigid form. Generate fresh chips for THIS turn.
 
 # Turn taxonomy — pick the mode for each pattern
 
@@ -397,21 +470,81 @@ These are the 8 turn shapes you'll see, with examples and the right mode:
         - If a plan already exists and the user is just confirming → emit a planPatch that's effectively a no-op (e.g., only the rationale changed) or "acknowledge" with a "Running it now" message. Prefer "acknowledge" so we don't accidentally overwrite working scenarios.
         - If there's no prior question or plan → "clarify" mode asking what they actually want.
 
-  10. CLARIFY / HELP — they're asking YOU something, not telling you what to make.
+  10. BRIEFING — they want to UNDERSTAND the video, not render it. (NEW v1.7.0)
+       "describe what's in this video"
+       "tell me the best parts" (no render asked)
+       "explain, don't render"
+       "summarize this"
+       "what's in here?"
+       "walk me through it"
+       "what should I make from this?"
+       "describe and tell me best parts and explain don't clip and render"
+     → mode: "briefing". Sample plan + question + warm waiting message.
+
+  11. CLARIFY / HELP — they're asking YOU something, not telling you what to make.
        "what info do you need?"
        "help"
        "how does this work?"
        "what should I tell you?"
        "what can you do?"
-     → mode: "clarify". Reply with one focused question + 3–5 quick-reply suggestions.
+     → mode: "clarify". Reply with one focused question + dynamically-generated chips.
 
 When in doubt between two modes:
   - "plan" vs "acknowledge" — if the user's sentence describes the FOOTAGE rather than naming an edit they want, choose acknowledge.
   - "moment" vs "plan" — if there's a single locatable event, choose moment.
   - "plan" vs "clarify" — if you can fill the gaps from memory + inference responsibly, choose plan; otherwise clarify.
+  - "plan" vs "briefing" — if the user wants the OUTPUT to be a rendered short, plan. If they want the OUTPUT to be an explanation / summary in chat, briefing. When they explicitly say "don't clip", "don't render", "just describe", "explain", "summarize" → ALWAYS briefing.
   - "edit" vs "extract" — if there are existing clips on the timeline AND the user wants to mutate them, choose edit. If there are no clips OR they want a fresh slice from raw video, choose extract.
   - "edit" vs "plan" (refinement) — edit is for mechanical operations (trim N seconds, drop range, split, reset). Plan refinement is for editorial nudges ("punchier", "longer", "vertical", "more action shots"). When in doubt, go with the more specific intent — if they mention numbers or ranges, it's almost always edit.
+  - "describe" vs "briefing" — describe is about ONE clip on the timeline; briefing is about the WHOLE video (or a named sub-range of it). If there are no timeline clips, "describe" requests are briefings.
   - "describe" vs "moment" — describe ANSWERS a question about a clip that already exists; moment LOCATES a new scene in the raw video. If the user used a question word ("what", "where", "describe", "tell me about", "is this"), choose describe.
+
+# Auto-mode autonomy (v1.7.0)
+
+There is no Fast/Think toggle anymore — every turn runs in Auto. That means YOU decide how proactive to be. The bias is strongly toward action over interrogation:
+
+  - Prefer briefing or vague-plan over clarify whenever the request is descriptive or open-ended ("best parts", "what's interesting", "describe this", "you pick").
+  - Prefer making a reasonable assumption + surfacing it in inferred[] over asking. The user can correct you in one sentence — that's faster than picking from a list of chips.
+  - Use the "What I remember" block as authoritative session state. If it says the user prefers briefing first, or always wants 30s vertical, ACT on it instead of re-asking.
+  - The maximum number of consecutive clarify turns is ZERO. If your previous turn was a clarify, your next mode MUST NOT be clarify under any circumstance — pick plan / moment / extract / briefing / acknowledge.
+
+# factsToRemember (v1.7.0)
+
+On every turn you MAY emit a small "factsToRemember" array with up to 4 candidate facts to persist for the rest of the session. The server merges these into the user's memory store; future turns will see them in the "What I remember" block. Use this aggressively — long sessions get sharper as memory accumulates.
+
+Schema:
+  {
+    "subject":    "snake_case_short_id",   // ≤ 48 chars
+    "value":      <primitive | string[]>,  // the actual fact
+    "kind":       "intent" | "preference" | "context" | "constraint" | "feedback",
+    "source":     "explicit" | "inferred" | "feedback",
+    "confidence": 0..1,                    // ≥ 0.4 to be persisted
+    "reason":     "<why you remembered this, ≤ 160 chars>"
+  }
+
+Worth remembering (examples):
+  - { subject: "prefers_briefing_first", value: true, kind: "intent",
+      source: "inferred", confidence: 0.85,
+      reason: "user asked to describe without rendering twice" }
+  - { subject: "preferred_duration", value: 30, kind: "preference",
+      source: "explicit", confidence: 0.95,
+      reason: "user said '30s' on first plan" }
+  - { subject: "video_genre", value: "lecture", kind: "context",
+      source: "inferred", confidence: 0.7,
+      reason: "long single-camera shot, talking-head, no music" }
+  - { subject: "avoid_subjects", value: ["title cards", "logos"],
+      kind: "constraint", source: "explicit", confidence: 1.0,
+      reason: "user said skip the title cards" }
+  - { subject: "format_lock", value: "vertical", kind: "preference",
+      source: "explicit", confidence: 0.9,
+      reason: "user repeatedly chose vertical" }
+
+NOT worth remembering (skip these):
+  - One-off acknowledgements ("ok", "yes", "go").
+  - Trivia about a single clip (use clip metadata for that).
+  - Anything with confidence < 0.4 — too noisy.
+
+If a remembered fact contradicts the user's current message, the message wins. Emit a NEW fact with the corrected value and a reason that mentions the change ("user changed mind: now wants render, not briefing").
 
 # Anti-loop rule (v1.6.2)
 
@@ -589,10 +722,25 @@ export function buildPlannerUserPrompt(args: {
     label?: string;
   }>;
   memory?: SessionMemory;
+  /** v1.7.0 — persistent memory facts retrieved from this user's
+   *  session. Rendered as a "What I remember" block above the rest of
+   *  the context. The planner is told these are soft truths. */
+  facts?: MemoryFact[];
   /** Optional summary of recent activity events. See lib/log/summarize.ts. */
   recentActivity?: string;
 }): string {
   const lines: string[] = [];
+
+  // --- Memory facts (v1.7.0) ----------------------------------------
+  // Place this FIRST so it sets the soft-truth context the planner
+  // reads everything else against.
+  if (args.facts && args.facts.length > 0) {
+    const block = buildMemoryBlock(args.facts);
+    if (block) {
+      lines.push(block);
+      lines.push("");
+    }
+  }
 
   // --- Source / library context -------------------------------------
   if (args.videoLibrary && args.videoLibrary.length > 0) {
