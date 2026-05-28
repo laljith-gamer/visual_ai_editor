@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Trash2, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { useMemo } from "react";
+import { ChevronLeft, ChevronRight, Trash2, ChevronsLeft, ChevronsRight, Quote } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { formatSeconds } from "@/lib/util/time";
 import { logUser } from "@/lib/log/recorders";
@@ -12,8 +13,38 @@ export function ClipInspector() {
   const updateHighlight = useEditorStore((s) => s.updateHighlight);
   const removeHighlight = useEditorStore((s) => s.removeHighlight);
   const sessionId = useEditorStore((s) => s.sessionId);
+  // v1.7.3 — Pull the transcript dictionary + sources to render the
+  // in-clip speech snippet. We resolve via the clip's sourceId (or the
+  // active source when a clip pre-dates the multi-source store).
+  const transcripts = useEditorStore((s) => s.transcripts);
+  const sources = useEditorStore((s) => s.sources);
+  const activeSourceId = useEditorStore((s) => s.activeSourceId);
 
   const clip = highlights.find((h) => h.id === selectedId);
+
+  // v1.7.3 — Compute the in-clip transcript snippet outside the early
+  // return so the hook order stays stable across renders. Returns
+  // null when there's no clip selected, no transcript for the clip's
+  // source, or no segments overlap the clip's time range.
+  const snippet = useMemo(() => {
+    if (!clip) return null;
+    const sid = clip.sourceId ?? activeSourceId ?? null;
+    if (!sid) return null;
+    const src = sources.find((s) => s.id === sid);
+    if (!src) return null;
+    const t = transcripts[src.hash];
+    if (!t || t.segments.length === 0) return null;
+    // Keep any segment that overlaps the clip's [start, end] range
+    // (start before clip.end AND end after clip.start). Concatenate
+    // their text — Whisper segments are short enough that even a 30s
+    // clip rarely exceeds 5 segments. Cap at ~600 chars for the UI.
+    const overlapping = t.segments.filter(
+      (seg) => seg.start < clip.end && seg.end > clip.start
+    );
+    if (overlapping.length === 0) return null;
+    const text = overlapping.map((s) => s.text).join(" ").replace(/\s+/g, " ").trim();
+    return text.slice(0, 600);
+  }, [clip, sources, activeSourceId, transcripts]);
 
   if (!clip) {
     return (
@@ -128,6 +159,16 @@ export function ClipInspector() {
       {clip.reason && (
         <p className={`muted ${styles.reason}`}>
           <span className="faint">Why:</span> {clip.reason}
+        </p>
+      )}
+
+      {snippet && (
+        <p className={`muted ${styles.reason}`}>
+          <span className="faint">
+            <Quote size={11} style={{ verticalAlign: -1, marginRight: 4 }} />
+            Said:
+          </span>{" "}
+          <span className={styles.transcriptSnippet}>{snippet}</span>
         </p>
       )}
     </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Sparkles, Plus, Activity as ActivityIcon } from "lucide-react";
+import { Sparkles, Plus, Activity as ActivityIcon, FileText } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { useActivityLog } from "@/hooks/useActivityLog";
 import { logUser } from "@/lib/log/recorders";
@@ -9,13 +9,25 @@ import { ModeBadge } from "./ModeBadge";
 import styles from "./Topbar.module.css";
 
 interface Props {
-  /** Open the activity drawer. Owned by app/page.tsx. */
+  /** Open the activity drawer. Owned by app/editor/page.tsx. */
   onOpenActivity: () => void;
   /** Number of new events since the user last opened the drawer. */
   newActivityCount?: number;
+  /** v1.7.3 — Open the transcript drawer. Optional so callers that
+   *  don't render TranscriptDrawer (none today, but future surfaces
+   *  like a mobile-only layout) can omit. */
+  onOpenTranscript?: () => void;
+  /** v1.7.3 — Whether transcription is supported on this device. The
+   *  button is hidden when false (low-tier devices / no Web Audio). */
+  transcriptEnabled?: boolean;
 }
 
-export function Topbar({ onOpenActivity, newActivityCount = 0 }: Props) {
+export function Topbar({
+  onOpenActivity,
+  newActivityCount = 0,
+  onOpenTranscript,
+  transcriptEnabled
+}: Props) {
   const status = useEditorStore((s) => s.status);
   const highlights = useEditorStore((s) => s.highlights);
   const plan = useEditorStore((s) => s.plan);
@@ -78,6 +90,18 @@ export function Topbar({ onOpenActivity, newActivityCount = 0 }: Props) {
             <span aria-hidden className={styles.activityDot} />
           )}
         </button>
+
+        {onOpenTranscript && transcriptEnabled !== false && (
+          <button
+            className={styles.iconBtn}
+            onClick={onOpenTranscript}
+            aria-label="Open transcript"
+            title="Transcript"
+          >
+            <FileText size={14} />
+            <span className={styles.iconBtnLabel}>Transcript</span>
+          </button>
+        )}
 
         <ModeBadge mode={mode} />
         {inferred.length > 0 && (
