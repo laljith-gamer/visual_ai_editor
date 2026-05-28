@@ -22,6 +22,7 @@ import { matchEdit } from "./patterns/edit";
 import { matchExtract } from "./patterns/extract";
 import { matchMerge } from "./patterns/merge";
 import { matchPromote } from "./patterns/promote";
+import { matchTrimMerge } from "./patterns/trimMerge";
 import type { QuickMatch, QuickMatchContext } from "./types";
 
 /** Strict-by-default; the same value the proposal locked in. */
@@ -78,6 +79,12 @@ export function quickMatch(
   tryAdd(matchAffirm(parsed, ctx));
   tryAdd(matchCancel(parsed, ctx));
   tryAdd(matchPromote(parsed, ctx));
+  // v1.7.7 — multi-clause trim → per-source merge. Runs BEFORE the
+  // single-clause matchers so a compound utterance like
+  // "trim first 10 in V1, 5 in V2" produces one trimMerge match
+  // (confidence 0.92) rather than the first clause being scooped up
+  // by the extract pattern alone.
+  tryAdd(matchTrimMerge(parsed, ctx));
   tryAdd(matchEdit(parsed, ctx));
   tryAdd(matchExtract(parsed, ctx));
   tryAdd(matchMerge(parsed, ctx));
