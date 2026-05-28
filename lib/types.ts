@@ -319,6 +319,7 @@ export type IntentMode =
   | "extract"
   | "edit"
   | "describe"
+  | "briefing"
   | "acknowledge"
   | "clarify";
 
@@ -555,6 +556,31 @@ export type AgentResponse =
       quotaWarning?: { usage: number; limit: number; fraction: number };
     }
   | {
+      /** v1.7.0 — descriptive briefing. The user asked the AI to look
+       *  at the video and *describe* it / call out best parts WITHOUT
+       *  producing a render. The planner returns a sample plan; the
+       *  client samples those frames and POSTs them to
+       *  /api/agent/briefing for the actual structured analysis.
+       *  Pipeline does NOT run. Plan + clip state stay untouched. */
+      mode: "briefing";
+      /** The user's verbatim question, forwarded to the vision call. */
+      question: string;
+      /** Frame-sampling instructions for the client. Range is optional
+       *  — omitted means "whole active video". Count is the desired
+       *  number of frames; client may sample fewer if the range is short. */
+      samplePlan: {
+        count: number;
+        range?: { startSeconds: number; endSeconds: number };
+      };
+      /** Short, warm one-liner shown in chat WHILE the vision call
+       *  is in flight. The structured answer arrives separately and
+       *  is rendered as a BriefingCard attachment. */
+      message: string;
+      inferred: InferredField[];
+      warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
+    }
+  | {
       mode: "clarify";
       message: string;
       /** 1–2 questions to ask before running the pipeline. */
@@ -648,4 +674,81 @@ export interface RateLimitDecision {
   /** Used quota across the layer that decided. */
   usage?: number;
   limit?: number;
+}
+
+
+
+// ---------------------------------------------------------------------
+// v1.7.0 — Briefing mode (structured "describe the whole video")
+// ---------------------------------------------------------------------
+
+/** One "best part" picked by the briefing endpoint. Used to render
+ *  the BriefingCard's clickable highlight list. */
+export interface BestPart {
+  /** Stable id so the card can key list items + handle navigation. */
+  id: string;
+  startSeconds: number;
+  endSeconds: number;
+  /** One-line title — what the moment is. */
+  label: string;
+  /** One-sentence reason this part stands out. */
+  why: string;
+  /** When known, the source id this part is in. Omitted in single-source
+   *  briefings (defaults to the active source). */
+  sourceId?: string;
+}
+
+/** Structured response from POST /api/agent/briefing. */
+export interface BriefingResult {
+  /** 2-3 sentence overall description. */
+  overview: string;
+  /** Up to 5 best moments. May be empty if the model couldn't find any
+   *  (e.g., the video is uniform / blank), in which case the UI falls
+   *  back to the overview only. */
+  bestParts: BestPart[];
+  /** Suggested next user actions, generated from the briefing content
+   *  ("Make a 30s reel of these moments", "Show me clip 2", etc.).
+   *  Up to 4. The chat surface renders these as one-tap buttons. */
+  followUps: string[];
+}
+
+// ---------------------------------------------------------------------
+// v1.7.0 — Persistent memory facts
+// ---------------------------------------------------------------------
+
+/**
+ * One extracted fact remembered across turns. Stored server-side under
+ * the iron-session sid and injected into the planner prompt as a
+ * "What I remember" block on every subsequent turn.
+ *
+ * Facts are extracted by the planner itself via the `factsToRemember`
+ * field in its JSON output — no separate extraction call. This keeps
+ * memory free in token cost (the planner is already running) and
+ * grounded in the same context that produced the response.
+ */
+export interface MemoryFact {
+  id: string;
+  /** When the fact was first extracted (ms epoch). */
+  ts: number;
+  /** Most recent turn that reinforced this fact. Drives recency-based
+   *  retrieval ranking. Equal to ts on creation. */
+  lastSeen: number;
+  /** Coarse classifier so retrieval can prioritise certain kinds for
+   *  certain prompt slots (e.g., "intent" facts always inject before
+   *  "preference" facts). */
+  kind: "intent" | "preference" | "context" | "constraint" | "feedback";
+  /** Short snake_case identifier — e.g., "prefers_briefing_over_render". */
+  subject: string;
+  /** The fact value. Primitive or short string array. */
+  value: string | number | boolean | string[];
+  /** "explicit" — user said it directly; "inferred" — model inferred it
+   *  from context; "feedback" — derived from a thumbs-up/down or
+   *  follow-up correction. */
+  source: "explicit" | "inferred" | "feedback";
+  /** 0..1, the planner's confidence at extraction time. Decays slightly
+   *  per turn the fact isn't reinforced. */
+  confidence: number;
+  /** Optional one-sentence justification, surfaced in the UI's "what
+   *  I remember" reveal so the user understands WHY the fact is there. */
+  reason?: string;
 }
