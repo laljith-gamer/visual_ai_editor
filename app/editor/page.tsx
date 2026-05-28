@@ -133,11 +133,64 @@ export default function Home() {
   // evolve here without changing the per-source steps.
   // -----------------------------------------------------------------------
   const runPipeline = useCallback(
-    async (mode: IntentMode) => {
+    async (
+      mode: IntentMode,
+      opts?: {
+        /** v1.7.1 — when set, the pipeline runs ONLY against this
+         *  subset of scenarios and APPENDS the resulting highlights
+         *  to whatever is already on the timeline (via the store's
+         *  mergeHighlights action). Used by append-style refinements
+         *  ("add the celebration too") so previously-curated clips
+         *  are preserved across the run. The values are scenario ids
+         *  drawn from the active plan's scenarios array. */
+        appendScenarioIds?: string[];
+      }
+    ) => {
       const state = useEditorStore.getState();
-      const activePlan = state.plan;
-      if (!activePlan) return;
+      const fullPlan = state.plan;
+      if (!fullPlan) return;
       if (mode !== "plan" && mode !== "moment") return;
+
+      // v1.7.1 — append-mode subset plan. We don't mutate the active
+      // plan stored in zustand — that one is already the merged
+      // (existing + new scenarios) result. The pipeline just runs
+      // against a transient *subset* so it doesn't re-score
+      // previously-evaluated scenarios.
+      const isAppend =
+        Array.isArray(opts?.appendScenarioIds) &&
+        opts!.appendScenarioIds.length > 0;
+      let activePlan = fullPlan;
+      if (isAppend) {
+        const wanted = new Set(opts!.appendScenarioIds);
+        const subsetScenarios = fullPlan.scenarios.filter((s) => wanted.has(s.id));
+        if (subsetScenarios.length === 0) {
+          // Defensive — the planner asked us to append but no matching
+          // ids landed in the merged plan. Fall back to a full run.
+          // (This path is rare but we'd rather over-score than skip
+          //  the user's new ask entirely.)
+        } else {
+          // Re-balance label weights inside the subset so they sum to 1
+          // (the scorer expects normalised weights). Outside the subset
+          // we don't care — those scenarios aren't being scored.
+          const subsetWeights: Record<string, number> = {};
+          let total = 0;
+          for (const s of subsetScenarios) {
+            const w = fullPlan.labelWeights[s.id] ?? s.weight ?? 1;
+            subsetWeights[s.id] = w;
+            total += w;
+          }
+          if (total > 0) {
+            for (const k of Object.keys(subsetWeights)) {
+              subsetWeights[k] = subsetWeights[k] / total;
+            }
+          }
+          activePlan = {
+            ...fullPlan,
+            scenarios: subsetScenarios,
+            labelWeights: subsetWeights
+          };
+        }
+      }
 
       // Resolve eligible sources.
       const allSources = state.sources;
@@ -217,6 +270,22 @@ export default function Home() {
         const merged = mergeAcrossSources(aggregate, activePlan, mode);
 
         if (merged.highlights.length === 0) {
+          // v1.7.1 — append runs are softer about empty results. The
+          // user already has clips on the timeline; we don't want to
+          // shout "nothing matched" and erase the success of the
+          // earlier turn. Just log it and move on.
+          if (isAppend) {
+            pushMessage({
+              role: "assistant",
+              content:
+                eligible.length === 1
+                  ? `Couldn't find anything new for "${activePlan.scenarios[0]?.prompt ?? "that"}" \u2014 your earlier clips are still on the timeline.`
+                  : "Couldn't find new matches across the selected videos. Your earlier clips are still on the timeline."
+            });
+            setStatus("ready", "No new matches");
+            setProgress(0);
+            return;
+          }
           const msg =
             mode === "moment"
               ? "I couldn't lock onto that moment in any selected video. Try describing what would be on screen \u2014 colours, action, who's doing what."
@@ -227,7 +296,31 @@ export default function Home() {
           return;
         }
 
-        setHighlights(merged.highlights);
+        // v1.7.1 — append vs replace. On append we preserve every
+        // existing clip and only fold in the new ones; on a fresh run
+        // we replace the whole timeline as before.
+        if (isAppend) {
+          const { added, skipped } = useEditorStore
+            .getState()
+            .mergeHighlights(merged.highlights);
+          if (added === 0) {
+            pushMessage({
+              role: "assistant",
+              content:
+                "Found new matches but they overlap clips you already have \u2014 nothing to add."
+            });
+            setStatus("ready", undefined);
+            setProgress(0);
+            return;
+          }
+          // Continue below to the "summary" message + soft notice.
+          // The variables `total` and `summary` will reflect the
+          // FULL timeline (existing + appended), which is what we
+          // want the user to see.
+          void skipped; // logged below
+        } else {
+          setHighlights(merged.highlights);
+        }
 
         // Pick the active source to whatever the first kept clip points
         // at, so the preview pane plays the right footage immediately.
@@ -236,15 +329,29 @@ export default function Home() {
           useEditorStore.getState().setActiveSource(firstSourceId);
         }
 
-        const total = merged.highlights.reduce(
+        // v1.7.1 — On append the canonical post-run state lives in the
+        // store (mergeHighlights preserved + extended it). For fresh
+        // runs the store reflects `merged.highlights` exactly. Either
+        // way, read from the store so the summary mentions the FULL
+        // timeline length the user is looking at.
+        const finalTimeline = useEditorStore.getState().highlights;
+        const total = finalTimeline.reduce(
           (acc, h) => acc + (h.end - h.start),
           0
         );
+        const newClipCount = isAppend
+          ? merged.highlights.length
+          : finalTimeline.length;
 
         // Build a friendly summary that mentions the source breakdown
         // when the run was multi-source.
         let summary: string;
-        if (eligible.length === 1) {
+        if (isAppend) {
+          summary =
+            eligible.length === 1
+              ? `Added ${newClipCount} new clip${newClipCount === 1 ? "" : "s"} from "${eligible[0].meta.name}". Timeline is now ${finalTimeline.length} clip${finalTimeline.length === 1 ? "" : "s"}, ${total.toFixed(1)}s total.`
+              : `Added ${newClipCount} new clip${newClipCount === 1 ? "" : "s"}. Timeline is now ${finalTimeline.length} clip${finalTimeline.length === 1 ? "" : "s"}, ${total.toFixed(1)}s total.`;
+        } else if (eligible.length === 1) {
           summary =
             mode === "moment"
               ? `Found it. Picked a ${(merged.highlights[0].end - merged.highlights[0].start).toFixed(1)}s clip from "${eligible[0].meta.name}".`
@@ -264,6 +371,23 @@ export default function Home() {
             ` Heads up \u2014 match confidence is on the low side (top score ${merged.scoreMax.toFixed(2)}).`;
         }
         pushMessage({ role: "assistant", content: summary });
+
+        // v1.7.1 — Soft over-budget notice. When the user has set an
+        // explicit duration AND the timeline is now materially over
+        // it, surface a one-line nudge in chat. We do NOT auto-trim —
+        // the user has agency. The "trim to fit" copy maps directly
+        // to a planner refinement turn that re-runs selection over
+        // the cached scores with the existing budget.
+        const overBudget =
+          activePlan.userSpecifiedDuration === true &&
+          activePlan.targetShortSeconds > 0 &&
+          total > activePlan.targetShortSeconds * 1.1;
+        if (overBudget) {
+          pushMessage({
+            role: "assistant",
+            content: `You're at ${total.toFixed(1)}s, target was ${activePlan.targetShortSeconds}s. Say "trim to fit" if you want me to enforce it.`
+          });
+        }
 
         logSession.ai(
           "highlights.merged",
@@ -1105,7 +1229,27 @@ export default function Home() {
           !scenariosChanged(previousPlan, activePlan) &&
           useEditorStore.getState().highlights.length > 0;
 
-        if (cacheReusable) {
+        // v1.7.1 — Append refinement. When the planner emits a
+        // planPatch with scenariosOp = "append" AND the user already
+        // has clips on the timeline, we run the pipeline ONLY for the
+        // newly-added scenarios and append the results. Existing
+        // clips are preserved by mergeHighlights inside runPipeline.
+        // This is what makes "add the celebration too" stop wiping
+        // out the curation from the previous turn.
+        const isAppendRefinement =
+          data.mode === "plan" &&
+          !!data.planPatch &&
+          data.planPatch.scenariosOp === "append" &&
+          Array.isArray(data.planPatch.scenarios) &&
+          data.planPatch.scenarios.length > 0 &&
+          useEditorStore.getState().highlights.length > 0;
+
+        if (isAppendRefinement) {
+          setPendingExecution(false);
+          const appendScenarioIds =
+            data.planPatch?.scenarios?.map((s) => s.id) ?? [];
+          await runPipeline("plan", { appendScenarioIds });
+        } else if (cacheReusable) {
           setPendingExecution(false);
           await runPipeline(data.mode);
         } else {

@@ -1020,10 +1020,21 @@ function defaultClarifyQuestion(
       kind: "single-choice"
     };
   }
+  // v1.7.1 — When a refinement-mode plan exists but the planner didn't
+  // give us enough to act, we used to fall back to a "duration"
+  // question with hardcoded chips. That ask is gone — total timing is
+  // now emergent (see Duration & append rules in the planner prompt).
+  // Use the same "next step" question as the no-plan path so the user
+  // is never trapped in a templated duration picker.
   return {
-    id: "duration",
-    prompt: "How long should the short be?",
-    suggestions: ["15 seconds", "30 seconds", "60 seconds", "90 seconds"],
+    id: "next_step",
+    prompt: "What would you like next \u2014 describe what's there, add more clips, or trim?",
+    suggestions: [
+      "Describe the whole video",
+      "Add more clips",
+      "Trim to fit",
+      "Find a specific moment"
+    ],
     kind: "single-choice"
   };
 }
@@ -1172,10 +1183,18 @@ function synthesizeVaguePlan(args: {
     args.memory?.duration ??
     args.currentPlan?.targetShortSeconds ??
     PLAN_DEFAULTS.targetShortSeconds;
+  // v1.7.1 — synthesizeVaguePlan fires when the user gave us nothing
+  // to go on. Keeping userSpecifiedDuration false means the pipeline
+  // will pick clips by quality floor instead of trimming to a 30s
+  // budget the user never asked for.
+  const userSpecifiedDuration =
+    args.memory?.duration !== undefined ||
+    args.currentPlan?.userSpecifiedDuration === true;
   return {
     scenarios,
     labelWeights,
     targetShortSeconds: target,
+    userSpecifiedDuration,
     maxClipSeconds: PLAN_DEFAULTS.maxClipSeconds,
     minClipSeconds: PLAN_DEFAULTS.minClipSeconds,
     selectionStrategy: PLAN_DEFAULTS.selectionStrategy,

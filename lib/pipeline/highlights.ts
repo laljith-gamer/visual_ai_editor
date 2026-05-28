@@ -8,7 +8,7 @@ import type {
 } from "@/lib/types";
 import { newId } from "@/lib/util/id";
 import { clamp } from "@/lib/util/time";
-import { HIGHLIGHT_SCORING } from "@/lib/config";
+import { HIGHLIGHT_SCORING, PLAN_DEFAULTS } from "@/lib/config";
 import {
   assessConfidence,
   deriveForceMinHighlights
@@ -65,6 +65,61 @@ export function buildHighlights(args: BuildArgs): BuildResult {
     return forceMinFallback(args, []);
   }
 
+  // v1.7.1 — Quality-floor selection path.
+  //
+  // When the user hasn't named a duration the pipeline doesn't try to
+  // hit a budget. It just keeps every candidate above the quality
+  // floor, sorted chronologically, capped by config so the worst-case
+  // a 30-min source can't spawn 25 clips. The user can later say
+  // "make it 30s" to flip into the budgeted path; existing curation
+  // is then trimmed (cheaply, via cache) rather than re-scored.
+  if (!args.plan.userSpecifiedDuration) {
+    const floor = args.plan.qualityFloor ?? PLAN_DEFAULTS.qualityFloor;
+    const passing = scored.filter((s) => s.score >= floor);
+
+    if (passing.length === 0) {
+      // Nothing cleared the floor — for novices we still want to give
+      // them something back, so reuse the existing weak-only fallback.
+      return forceMinFallback(args, scored);
+    }
+
+    // Pick top-N by score, non-overlapping, then sort by start time
+    // for the timeline. The cap (maxClipsWithoutBudget) and total-
+    // seconds cap (maxTotalSecondsWithoutBudget) keep the runaway
+    // case from breaking ffmpeg.wasm.
+    const ranked = [...passing].sort((a, b) => b.score - a.score);
+    const selectedQ: typeof scored = [];
+    let totalQ = 0;
+    for (const s of ranked) {
+      if (selectedQ.length >= PLAN_DEFAULTS.maxClipsWithoutBudget) break;
+      if (totalQ + s.duration > PLAN_DEFAULTS.maxTotalSecondsWithoutBudget) continue;
+      if (overlapsAny(s.candidate, selectedQ.map((x) => x.candidate))) continue;
+      selectedQ.push(s);
+      totalQ += s.duration;
+    }
+    selectedQ.sort((a, b) => a.candidate.start - b.candidate.start);
+
+    if (selectedQ.length === 0) {
+      return forceMinFallback(args, scored);
+    }
+
+    return {
+      highlights: selectedQ.map((s, i): Highlight => ({
+        id: newId("clip"),
+        start: round2(s.candidate.start),
+        end: round2(s.candidate.end),
+        score: round2(s.score),
+        reason: s.verdict?.reason ?? "Strong visual match",
+        label: s.verdict?.label,
+        transition: i === 0 ? "none" : args.plan.transition,
+        confidence: assessConfidence(s.score)
+      })),
+      weakOnly: false,
+      consideredCount
+    };
+  }
+
+  // ---------- Budgeted path (existing behaviour) ----------
   const targetSeconds = args.plan.targetShortSeconds;
   const selected: typeof scored = [];
 
