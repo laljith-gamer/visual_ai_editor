@@ -234,6 +234,50 @@ export default function LaunchPage() {
         setTarget(1);
         markStep("ready", "done", added.meta.name);
 
+        // v1.7.3 — Kick off background transcription. Fire-and-forget:
+        // we don't block the navigation to /editor on this. Whisper's
+        // first run downloads ~40 MB of weights which can take 10s+
+        // on a cold connection; the user shouldn't wait for that.
+        // The launch page has already finished its visible work, so
+        // hijacking it for a long-running ASR call would feel wrong.
+        // The editor page picks up the transcript via useTranscription
+        // when it lands.
+        try {
+          const { transcribe } = await import("@/lib/audio/transcribe");
+          const cap = await import("@/hooks/useCapability");
+          // We can't call useCapability() outside React, so probe the
+          // env directly here. The hook's logic is duplicated minimally;
+          // see useCapability.detectAudioTier for the canonical version.
+          void cap; // keep import for tree-shaking honesty
+          const hasWebGPU = "gpu" in navigator;
+          const hasSAB = typeof SharedArrayBuffer !== "undefined";
+          const memGB =
+            (navigator as Navigator & { deviceMemory?: number }).deviceMemory ??
+            8;
+          const cores = navigator.hardwareConcurrency ?? 8;
+          const audioTier: "high" | "mid" | "low" =
+            hasWebGPU && memGB >= 6
+              ? "high"
+              : hasSAB && cores >= 4
+                ? "mid"
+                : "low";
+          // Don't await; the editor page surfaces progress via the
+          // useTranscription hook once mounted.
+          void transcribe({
+            blob: file!,
+            sourceHash: hash,
+            sourceId: added.id,
+            audioTier,
+            hasWebGPU
+          }).catch(() => {
+            // Swallow errors — the user is about to land in the
+            // editor, where the drawer's "Re-transcribe" affordance
+            // surfaces a friendlier retry.
+          });
+        } catch {
+          /* ignore — transcription is non-critical to launch */
+        }
+
         // Brief celebratory hold before the wipe, so the user sees the
         // ring actually finish at 100% rather than insta-cutting.
         await delay(380);
