@@ -343,6 +343,53 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // ---- PROMOTE (v1.7.2) ----------------------------------------------
+  // The user wants the briefing's already-curated best parts to become
+  // actual clips on the timeline. The briefing's vision call has
+  // already pinned exact (start, end) for each best part; this mode
+  // does no new analysis — it just brokers the intent + sanitised
+  // partIds/targetSeconds/op envelope to the client. The client owns
+  // the lastBriefing slot and the conversion via promoteBriefingParts.
+  //
+  // We never validate partIds against the briefing here on the server
+  // because the briefing lives client-side; mismatched ids degrade
+  // gracefully on the client (which warns the user instead of
+  // crashing).
+  if (mode === "promote") {
+    const partIds = Array.isArray(parsed.partIds)
+      ? parsed.partIds
+          .filter(
+            (x): x is string => typeof x === "string" && x.trim().length > 0
+          )
+          .map((s) => s.trim().slice(0, 64))
+          .slice(0, 12)
+      : undefined;
+    const targetSeconds =
+      typeof parsed.targetSeconds === "number" &&
+      Number.isFinite(parsed.targetSeconds) &&
+      parsed.targetSeconds > 0
+        ? Math.min(600, Math.max(2, parsed.targetSeconds))
+        : undefined;
+    const op =
+      parsed.op === "replace" ? "replace" : ("append" as const);
+    const inferred = normalizeInferred(parsed.inferred);
+    return NextResponse.json<AgentResponse>({
+      mode: "promote",
+      ...(partIds && partIds.length > 0 ? { partIds } : {}),
+      ...(typeof targetSeconds === "number" ? { targetSeconds } : {}),
+      op,
+      message: stringOr(
+        parsed.message,
+        op === "replace"
+          ? "Using those briefing moments instead."
+          : "Adding those briefing moments to the timeline."
+      ),
+      inferred,
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
+    });
+  }
+
   // ---- EXTRACT (v1.5.0) ---------------------------------------------
   // Verbatim time-slice mode. No scoring, no scenarios required. The
   // pipeline emits exactly one Highlight for the requested range.
@@ -619,6 +666,7 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
     raw === "edit" ||
     raw === "describe" ||
     raw === "briefing" ||
+    raw === "promote" ||
     raw === "acknowledge" ||
     raw === "clarify"
   ) {
@@ -644,6 +692,16 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
     (parsed.question as string).trim()
   ) {
     return "briefing";
+  }
+  // v1.7.2 — promote envelopes carry partIds/targetSeconds/op without
+  // a sample plan. The presence of `partIds` (or `targetSeconds` with
+  // an "op") is a strong shape signal even when mode is missing.
+  if (
+    Array.isArray(parsed.partIds) ||
+    (typeof parsed.targetSeconds === "number" &&
+      (parsed.op === "append" || parsed.op === "replace"))
+  ) {
+    return "promote";
   }
   if (parsed.extractRange && typeof parsed.extractRange === "object") {
     return "extract";

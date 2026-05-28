@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import type {
+  BestPart,
   ChatMessage,
   ClarifyQuestion,
   EditPlan,
@@ -33,7 +34,6 @@ interface EditorState {
   title: string;
   createdAt: number;
   updatedAt: number;
-
   // ----- v1.6.0 video library ----------------------------------------
   /** Every uploaded source held in memory for this session. */
   sources: VideoSource[];
@@ -68,6 +68,20 @@ interface EditorState {
    *  / moment.ts. Defaults to "novice" so the wide-net behavior is in
    *  effect even before the first chat turn. */
   userTier: UserTier;
+
+  /** v1.7.2 — Most recent briefing the assistant returned. The
+   *  briefing's bestParts each carry a precise (sourceId, start, end)
+   *  tuple that can be promoted directly to timeline clips without
+   *  re-running vision. Cleared when the user starts a new chat or
+   *  changes the active source. */
+  lastBriefing: {
+    /** Stable id matching the briefing message in chat. */
+    id: string;
+    sourceId: string;
+    sourceName?: string;
+    bestParts: BestPart[];
+    ts: number;
+  } | null;
 
   /** Plan exists but the analysis pipeline has NOT yet been executed.
    *  Set after a fresh plan or scenarios-changed refinement so the UI can
@@ -169,6 +183,28 @@ interface EditorState {
   /** v1.4.0 — set after each agent turn that returned a tier. */
   setUserTier: (tier: UserTier) => void;
 
+  /** v1.7.2 — Persist the most recent briefing so subsequent turns can
+   *  promote its bestParts to the timeline. Pass `null` to clear. */
+  setLastBriefing: (b: EditorState["lastBriefing"]) => void;
+
+  /** v1.7.2 — Convert briefing best parts into timeline highlights.
+   *
+   *  Reads the lastBriefing slot, optionally filters by partIds,
+   *  optionally trims to fit a target duration, then either appends
+   *  or replaces the timeline. Returns counts so the caller can
+   *  surface a summary message in chat.
+   *
+   *  Why this is a store action and not a free function:
+   *    - The conversion needs the active source's hash + url (to
+   *      attach the right sourceId), which lives in the store.
+   *    - The result feeds straight into mergeHighlights (also in the
+   *      store), so colocation keeps the API tight. */
+  promoteBriefingParts: (args: {
+    partIds?: string[];
+    targetSeconds?: number;
+    op?: "append" | "replace";
+  }) => { added: number; skipped: number; total: number };
+
   // History
   refreshHistory: () => Promise<void>;
   restoreSession: (id: string) => Promise<void>;
@@ -206,6 +242,7 @@ function freshState() {
     pendingClarify: null as EditorState["pendingClarify"],
     pendingExecution: false,
     userTier: "novice" as UserTier,
+    lastBriefing: null as EditorState["lastBriefing"],
     messages: [
       {
         id: newId("m"),
@@ -763,6 +800,78 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setPendingClarify: (p) => set({ pendingClarify: p }),
   setPendingExecution: (v) => set({ pendingExecution: v }),
   setUserTier: (tier) => set({ userTier: tier }),
+
+  setLastBriefing: (b) => set({ lastBriefing: b, updatedAt: Date.now() }),
+
+  /** v1.7.2 — see EditorState.promoteBriefingParts docblock. */
+  promoteBriefingParts: ({ partIds, targetSeconds, op }) => {
+    const cur = get();
+    const briefing = cur.lastBriefing;
+    if (!briefing || briefing.bestParts.length === 0) {
+      return { added: 0, skipped: 0, total: 0 };
+    }
+    // Filter by ids, preserving the briefing-order ranking. Empty/
+    // undefined partIds = take everything in original order.
+    const wanted = Array.isArray(partIds) && partIds.length > 0
+      ? new Set(partIds)
+      : null;
+    let parts = briefing.bestParts.filter((p) =>
+      wanted ? wanted.has(p.id) : true
+    );
+
+    // Optional target trim: keep the highest-ranked (earliest in the
+    // briefing list — the briefing model returns by importance first)
+    // until total seconds fit the budget. Each part is whatever its
+    // own start/end says; we don't shrink individual parts here.
+    if (typeof targetSeconds === "number" && targetSeconds > 0) {
+      const trimmed: BestPart[] = [];
+      let total = 0;
+      for (const p of parts) {
+        const dur = Math.max(0, p.endSeconds - p.startSeconds);
+        if (total + dur <= targetSeconds * 1.05 || trimmed.length === 0) {
+          trimmed.push(p);
+          total += dur;
+        }
+        if (total >= targetSeconds) break;
+      }
+      parts = trimmed;
+    }
+
+    if (parts.length === 0) {
+      return { added: 0, skipped: 0, total: 0 };
+    }
+
+    // Convert to highlights. Score 0.85 is high-but-not-max so the
+    // confidence bucket reads "high" without overriding actual scored
+    // clips that legitimately hit 0.95+.
+    const newHighlights: Highlight[] = parts.map((p, i) => ({
+      id: newId("clip"),
+      start: r2(p.startSeconds),
+      end: r2(p.endSeconds),
+      score: 0.85,
+      reason: p.why,
+      label: p.label,
+      transition: i === 0 ? "none" : (cur.plan?.transition ?? "fade"),
+      confidence: "high",
+      sourceId: briefing.sourceId
+    }));
+
+    if (op === "replace") {
+      // Wipe the timeline first then add. setHighlights replaces +
+      // resets selection.
+      get().setHighlights(newHighlights);
+      return {
+        added: newHighlights.length,
+        skipped: 0,
+        total: newHighlights.length
+      };
+    }
+
+    // Default: append via mergeHighlights so the existing timeline
+    // (and its selection) survives.
+    const result = get().mergeHighlights(newHighlights);
+    return { ...result, total: newHighlights.length };
+  },
 
   refreshHistory: async () => {
     const sessions = await listSessions();

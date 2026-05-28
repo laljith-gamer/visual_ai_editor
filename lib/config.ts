@@ -84,10 +84,16 @@ export const PLAN_DEFAULTS = {
   inferenceWidth: SAMPLE_DEFAULTS.width,
   /** v1.7.1 — score threshold below which a clip is dropped when the
    *  pipeline runs in quality-floor mode (userSpecifiedDuration =
-   *  false). Calibrated against typical SigLIP+motion+saliency fusion
-   *  output: 0.55 keeps roughly the top third of well-matched clips
-   *  on a strong scenario, fewer when the match is weak. */
-  qualityFloor: 0.55,
+   *  false).
+   *
+   *  v1.7.2 — calibration update: lowered from 0.55 to 0.40 because
+   *  real-world SigLIP+motion+saliency fusion scores on legitimately
+   *  matching footage typically land in the 0.45-0.65 range; a 0.55
+   *  floor was rejecting genuine matches and dropping the runs to a
+   *  single weak clip via the forceMin fallback. With 0.40 the floor
+   *  catches most relevant content and the new progressive-fallback
+   *  in highlights.ts handles the long tail. */
+  qualityFloor: 0.4,
   /** v1.7.1 — hard upper bound on number of clips kept when no budget
    *  is enforced. Stops a 30-minute video from spawning 25+ clips and
    *  breaking ffmpeg.wasm's input list. */
