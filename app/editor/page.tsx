@@ -115,8 +115,11 @@ export default function Home() {
     [sessionId]
   );
 
-  // -----------------------------------------------------------------------
-  // v1.6.0 — Multi-source pipeline orchestrator.
+  // ---- v1.7.5 — Forward ref so handleAgent's quick-shortcut gate can
+  // dispatch the existing handleRunPipeline without ordering grief.
+  // (handleRunPipeline is defined further down, but the gate needs it
+  // when an "affirm" shortcut fires.)
+  const handleRunPipelineRef = useRef<(() => Promise<void>) | null>(null);
   //
   // 1. Resolve which library sources are eligible for THIS run:
   //    intersect (selectedSourceIds) ∩ (plan.sources OR all-eligible).
@@ -461,6 +464,50 @@ export default function Home() {
       setBusy(true);
       pushMessage({ role: "user", content: userRequest });
       const previousPlan = useEditorStore.getState().plan;
+
+      // ---- v1.7.5 — Client-side intent shortcut gate -----------------
+      // Try to dispatch the turn locally before paying for a cloud
+      // planner round-trip. The grammar-based matcher only fires on
+      // high-confidence patterns (>= 0.85); everything else falls
+      // through to the cloud path below. See lib/intent/quickMatch.ts
+      // for the boundary docblock — this does NOT bypass the planner's
+      // "no keyword heuristics" rule because the cloud planner is
+      // unchanged; this is purely a fast path on top of it.
+      //
+      // The intent module (compromise + dispatch + patterns) is
+      // dynamic-imported so the ~140 KB compromise weight lives in a
+      // separate chunk loaded on first chat turn rather than on the
+      // initial /editor visit.
+      try {
+        const { tryQuickShortcut } = await import("@/lib/intent/dispatch");
+        const fast = await tryQuickShortcut(userRequest, {
+          pushMessage,
+          setStatus,
+          setProgress,
+          setInferred,
+          setHighlights,
+          setPendingClarify,
+          setPendingExecution,
+          handleRunPipeline: () =>
+            void handleRunPipelineRef.current?.(),
+          logSession,
+          sessionId
+        });
+        if (fast) {
+          // The shortcut handled the turn end-to-end. Skip the cloud
+          // call entirely. Activity log already recorded by the
+          // shortcut path.
+          return;
+        }
+      } catch (err) {
+        // Quick-match failures are benign; fall through to cloud.
+        // We log so the dev tester / activity drawer surface the issue.
+        logSession.system(
+          "intent.shortcut.failed",
+          { message: (err as Error).message, userRequest },
+          `Shortcut path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
+        );
+      }
 
       try {
         setStatus("planning", "Talking to the planner");
@@ -1596,6 +1643,14 @@ export default function Home() {
     setPendingExecution,
     runPipeline
   ]);
+
+  // v1.7.5 — Keep the ref pointing at the latest handleRunPipeline so
+  // handleAgent's quick-shortcut gate (which is defined earlier in
+  // the function body) can dispatch the right closure when an affirm
+  // shortcut fires. This avoids reordering large blocks of code.
+  useEffect(() => {
+    handleRunPipelineRef.current = handleRunPipeline;
+  }, [handleRunPipeline]);
 
   // ---- Render -------------------------------------------------------------
   const handleRender = useCallback(async () => {
