@@ -353,6 +353,7 @@ export type IntentMode =
   | "describe"
   | "briefing"
   | "promote"
+  | "merge"
   | "acknowledge"
   | "clarify";
 
@@ -599,6 +600,40 @@ export type AgentResponse =
       question: string;
       /** Short, warm one-liner shown in chat WHILE the vision call is
        *  in flight. The actual answer arrives as a follow-up message. */
+      message: string;
+      inferred: InferredField[];
+      warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
+    }
+  | {
+      /** v1.7.4 — verbatim multi-source merge. The user wants to
+       *  concatenate whole videos with no editing, no scoring, no
+       *  clipping. Triggered by phrases like "just merge", "stitch",
+       *  "join the videos", "use the full videos". The pipeline does
+       *  NOT run; the client converts each selected source into a
+       *  single full-duration Highlight and lays them on the timeline
+       *  in order. The user then taps Render to assemble.
+       *
+       *  Distinct from `extract` mode (single source, named time
+       *  range) and from `plan` mode (scored multi-clip selection).
+       *  This is the simplest possible operation and previously had
+       *  no first-class intent — users would say "merge" and the
+       *  planner would clarify or run a scoring pipeline that
+       *  produced tiny snippets. */
+      mode: "merge";
+      /** Source ids to include, in concatenation order. When omitted
+       *  or empty, the client uses every currently-selected source
+       *  (selectedSourceIds) in their library order. */
+      sourceIds?: string[];
+      /** Transition between clips. Default "none" — users who say
+       *  "no edit / no effects" expect a clean cut. */
+      transition?: "none" | "fade" | "crossfade";
+      /** Output framing preference. When omitted the renderer falls
+       *  back to the first source's native aspect. */
+      format?: "vertical" | "horizontal" | "square";
+      /** "replace" (default) wipes any existing timeline clips before
+       *  laying down the merge. "append" preserves them. */
+      op?: "replace" | "append";
       message: string;
       inferred: InferredField[];
       warnings: string[];

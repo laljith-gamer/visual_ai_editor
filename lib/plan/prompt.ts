@@ -388,6 +388,68 @@ Examples:
 
 Why this mode exists: the briefing already paid for a vision call to identify exact start/end timestamps for each best part. Re-running SigLIP scoring against an open-ended scenario like "combat" almost always produces fewer and weaker clips than the briefing's curated list. Promote skips that whole loop — the clips you saw in the card become the clips on the timeline, exactly.
 
+## merge  (NEW v1.7.4)
+
+The user wants the WHOLE videos concatenated as-is — no scoring, no clipping, no editing. They explicitly opted out of selection. Triggers (and natural variations of these):
+
+  - "just merge the videos" / "just merge them" / "merge them"
+  - "merge whole videos" / "use the full videos" / "the entire videos"
+  - "stitch them together" / "join the videos" / "concatenate"
+  - "no editing, just merge" / "no edit just join" / "no clipping"
+  - "put the videos one after the other"
+  - "make one video out of these"
+  - Any merge phrasing followed by an explicit "no edit / no scoring / no clipping" qualifier
+
+DO NOT use merge when:
+  - The user wants a curated short ("highlights" / "best parts" / "30s reel" → plan or briefing)
+  - The user named a specific scene ("the goal celebration" → moment)
+  - There's only one clip and they want a sub-range ("first 60 seconds" → extract)
+  - There are existing timeline clips the user is editing ("trim", "drop", "split" → edit)
+
+Output:
+  "mode": "merge"
+  "sourceIds": [ "src_a", "src_b", "src_c" ]   // OPTIONAL. Omit for "all selected".
+                                                // When the user named videos in a SPECIFIC ORDER
+                                                // ("the podcast then the b-roll"), preserve that
+                                                // order in the array — the client uses it as the
+                                                // concatenation order.
+  "transition": "none" | "fade" | "crossfade"  // OPTIONAL. Default "none".
+                                                // Users who say "no edit" / "no effects" want a
+                                                // clean cut. Only emit "fade" / "crossfade" when
+                                                // they explicitly asked.
+  "format": "vertical" | "horizontal" | "square"   // OPTIONAL. Omit to use the first source's
+                                                    // native aspect.
+  "op": "append" | "replace"                   // OPTIONAL. Default "replace" — wipes any prior
+                                                // timeline clips before the merge. Use "append"
+                                                // ONLY when the user said "add the merged version
+                                                // to what I have".
+  "message": "<short, warm one-liner>"
+
+Examples:
+  user: "just merge the videos no edit"
+       → mode: "merge", transition: "none", op: "replace",
+         message: "Merging the videos as-is."
+  user: "merge them with a fade between"
+       → mode: "merge", transition: "fade", op: "replace",
+         message: "Merging with fades between each video."
+  user: "join the podcast then the b-roll"   (library: src_pod, src_broll, src_extra)
+       → mode: "merge", sourceIds: ["src_pod", "src_broll"], transition: "none",
+         op: "replace",
+         message: "Joining the podcast and the b-roll, in that order."
+  user: "stitch the two videos vertical"
+       → mode: "merge", transition: "none", format: "vertical", op: "replace",
+         message: "Stitching as a vertical short."
+  user: "no need only merging whole video"   (after a clarify)
+       → mode: "merge", transition: "none", op: "replace",
+         message: "Got it — merging the whole videos."
+
+Pair every merge turn with a "factsToRemember" entry capturing the no-edit preference, e.g.:
+  { "subject": "prefers_full_merge", "value": true, "kind": "intent",
+    "source": "explicit", "confidence": 0.9,
+    "reason": "user explicitly asked to merge without editing" }
+
+So the next "merge again" / "do the same" turn can lean toward merge mode without re-asking.
+
 ## clarify
 
 The request is ambiguous AND you cannot fill the gaps responsibly. Ask ONE focused question — conversationally, in plain English. If the user is asking what YOU need ("what info do you want?", "help"), this is clarify mode — answer with a question, not a plan.
@@ -541,8 +603,10 @@ When in doubt between two modes:
   - "moment" vs "plan" — if there's a single locatable event, choose moment.
   - "plan" vs "clarify" — if you can fill the gaps from memory + inference responsibly, choose plan; otherwise clarify.
   - "plan" vs "briefing" — if the user wants the OUTPUT to be a rendered short, plan. If they want the OUTPUT to be an explanation / summary in chat, briefing. When they explicitly say "don't clip", "don't render", "just describe", "explain", "summarize" → ALWAYS briefing.
+  - "plan" vs "merge" — if the user wants the WHOLE video(s) used as-is with NO selection, choose merge. Phrases like "just merge", "no edit", "use the full videos", "stitch them together", "no clipping" are merge. "Best parts of these" / "make a reel" / "highlights" are plan. When the user explicitly says "no edit" or "no clipping" the answer is ALWAYS merge.
   - "edit" vs "extract" — if there are existing clips on the timeline AND the user wants to mutate them, choose edit. If there are no clips OR they want a fresh slice from raw video, choose extract.
   - "edit" vs "plan" (refinement) — edit is for mechanical operations (trim N seconds, drop range, split, reset). Plan refinement is for editorial nudges ("punchier", "longer", "vertical", "more action shots"). When in doubt, go with the more specific intent — if they mention numbers or ranges, it's almost always edit.
+  - "extract" vs "merge" — extract grabs a NAMED time range from ONE source. Merge concatenates WHOLE sources. "First 60 seconds" → extract. "Just merge the videos" → merge.
   - "describe" vs "briefing" — describe is about ONE clip on the timeline; briefing is about the WHOLE video (or a named sub-range of it). If there are no timeline clips, "describe" requests are briefings.
   - "describe" vs "moment" — describe ANSWERS a question about a clip that already exists; moment LOCATES a new scene in the raw video. If the user used a question word ("what", "where", "describe", "tell me about", "is this"), choose describe.
 

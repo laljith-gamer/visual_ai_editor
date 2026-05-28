@@ -1184,6 +1184,129 @@ export default function Home() {
           return;
         }
 
+        // ---- MERGE mode (v1.7.4) ------------------------------------------
+        // The user wants the whole videos concatenated as-is — no
+        // scoring, no clipping, no edit. The agent route forwarded
+        // (sourceIds, transition, format, op); we resolve which
+        // sources to use, build one full-duration Highlight per
+        // source, and put them on the timeline ready to render.
+        // The pipeline does NOT run.
+        if (data.mode === "merge") {
+          const storeState = useEditorStore.getState();
+          const allSources = storeState.sources;
+          if (allSources.length === 0) {
+            pushMessage({
+              role: "assistant",
+              content: "Upload at least one video first, then I can merge."
+            });
+            setStatus("idle", "Awaiting video");
+            setProgress(0);
+            return;
+          }
+
+          // Resolve which sources are in scope. Priority:
+          //   1. Explicit sourceIds from the planner (in user-named order).
+          //   2. selectedSourceIds (the AI-eligible set).
+          //   3. All sources in library order.
+          let chosen: typeof allSources;
+          if (data.sourceIds && data.sourceIds.length > 0) {
+            const wanted = new Set(data.sourceIds);
+            // Preserve the planner-supplied ORDER. The library is
+            // typically a small array so a per-id linear lookup is
+            // fine — and we WANT the ordering the LLM produced when
+            // the user said e.g. "merge the podcast then the b-roll".
+            chosen = data.sourceIds
+              .map((id) => allSources.find((s) => s.id === id))
+              .filter((s): s is (typeof allSources)[number] => Boolean(s));
+            // Backstop: if the planner asked for ids that don't exist
+            // (drift between client and server), drop unknown ids and
+            // fall back to selected sources for any remaining slots.
+            if (chosen.length === 0) {
+              chosen = allSources.filter((s) =>
+                storeState.selectedSourceIds.includes(s.id)
+              );
+            } else {
+              void wanted;
+            }
+          } else {
+            chosen = allSources.filter((s) =>
+              storeState.selectedSourceIds.includes(s.id)
+            );
+          }
+          if (chosen.length === 0) {
+            // Final fallback: every source in library order. Better to
+            // do something sensible than to error out on an obviously
+            // valid intent.
+            chosen = allSources;
+          }
+
+          const transition = data.transition ?? "none";
+
+          // Build one full-duration highlight per chosen source. score
+          // is 1.0 (this is user-explicit, not a model match) so the
+          // confidence chip shows "high" without polluting future
+          // scoring runs.
+          const { newId } = await import("@/lib/util/id");
+          const newHighlights = chosen.map((src, i) => ({
+            id: newId("clip"),
+            start: 0,
+            end: round2(src.meta.duration),
+            score: 1,
+            reason: "Full source merged as-is",
+            label: src.meta.name,
+            transition: i === 0 ? ("none" as const) : transition,
+            confidence: "high" as const,
+            sourceId: src.id
+          }));
+
+          if (data.op === "append") {
+            useEditorStore.getState().mergeHighlights(newHighlights);
+          } else {
+            setHighlights(newHighlights);
+          }
+
+          // Switch active source to the first merged source so the
+          // preview pane shows the start of the merge.
+          const firstId = chosen[0]?.id;
+          if (firstId && firstId !== storeState.activeSourceId) {
+            useEditorStore.getState().setActiveSource(firstId);
+          }
+
+          if (data.inferred && data.inferred.length > 0) {
+            setInferred(data.inferred);
+          }
+
+          const totalSeconds = newHighlights.reduce(
+            (acc, h) => acc + (h.end - h.start),
+            0
+          );
+          const summary =
+            chosen.length === 1
+              ? `On the timeline as one ${totalSeconds.toFixed(1)}s clip from "${chosen[0].meta.name}". Tap "Render" to assemble.`
+              : `Merged ${chosen.length} videos in order — ${totalSeconds.toFixed(1)}s total. Tap "Render" to assemble.`;
+          pushMessage({
+            role: "assistant",
+            content: data.message
+              ? `${data.message} ${summary}`
+              : `Merging the videos as-is. ${summary}`
+          });
+          setStatus("ready", "Ready to render");
+          setProgress(1);
+          logSession.ai(
+            "merge.applied",
+            {
+              sourceCount: chosen.length,
+              sourceIds: chosen.map((s) => s.id),
+              totalSeconds: round1(totalSeconds),
+              transition,
+              op: data.op ?? "replace"
+            },
+            `Merged ${chosen.length} source${chosen.length === 1 ? "" : "s"} (${totalSeconds.toFixed(1)}s)`,
+            plannerMs
+          );
+          return;
+        }
+
         // ---- PROMOTE mode (v1.7.2) ----------------------------------------
         // The user asked us to use the briefing's identified moments as
         // actual timeline clips ("clip those", "use the second one",
