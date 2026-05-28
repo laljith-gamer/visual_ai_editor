@@ -42,6 +42,17 @@ export interface QuickMatchMerge extends QuickMatchBase {
   sourceIds?: string[];
   transition: "none" | "fade" | "crossfade";
   op: "append" | "replace";
+  /** v1.7.7 — optional per-source ranges. When provided, the merge
+   *  dispatcher builds one highlight per entry using its (start, end)
+   *  instead of the source's full duration. Drives the multi-clause
+   *  trim path: "trim first 10 in first video, 5 in second video"
+   *  produces two trimmed highlights, one per source. Order matches
+   *  concatenation order on the timeline. */
+  sourceRanges?: Array<{
+    sourceId: string;
+    startSeconds: number;
+    endSeconds: number;
+  }>;
 }
 
 export interface QuickMatchExtract extends QuickMatchBase {
