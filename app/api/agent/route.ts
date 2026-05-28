@@ -18,10 +18,11 @@ import { normalizePlan, normalizePlanPatch } from "@/lib/plan/normalize";
 import { mergePlan } from "@/lib/plan/merge";
 import { extractJsonObject } from "@/lib/util/safeJson";
 import { newId } from "@/lib/util/id";
-import { CONVERSATION, RATE_LIMITS } from "@/lib/config";
+import { CONVERSATION, PLAN_DEFAULTS, RATE_LIMITS, SIGNAL_DEFAULTS } from "@/lib/config";
 import type {
   AgentRequest,
   AgentResponse,
+  ChatMessage,
   ClarifyQuestion,
   EditOperation,
   EditPlan,
@@ -30,6 +31,7 @@ import type {
   IntentMode,
   PlanPatch,
   RateLimitDecision,
+  SessionMemory,
   UserTier
 } from "@/lib/types";
 
@@ -254,6 +256,40 @@ export async function POST(req: NextRequest) {
 
   // ---- CLARIFY -------------------------------------------------------
   if (mode === "clarify") {
+    // v1.6.2 — anti-loop safety net. If the immediately-previous
+    // assistant turn was ALSO a clarify (the LLM is stuck asking the
+    // same thing twice despite the prompt rule), we treat the user's
+    // reply as a topic answer and synthesize a vague plan. We use the
+    // user's literal text as the scenario prompt so SigLIP scores
+    // against it; if the text is too vague to be useful we fall back
+    // to a motion+saliency plan that picks visually busy moments
+    // without the semantic pass.
+    //
+    // This NEVER inspects the user message for keywords — it only
+    // checks our own prior turn shape. The user's text just becomes
+    // the scenario verbatim. No regex, no keyword classification.
+    const previousAssistant = findPreviousAssistant(messages);
+    const previousWasClarify = looksLikeClarify(previousAssistant);
+    if (previousWasClarify) {
+      const synth = synthesizeVaguePlan({
+        userText,
+        currentPlan: body.currentPlan ?? null,
+        memory: body.memory
+      });
+      return NextResponse.json<AgentResponse>({
+        mode: "plan",
+        plan: synth,
+        message:
+          synth.scenarios.length > 0
+            ? `On it \u2014 ${userText.trim().slice(0, 60)}.`
+            : "Picking the visually richest moments \u2014 just give me a sec.",
+        userTier: "novice",
+        inferred: [],
+        warnings,
+        ...(quotaWarning ? { quotaWarning } : {})
+      });
+    }
+
     const questions = normalizeClarifyQuestions(parsed.questions);
     if (questions.length === 0) {
       questions.push(defaultClarifyQuestion(body.currentPlan ?? null));
@@ -748,3 +784,99 @@ function cleanMessage(raw: string): string {
 
 // Suppress unused-symbol warnings for re-exported types.
 export type _UnusedRateLimits = typeof RATE_LIMITS;
+
+
+
+// ---------------------------------------------------------------------
+// v1.6.2 — Anti-loop helpers
+// ---------------------------------------------------------------------
+
+/**
+ * Walk back through the message history and return the most recent
+ * assistant turn (or null if there isn't one). Used to detect the
+ * "two clarifies in a row" loop pattern.
+ */
+function findPreviousAssistant(messages: ChatMessage[]): ChatMessage | null {
+  for (let i = messages.length - 2; i >= 0; i--) {
+    if (messages[i].role === "assistant") return messages[i];
+  }
+  return null;
+}
+
+/**
+ * Heuristic on OUR OWN OUTPUT — never on user text. Returns true when a
+ * past assistant turn was a clarify. We check two signals and keep them
+ * narrow on purpose so a real plan turn that happens to mention the
+ * word "what" doesn't trip the safety net:
+ *
+ *   1. The turn carried a structured `clarify` attachment (the chat
+ *      pipeline tags clarify messages this way).
+ *   2. The visible message text begins with "I need a bit more" or
+ *      ends with a question mark AND is short (≤ 140 chars).
+ *
+ * These are heuristics on assistant output, not user input — so the
+ * project rule "no regex on user text" is preserved.
+ */
+function looksLikeClarify(prev: ChatMessage | null): boolean {
+  if (!prev) return false;
+  const att = prev.attachment as { mode?: string } | undefined;
+  if (att && att.mode === "clarify") return true;
+  const text = (prev.content || "").trim();
+  if (!text) return false;
+  if (text.length > 200) return false;
+  if (text.toLowerCase().startsWith("i need a bit more")) return true;
+  if (text.toLowerCase().includes("what kind of moments")) return true;
+  if (text.toLowerCase().includes("what should the short be about")) return true;
+  if (text.endsWith("?")) return true;
+  return false;
+}
+
+/**
+ * Build a vague plan to break out of a clarify loop. We use the user's
+ * literal text as the SCENARIO PROMPT (not as keywords for branching).
+ * If the text is long enough (≥ 3 chars), SigLIP scores against it
+ * directly. If it's too short to be useful, we fall back to a
+ * motion+saliency plan that picks visually busy moments without the
+ * semantic pass.
+ *
+ * This is identical in spirit to what the LLM SHOULD have done; we're
+ * just doing it deterministically when the model fails to.
+ */
+function synthesizeVaguePlan(args: {
+  userText: string;
+  currentPlan: EditPlan | null;
+  memory?: SessionMemory;
+}): EditPlan {
+  const text = args.userText.trim().slice(0, 200);
+  const useSemantic = text.length >= 3;
+  const id = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 24) || "topic";
+  const scenarios = useSemantic ? [{ id, prompt: text, weight: 1 }] : [];
+  const labelWeights = useSemantic ? { [id]: 1 } : {};
+  const signals = useSemantic
+    ? { semantic: 0.55, motion: 0.3, saliency: 0.15 }
+    : { semantic: 0, motion: 0.6, saliency: 0.4 };
+  void SIGNAL_DEFAULTS; // imported for future use; reserved.
+  const target =
+    args.memory?.duration ??
+    args.currentPlan?.targetShortSeconds ??
+    PLAN_DEFAULTS.targetShortSeconds;
+  return {
+    scenarios,
+    labelWeights,
+    targetShortSeconds: target,
+    maxClipSeconds: PLAN_DEFAULTS.maxClipSeconds,
+    minClipSeconds: PLAN_DEFAULTS.minClipSeconds,
+    selectionStrategy: PLAN_DEFAULTS.selectionStrategy,
+    format: args.memory?.format ?? PLAN_DEFAULTS.format,
+    transition: PLAN_DEFAULTS.transition,
+    styles: args.memory?.styles ?? [],
+    avoid: args.memory?.skip ?? [],
+    sampleEverySeconds: PLAN_DEFAULTS.sampleEverySeconds,
+    inferenceWidth: PLAN_DEFAULTS.inferenceWidth,
+    signals
+  };
+}

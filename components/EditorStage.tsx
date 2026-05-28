@@ -52,15 +52,30 @@ export function EditorStage({ onOpenClips, onRender, isRendering }: Props) {
 
   // v1.6.0 — when the user clicks a clip whose sourceId differs from
   // the currently-active source, swap the active source automatically
-  // so the preview pane plays the right footage. This makes cross-
-  // source highlight reels feel native: every click "just plays the
-  // right thing".
+  // so the preview pane plays the right footage.
+  //
+  // v1.6.2 fix — use a ref to remember which clip id we last auto-
+  // synced, and ONLY fire when the selected-clip id actually changes.
+  // Without this guard, the effect re-fired every time `activeSourceId`
+  // changed for any reason (e.g., the user clicked a different source
+  // tab on the timeline), which immediately reverted the active source
+  // back to the still-selected clip's source. The user would click S2,
+  // we'd flip to S2, the effect would see `selectedClip.sourceId !==
+  // activeSourceId`, and snap right back to S1. Manual tab clicks now
+  // win because the selected clip id hasn't changed.
+  const lastSyncedClipIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!selectedClip?.sourceId) return;
-    if (selectedClip.sourceId === activeSourceId) return;
-    if (!sources.some((s) => s.id === selectedClip.sourceId)) return;
-    setActiveSource(selectedClip.sourceId);
+    const id = selectedClip?.id ?? null;
+    if (id === lastSyncedClipIdRef.current) return;
+    lastSyncedClipIdRef.current = id;
+
+    const sid = selectedClip?.sourceId;
+    if (!sid) return;
+    if (sid === activeSourceId) return;
+    if (!sources.some((s) => s.id === sid)) return;
+    setActiveSource(sid);
   }, [
+    selectedClip?.id,
     selectedClip?.sourceId,
     activeSourceId,
     sources,

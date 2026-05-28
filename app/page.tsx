@@ -647,7 +647,14 @@ export default function Home() {
           setInferred([]);
           setPendingClarify({ message: data.message, questions: data.questions });
           setPendingExecution(false);
-          pushMessage({ role: "assistant", content: data.message });
+          // v1.6.2 — tag the message so the next agent turn's safety
+          // net can identify it as a clarify even if the text wording
+          // changes. Used by looksLikeClarify() in the agent route.
+          pushMessage({
+            role: "assistant",
+            content: data.message,
+            attachment: { mode: "clarify" }
+          });
           setStatus("idle", "Awaiting answer");
           setProgress(0);
           logSession.ai(

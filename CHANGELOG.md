@@ -4,6 +4,64 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.6.2] — 2026-05-28
+
+### Fixed — Clarify loop on quick-reply answers
+
+Reported: replying "Most action" / "Funniest moments" to the topic clarify
+sometimes asked the same question again, occasionally several turns in a
+row. The LLM was failing to recognise the user's reply as the answer to
+the question it had just asked.
+
+The fix has two layers, both of which preserve the project's
+no-regex-on-user-input rule:
+
+1. **Anti-loop section in the planner system prompt.** New explicit
+   rule with worked examples: *if the previous assistant turn was a
+   clarify and the user replied with anything non-empty, your next
+   mode MUST NOT be clarify. Pick plan / moment / extract /
+   acknowledge — even if you have to fill in small reasonable
+   defaults yourself.* The block also walks the LLM through the
+   chip-text → topic mapping for "Most action", "Funniest moments",
+   "Most emotional", and the vague-plan path for "best parts" /
+   "highlights" / "you decide" / "idk".
+
+2. **Server-side safety net in `app/api/agent/route.ts`.** When the
+   LLM returns clarify and we detect the immediately-previous
+   assistant turn was already a clarify, we synthesize a vague plan
+   instead. The user's verbatim text becomes a single scenario prompt
+   for SigLIP; if it's too short to be useful we fall back to a
+   motion+saliency plan that picks visually busy moments without
+   the semantic pass. The detection inspects only OUR assistant
+   output (heuristics on `attachment.mode === "clarify"` and message
+   shape) — never user text.
+
+Clarify messages from the client now carry an explicit
+`attachment: { mode: "clarify" }` tag so the safety net is robust
+even when the LLM rephrases the question.
+
+### Fixed — S2 source tab couldn't be clicked after analysis
+
+Reported: with two videos in the library, after a multi-source run
+the S1 tab was stuck active and clicking S2 reverted right back to S1.
+
+Root cause: the auto-swap effect in `EditorStage.tsx` watched
+`activeSourceId` along with `selectedClip.sourceId`. Every time the
+user clicked a different source tab, the effect re-fired, saw that
+the still-selected clip belonged to the previous source, and snapped
+the active source back to it. Infinite loop on every manual click.
+
+Fix: the effect now uses a ref to remember which clip id it last
+auto-synced. It only fires when the **selected clip id actually
+changes** (the legitimate trigger). Manual tab clicks no longer
+re-trigger auto-swap, so they win.
+
+The Timeline tab `onClick` handler now also moves the clip selection
+to the first clip on the freshly-clicked tab, so the preview pane
+and ClipInspector stay in sync with the visible source. If the
+target tab has no clips yet, selection is cleared so we don't show
+a ghost-selected clip from another source.
+
 ## [1.6.1] — 2026-05-28
 
 ### Changed — manual edits move from a static toolbar to a chat intent

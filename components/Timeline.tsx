@@ -192,7 +192,18 @@ export function Timeline() {
               <button
                 key={s.id}
                 className={`${styles.tab} ${isActive ? styles.active : ""}`}
-                onClick={() => setActiveSource(s.id)}
+                onClick={() => {
+                  setActiveSource(s.id);
+                  // v1.6.2 — when the user explicitly switches tab,
+                  // pick the first clip on that tab so the preview pane
+                  // and ClipInspector update too. If there are no clips
+                  // on this source yet, clear selection to avoid a
+                  // ghost-selected clip from another source.
+                  const onThis = highlights.filter(
+                    (h) => (h.sourceId ?? activeSourceId) === s.id
+                  );
+                  selectClip(onThis[0]?.id ?? null);
+                }}
                 title={`Switch the timeline to "${s.meta.name}"`}
               >
                 <span
