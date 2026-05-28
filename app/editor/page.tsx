@@ -1598,8 +1598,44 @@ export default function Home() {
   ]);
 
   // ---- Render -------------------------------------------------------------
+  // v1.7.6 — Relaxed guards. The previous `!plan` check silently
+  // aborted the click when a user reached the render path through one
+  // of the newer non-planner intents (merge / promote / any client-
+  // side quick-shortcut). Those paths put highlights on the timeline
+  // without producing an EditPlan, so `plan` is null even though the
+  // timeline is fully ready to render. We now require ONLY a non-empty
+  // highlights list + at least one usable source. Format and transition
+  // fall back to sensible defaults derived from the active source's
+  // native aspect when no plan exists.
   const handleRender = useCallback(async () => {
-    if (!videoBlob || !plan || highlights.length === 0) return;
+    const cur = useEditorStore.getState();
+    if (highlights.length === 0) return;
+    const sources = cur.sources;
+    if (sources.length === 0 && !videoBlob) {
+      pushMessage({
+        role: "assistant",
+        content: "Upload a video first, then I can render."
+      });
+      return;
+    }
+
+    // Derive render parameters from the plan when available, otherwise
+    // sensible defaults so paths like "just merge the videos" work.
+    const format: "vertical" | "horizontal" | "square" = plan?.format ?? (() => {
+      const meta = sources[0]?.meta ?? cur.videoMeta;
+      if (!meta) return "horizontal";
+      const aspect = meta.width / Math.max(1, meta.height);
+      if (aspect < 0.85) return "vertical";
+      if (aspect > 1.15) return "horizontal";
+      return "square";
+    })();
+    const transition: "none" | "fade" | "crossfade" =
+      plan?.transition ?? "none";
+    const totalSeconds = highlights.reduce(
+      (a, h) => a + (h.end - h.start),
+      0
+    );
+
     setBusy(true);
     setStatus("rendering", "Encoding short");
     setProgress(0);
@@ -1607,11 +1643,12 @@ export default function Home() {
       "render.requested",
       {
         clipCount: highlights.length,
-        format: plan.format,
-        transition: plan.transition,
-        totalSeconds: highlights.reduce((a, h) => a + (h.end - h.start), 0)
+        format,
+        transition,
+        totalSeconds,
+        hasPlan: !!plan
       },
-      `Render requested (${highlights.length} clips, ${plan.format})`
+      `Render requested (${highlights.length} clips, ${format})`
     );
     const t0 = Date.now();
     try {
@@ -1620,13 +1657,12 @@ export default function Home() {
       // referenced by highlights' `sourceId`), encodes them as `in0.mp4`,
       // `in1.mp4`, …, and remaps each clip's inputIndex so the filter
       // graph stitches across uploaded sources cleanly.
-      const sources = useEditorStore.getState().sources;
       const blob = await ffmpeg.render({
         sources: sources.length > 0 ? sources : undefined,
         videoBlob: sources.length === 0 ? videoBlob ?? undefined : undefined,
         highlights,
-        format: plan.format,
-        transition: plan.transition,
+        format,
+        transition,
         onProgress: (p) => setProgress(p)
       });
       setRendered(blob);
@@ -1635,16 +1671,16 @@ export default function Home() {
       logSession.ai(
         "render.completed",
         {
-          format: plan.format,
+          format,
           outputBytes: blob.size,
           clipCount: highlights.length
         },
-        `Rendered ${(blob.size / 1024 / 1024).toFixed(1)}MB ${plan.format}`,
+        `Rendered ${(blob.size / 1024 / 1024).toFixed(1)}MB ${format}`,
         Date.now() - t0
       );
       pushMessage({
         role: "assistant",
-        content: `Rendered ${(blob.size / 1024 / 1024).toFixed(1)}MB ${plan.format} short.`
+        content: `Rendered ${(blob.size / 1024 / 1024).toFixed(1)}MB ${format} short.`
       });
     } catch (err) {
       const msg = (err as Error).message;
