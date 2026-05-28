@@ -23,6 +23,7 @@ import type {
   AgentRequest,
   AgentResponse,
   ClarifyQuestion,
+  EditOperation,
   EditPlan,
   ExtractRange,
   InferredField,
@@ -93,6 +94,9 @@ export async function POST(req: NextRequest) {
     currentPlan: body.currentPlan ?? null,
     videoMeta: body.videoMeta,
     videoLibrary: body.videoLibrary,
+    activeSourceId: body.activeSourceId,
+    highlightsCount: body.highlightsCount,
+    selectedClipId: body.selectedClipId,
     memory: body.memory,
     recentActivity:
       typeof body.recentActivity === "string" ? body.recentActivity : undefined
@@ -161,6 +165,48 @@ export async function POST(req: NextRequest) {
     return NextResponse.json<AgentResponse>({
       mode: "acknowledge",
       message: stringOr(parsed.message, "Got it — I'll keep that in mind."),
+      inferred,
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
+    });
+  }
+
+  // ---- EDIT (v1.6.1) -------------------------------------------------
+  // Direct timeline mutation. The LLM emits a list of structured ops
+  // ({ kind: "trim_first", seconds: 60 }, { kind: "drop_range", ... })
+  // and the client applies them in order. No pipeline run, no scoring.
+  if (mode === "edit") {
+    const operations = normalizeEditOperations(parsed.operations);
+    if (operations.length === 0) {
+      // The LLM said edit but couldn't produce a valid op. Don't crash —
+      // ask one focused question so the user can try again.
+      return NextResponse.json<AgentResponse>({
+        mode: "clarify",
+        message:
+          "I picked up the edit intent but the operation didn't parse \u2014 mind rephrasing? Examples: \"trim first 30 seconds\", \"drop 0:30 to 0:45\", \"split this clip\".",
+        questions: [
+          {
+            id: "edit_op",
+            prompt: "What kind of edit?",
+            suggestions: [
+              "Trim first 30 seconds",
+              "Trim last 30 seconds",
+              "Drop 0:30 to 0:45",
+              "Split this clip",
+              "Reset and start over"
+            ],
+            kind: "single-choice"
+          }
+        ],
+        warnings,
+        ...(quotaWarning ? { quotaWarning } : {})
+      });
+    }
+    const inferred = normalizeInferred(parsed.inferred);
+    return NextResponse.json<AgentResponse>({
+      mode: "edit",
+      operations,
+      message: stringOr(parsed.message, "Done."),
       inferred,
       warnings,
       ...(quotaWarning ? { quotaWarning } : {})
@@ -402,10 +448,14 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
     raw === "plan" ||
     raw === "moment" ||
     raw === "extract" ||
+    raw === "edit" ||
     raw === "acknowledge" ||
     raw === "clarify"
   ) {
     return raw;
+  }
+  if (Array.isArray(parsed.operations) && parsed.operations.length > 0) {
+    return "edit";
   }
   if (parsed.extractRange && typeof parsed.extractRange === "object") {
     return "extract";
@@ -504,6 +554,83 @@ function normalizeExtractRangeForResponse(raw: unknown): ExtractRange | null {
       ? r.spoken.trim().slice(0, 120)
       : undefined;
   return { kind, startSeconds: start, endSeconds: end, spoken };
+}
+
+/**
+ * v1.6.1 — Validate + sanitize the LLM-emitted EditOperation list.
+ *
+ * Per-op rules:
+ *   - kind must be one of the seven known kinds; unknown ops are dropped.
+ *   - Numeric fields are coerced to finite non-negative numbers; non-finite
+ *     or negative values reject the whole op.
+ *   - For range ops, endSeconds must be > startSeconds (≥ 100ms apart).
+ *   - sourceId is passed through if it's a non-empty string; otherwise
+ *     undefined so the client falls back to the active source.
+ *   - Hard cap at 16 operations per turn (defensive against runaway LLM
+ *     output — the user can do another turn for more edits).
+ *
+ * Returns a clean array; the caller decides what to do when it's empty.
+ */
+function normalizeEditOperations(raw: unknown): EditOperation[] {
+  if (!Array.isArray(raw)) return [];
+  const out: EditOperation[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const kind = typeof o.kind === "string" ? o.kind.trim() : "";
+    const sourceId =
+      typeof o.sourceId === "string" && o.sourceId.trim()
+        ? o.sourceId.trim().slice(0, 64)
+        : undefined;
+    const op = buildOp(kind, o, sourceId);
+    if (op) out.push(op);
+    if (out.length >= 16) break;
+  }
+  return out;
+}
+
+function buildOp(
+  kind: string,
+  o: Record<string, unknown>,
+  sourceId: string | undefined
+): EditOperation | null {
+  // Local helpers for parsing numbers — accept either pure numbers or
+  // numeric strings so the LLM has a tiny bit of slack.
+  const num = (v: unknown): number | null => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim()) {
+      const parsed = Number(v.trim());
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+  };
+
+  switch (kind) {
+    case "trim_first":
+    case "trim_last": {
+      const s = num(o.seconds);
+      if (s == null || s <= 0) return null;
+      return { kind, seconds: s, sourceId };
+    }
+    case "keep_range":
+    case "drop_range": {
+      const a = num(o.startSeconds);
+      const b = num(o.endSeconds);
+      if (a == null || b == null) return null;
+      if (a < 0 || b <= a + 0.1) return null;
+      return { kind, startSeconds: a, endSeconds: b, sourceId };
+    }
+    case "split_at": {
+      const t = num(o.timeSeconds);
+      if (t == null || t < 0) return null;
+      return { kind, timeSeconds: t, sourceId };
+    }
+    case "split_selected":
+    case "reset_source":
+      return { kind, sourceId };
+    default:
+      return null;
+  }
 }
 
 function normalizeInferred(raw: unknown): InferredField[] {

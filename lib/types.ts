@@ -303,11 +303,16 @@ export interface PredictionsCacheEntry {
  *  is informing the AI about the footage rather than asking for a new
  *  plan ("there's a defeated title", "this is 4K", "the audio is bad").
  *  In acknowledge mode the existing plan and clip state stay untouched
- *  and the assistant just confirms it heard. */
+ *  and the assistant just confirms it heard.
+ *  v1.6.1 added "edit" for direct timeline manipulations on existing
+ *  clips ("trim first 30s", "drop 0:30 to 0:45", "split this clip",
+ *  "reset video 2"). Distinct from "extract" which creates a NEW clip
+ *  from raw video — "edit" only mutates clips already on the timeline. */
 export type IntentMode =
   | "plan"
   | "moment"
   | "extract"
+  | "edit"
   | "acknowledge"
   | "clarify";
 
@@ -341,6 +346,68 @@ export type PlanPatch = Partial<EditPlan> & {
   scenariosOp?: "replace" | "append" | "remove";
 };
 
+/**
+ * v1.6.1 — Direct timeline operations the planner can emit when the
+ * user asks for manual edits in chat ("trim first 30s", "drop 0:30 to
+ * 0:45", "split this clip", "reset video 2"). Each operation maps 1:1
+ * to a store action on the client.
+ *
+ * `sourceId` is optional. When omitted the client applies the op to
+ * whichever source is currently active. When provided, the client
+ * temporarily switches the active source, applies the op, and restores
+ * the previous active afterwards. The LLM is told to fill in sourceId
+ * only when the user named a specific video ("trim video 2" / "use the
+ * podcast clip"); generic phrasings ("trim first 30s") leave it blank.
+ *
+ * Note: this is intentionally a small, closed taxonomy. Anything more
+ * exotic ("merge clips", "reorder by sentiment") routes through `plan`
+ * mode instead so the AI can think about it as an editorial decision
+ * rather than a mechanical mutation.
+ */
+export type EditOperation =
+  | {
+      kind: "trim_first";
+      /** Drop or shorten clips falling inside [0, seconds) on the source. */
+      seconds: number;
+      sourceId?: string;
+    }
+  | {
+      kind: "trim_last";
+      /** Drop or shorten clips inside [duration−seconds, duration). */
+      seconds: number;
+      sourceId?: string;
+    }
+  | {
+      kind: "keep_range";
+      /** Replace source's clips with one clip [startSeconds, endSeconds]. */
+      startSeconds: number;
+      endSeconds: number;
+      sourceId?: string;
+    }
+  | {
+      kind: "drop_range";
+      /** Drop or split clips overlapping [startSeconds, endSeconds]. */
+      startSeconds: number;
+      endSeconds: number;
+      sourceId?: string;
+    }
+  | {
+      /** Split the currently-selected clip in two equal halves. */
+      kind: "split_selected";
+      sourceId?: string;
+    }
+  | {
+      /** Split whichever clip contains `timeSeconds` at exactly that point. */
+      kind: "split_at";
+      timeSeconds: number;
+      sourceId?: string;
+    }
+  | {
+      /** Clear every clip from one source. Other sources are untouched. */
+      kind: "reset_source";
+      sourceId?: string;
+    };
+
 /** What POST /api/agent expects in the request body. */
 export interface AgentRequest {
   /** Full conversation history. The latest user turn is the last item. */
@@ -358,6 +425,15 @@ export interface AgentRequest {
    *  sources to pull clips from via `EditPlan.sources`, honouring the
    *  `selected` flag on each entry. */
   videoLibrary?: VideoLibraryEntry[];
+  /** v1.6.1 — id of the source currently active in the preview pane.
+   *  Tells the LLM which one "this video" / "this clip" refers to. */
+  activeSourceId?: string;
+  /** v1.6.1 — number of clips currently on the timeline. The LLM uses
+   *  this to choose between "edit" and "extract" for time-bound asks. */
+  highlightsCount?: number;
+  /** v1.6.1 — id of the clip the user has selected on the timeline.
+   *  Lets "split this clip" / "drop the selected clip" resolve cleanly. */
+  selectedClipId?: string | null;
   /** Cross-turn memory chips. */
   memory?: SessionMemory;
   /** Compact summary of recent activity events for the planner.
@@ -417,6 +493,18 @@ export type AgentResponse =
       quotaWarning?: { usage: number; limit: number; fraction: number };
       /** Optional plan that may carry across to follow-up turns. */
       plan?: EditPlan;
+    }
+  | {
+      /** v1.6.1 — direct timeline edit. The client applies each
+       *  operation sequentially using the existing store actions. The
+       *  pipeline does NOT run on this turn — these are pure local
+       *  mutations of the highlights array. */
+      mode: "edit";
+      operations: EditOperation[];
+      message: string;
+      inferred: InferredField[];
+      warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
     }
   | {
       mode: "clarify";

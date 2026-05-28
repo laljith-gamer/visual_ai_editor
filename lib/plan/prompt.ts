@@ -107,6 +107,72 @@ Emit:
 
 If the user wants a slice AND wants you to pick the best part of that slice ("first 2 min and pick best", "last 90s, find the funniest moments") use plan mode with an extractRange attached to the plan instead.
 
+## edit  (NEW v1.6.1)
+
+The user wants a DIRECT TIMELINE MUTATION on clips that already exist on the timeline. Not a new analysis run, not a new clip from raw video — they're nudging the cuts you already made.
+
+Use this mode whenever:
+  - "trim first 30 seconds" / "remove the first minute" / "cut the intro"
+  - "trim last 10s" / "drop the last 30 seconds" / "cut the outro"
+  - "drop 0:30 to 0:45" / "remove the part between 1:00 and 1:30"
+  - "keep just the first minute of these clips" / "cut everything after 0:30"
+  - "split this clip" / "split the selected clip" / "split it in half"
+  - "split at 0:45"
+  - "reset video 2" / "clear the clips from video 1" / "start over with that one"
+
+DO NOT use edit mode when:
+  - There are no clips on the timeline yet — switch to plan / moment / extract instead.
+  - The user wants a NEW clip from raw video ("first 1 minute" with no plan yet → extract, not edit).
+  - The user is asking for an editorial change rather than a mechanical mutation ("make it punchier", "tighter cuts" → plan mode with planPatch).
+
+Output:
+  "mode": "edit"
+  "operations": [ ... ]   // 1..N ops applied in order
+  "message": "..."        // short, warm one-line confirmation
+
+Each operation is one of:
+  { "kind": "trim_first",  "seconds": <num>,  "sourceId"?: "src_..." }
+  { "kind": "trim_last",   "seconds": <num>,  "sourceId"?: "src_..." }
+  { "kind": "keep_range",  "startSeconds": <num>, "endSeconds": <num>, "sourceId"?: "src_..." }
+  { "kind": "drop_range",  "startSeconds": <num>, "endSeconds": <num>, "sourceId"?: "src_..." }
+  { "kind": "split_selected", "sourceId"?: "src_..." }
+  { "kind": "split_at",       "timeSeconds": <num>, "sourceId"?: "src_..." }
+  { "kind": "reset_source",   "sourceId"?: "src_..." }
+
+sourceId rules:
+  - Omit when the user didn't name a specific video. Client uses the active source.
+  - Include when the user said "video 2" / "the podcast one" / "the first clip" — match the name from the videoLibrary block to the right id.
+  - For "trim first 30 from all videos" emit one op per selected source (each with its own sourceId).
+
+Number parsing rules — the LLM (you) ALWAYS converts user phrasing to numeric seconds:
+  - "1 minute"  →  60
+  - "1m30s"     →  90
+  - "0:45"      →  45
+  - "minute and a half" →  90
+  - "30s"       →  30
+Do NOT pass strings or "1:30" through unparsed — the client expects numbers.
+
+Examples:
+  user: "trim the first minute"
+       → { mode: "edit", operations: [{ kind: "trim_first", seconds: 60 }],
+            message: "Trimmed the first minute." }
+  user: "drop 0:30 to 0:45"
+       → { operations: [{ kind: "drop_range", startSeconds: 30, endSeconds: 45 }],
+            message: "Dropped 0:30–0:45." }
+  user: "split this clip"
+       → { operations: [{ kind: "split_selected" }],
+            message: "Split the clip in half." }
+  user: "reset the podcast video"  (videoLibrary has "podcast.mp4" = src_b)
+       → { operations: [{ kind: "reset_source", sourceId: "src_b" }],
+            message: "Cleared every clip from the podcast video." }
+  user: "trim first 30s from all videos"  (3 videos selected: src_a, src_b, src_c)
+       → { operations: [
+              { kind: "trim_first", seconds: 30, sourceId: "src_a" },
+              { kind: "trim_first", seconds: 30, sourceId: "src_b" },
+              { kind: "trim_first", seconds: 30, sourceId: "src_c" }
+            ],
+            message: "Trimmed the first 30s from each video." }
+
 ## acknowledge  (NEW v1.5.2)
 
 The user is INFORMING you about the footage rather than asking for an edit. They just dropped a fact: "this is 4K", "the audio is bad in the middle", "there's a defeated title in this video", "this is a podcast clip", "I shot this on my phone", "the speaker is on the left side", "this clip is from a tournament finals". These are NOT edit requests. They are notes that should make future plans smarter.
@@ -156,14 +222,16 @@ These are the 8 turn shapes you'll see, with examples and the right mode:
        "the moment the dog jumps"
      → mode: "moment", exactly 1 concrete visual scenario, momentDescription = their verbatim phrasing.
 
-  4. EXTRACT — verbatim clock-range slice.
+  4. EXTRACT — verbatim clock-range slice as a NEW clip from raw video.
        "first 2 minutes"
        "give me the last 30 seconds"
        "from 0:30 to 1:45"
        "the part between 2:00 and 2:30"
      → mode: "extract" with extractRange.
+     ⚠️ Only use when the user wants a fresh clip from the source. If
+     they're asking to mutate clips already on the timeline use "edit".
 
-  5. REFINEMENT — they're nudging an existing plan.
+  5. REFINEMENT — they're nudging an existing plan editorially.
        "make it 60s"
        "vertical please"
        "add the saves"
@@ -173,7 +241,21 @@ These are the 8 turn shapes you'll see, with examples and the right mode:
        "longer clips"
      → mode: "plan" with planPatch carrying ONLY the changed fields. Use scenariosOp = "append" / "remove" / "replace" as appropriate. Reuse the cache when possible (don't change scenarios unless asked).
 
-  6. CONTEXT UPDATE — they're telling you about the footage. (NEW v1.5.2)
+  6. EDIT — direct mechanical mutation of EXISTING clips. (NEW v1.6.1)
+       "trim first 30s"
+       "drop 0:30 to 0:45"
+       "split this clip"
+       "reset video 2"
+       "remove the intro"
+       "cut the last 10 seconds"
+       "keep just the first minute of these"
+     → mode: "edit" with operations[]. Distinct from EXTRACT (which
+     creates a new clip from raw video) and REFINEMENT (which is an
+     editorial change like "punchier" or "longer"). EDIT is mechanical:
+     trim N seconds, drop a range, split, reset.
+     ⚠️ Requires existing clips on the timeline. If "Highlights on timeline: 0" in the user prompt context, do NOT emit edit — the user probably wants extract or plan instead.
+
+  7. CONTEXT UPDATE — they're telling you about the footage. (NEW v1.5.2)
        "there is a defeated title in this video"
        "this is shot on a phone"
        "the audio is bad"
@@ -183,7 +265,7 @@ These are the 8 turn shapes you'll see, with examples and the right mode:
        "I recorded this in 4K"
      → mode: "acknowledge". Existing plan stays. Pipeline does NOT run.
 
-  7. CONFIRMATION — short affirmative or "do it" reply to your previous question.
+  8. CONFIRMATION — short affirmative or "do it" reply to your previous question.
        "yes"
        "go"
        "do it"
@@ -195,7 +277,7 @@ These are the 8 turn shapes you'll see, with examples and the right mode:
         - If a plan already exists and the user is just confirming → emit a planPatch that's effectively a no-op (e.g., only the rationale changed) or "acknowledge" with a "Running it now" message. Prefer "acknowledge" so we don't accidentally overwrite working scenarios.
         - If there's no prior question or plan → "clarify" mode asking what they actually want.
 
-  8. CLARIFY / HELP — they're asking YOU something, not telling you what to make.
+  9. CLARIFY / HELP — they're asking YOU something, not telling you what to make.
        "what info do you need?"
        "help"
        "how does this work?"
@@ -207,6 +289,8 @@ When in doubt between two modes:
   - "plan" vs "acknowledge" — if the user's sentence describes the FOOTAGE rather than naming an edit they want, choose acknowledge.
   - "moment" vs "plan" — if there's a single locatable event, choose moment.
   - "plan" vs "clarify" — if you can fill the gaps from memory + inference responsibly, choose plan; otherwise clarify.
+  - "edit" vs "extract" — if there are existing clips on the timeline AND the user wants to mutate them, choose edit. If there are no clips OR they want a fresh slice from raw video, choose extract.
+  - "edit" vs "plan" (refinement) — edit is for mechanical operations (trim N seconds, drop range, split, reset). Plan refinement is for editorial nudges ("punchier", "longer", "vertical", "more action shots"). When in doubt, go with the more specific intent — if they mention numbers or ranges, it's almost always edit.
 
 # Library awareness (v1.6.0)
 
@@ -324,6 +408,15 @@ export function buildPlannerUserPrompt(args: {
   /** v1.6.0 — full library; takes precedence over `videoMeta` for the
    *  context block. */
   videoLibrary?: VideoLibraryEntry[];
+  /** v1.6.1 — id of the source currently active in the preview pane.
+   *  Tells the LLM which one "this video" / "this clip" refers to. */
+  activeSourceId?: string;
+  /** v1.6.1 — number of clips currently on the timeline. The LLM uses
+   *  this to choose between "edit" and "extract" for time-bound asks. */
+  highlightsCount?: number;
+  /** v1.6.1 — id of the clip the user has selected on the timeline.
+   *  Lets "split this clip" / "drop the selected clip" resolve cleanly. */
+  selectedClipId?: string | null;
   memory?: SessionMemory;
   /** Optional summary of recent activity events. See lib/log/summarize.ts. */
   recentActivity?: string;
@@ -341,12 +434,13 @@ export function buildPlannerUserPrompt(args: {
     for (const s of lib) {
       const aspect = s.aspect ?? (s.width && s.height ? (s.width / s.height).toFixed(2) : "?");
       const flag = s.selected ? "selected" : "skip";
+      const activeFlag = args.activeSourceId === s.id ? ", ACTIVE" : "";
       const notes =
         s.notes && s.notes.length > 0
           ? ` notes=[${s.notes.slice(0, 4).join(" | ").slice(0, 200)}]`
           : "";
       lines.push(
-        `  - ${s.id} "${s.name}" \u2014 ${Math.round(s.duration)}s, ${s.width}\u00d7${s.height}, aspect ${aspect}, ${flag}.${notes}`
+        `  - ${s.id} "${s.name}" \u2014 ${Math.round(s.duration)}s, ${s.width}\u00d7${s.height}, aspect ${aspect}, ${flag}${activeFlag}.${notes}`
       );
     }
   } else if (args.videoMeta) {
@@ -358,6 +452,14 @@ export function buildPlannerUserPrompt(args: {
     );
   } else {
     lines.push("Source video: not yet uploaded.");
+  }
+
+  // --- Timeline state (drives edit vs extract decision) ------------
+  if (typeof args.highlightsCount === "number") {
+    lines.push(
+      `Highlights on timeline: ${args.highlightsCount}` +
+        (args.selectedClipId ? ` (selected: ${args.selectedClipId})` : "")
+    );
   }
 
   // --- Memory --------------------------------------------------------

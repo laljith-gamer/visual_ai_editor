@@ -375,6 +375,9 @@ export default function Home() {
               }
             : undefined,
           videoLibrary,
+          activeSourceId: storeNow.activeSourceId ?? undefined,
+          highlightsCount: storeNow.highlights.length,
+          selectedClipId: storeNow.selectedClipId,
           memory,
           recentActivity: recentActivity || undefined
         };
@@ -472,6 +475,115 @@ export default function Home() {
               inferred: data.inferred ?? []
             },
             `Noted context: ${userRequest.slice(0, 60)}`,
+            plannerMs
+          );
+          return;
+        }
+
+        // ---- EDIT mode (v1.6.1) ------------------------------------------
+        // Direct timeline mutation. The LLM emitted a list of structured
+        // ops; we apply them sequentially using existing store actions.
+        // Per-op `sourceId` swaps the active source in/out so each op
+        // hits the right footage. The pipeline does NOT run.
+        if (data.mode === "edit") {
+          const ops = data.operations ?? [];
+          if (ops.length === 0) {
+            pushMessage({
+              role: "assistant",
+              content: data.message || "No edits to apply."
+            });
+            setStatus("idle", undefined);
+            return;
+          }
+          if (highlights.length === 0) {
+            pushMessage({
+              role: "assistant",
+              content:
+                "No clips on the timeline to edit yet. Tell me what kind of short you want first."
+            });
+            setStatus("idle", undefined);
+            return;
+          }
+          const store = useEditorStore.getState();
+          const originalActive = store.activeSourceId;
+          let totalChanged = 0;
+          const opLog: Array<{ kind: string; payload: unknown; changed: number }> = [];
+          for (const op of ops) {
+            // Switch active source if the op targets a specific one. We
+            // restore at the end so the preview pane stays where the
+            // user left it.
+            if (op.sourceId && op.sourceId !== useEditorStore.getState().activeSourceId) {
+              const exists = useEditorStore
+                .getState()
+                .sources.some((s) => s.id === op.sourceId);
+              if (exists) useEditorStore.getState().setActiveSource(op.sourceId);
+            }
+            const s = useEditorStore.getState();
+            let result = { changed: 0 };
+            switch (op.kind) {
+              case "trim_first":
+                result = s.trimFirstSeconds(op.seconds);
+                break;
+              case "trim_last":
+                result = s.trimLastSeconds(op.seconds);
+                break;
+              case "keep_range":
+                result = s.keepRange(op.startSeconds, op.endSeconds);
+                break;
+              case "drop_range":
+                result = s.dropRange(op.startSeconds, op.endSeconds);
+                break;
+              case "split_at":
+                result = s.splitAtTime(op.timeSeconds);
+                break;
+              case "split_selected": {
+                const sel = s.highlights.find(
+                  (h) => h.id === s.selectedClipId
+                );
+                if (sel) {
+                  const mid = sel.start + (sel.end - sel.start) / 2;
+                  result = s.splitAtTime(mid);
+                }
+                break;
+              }
+              case "reset_source":
+                result = s.resetActiveSourceClips();
+                break;
+            }
+            totalChanged += result.changed;
+            opLog.push({
+              kind: op.kind,
+              payload: { ...op, sourceId: op.sourceId ?? null },
+              changed: result.changed
+            });
+          }
+          // Restore original active source if a specific op switched it.
+          if (
+            originalActive &&
+            useEditorStore.getState().activeSourceId !== originalActive
+          ) {
+            useEditorStore.getState().setActiveSource(originalActive);
+          }
+          if (data.inferred && data.inferred.length > 0) {
+            setInferred(data.inferred);
+          }
+          pushMessage({
+            role: "assistant",
+            content:
+              data.message ||
+              (totalChanged === 0
+                ? "Nothing matched those edits."
+                : `Applied ${ops.length} edit${ops.length === 1 ? "" : "s"} (${totalChanged} clip change${totalChanged === 1 ? "" : "s"}).`)
+          });
+          const stateAfter = useEditorStore.getState();
+          setStatus(
+            stateAfter.highlights.length > 0 ? "ready" : "idle",
+            undefined
+          );
+          logSession.ai(
+            "edit.applied",
+            { ops: opLog, totalChanged },
+            `Applied ${ops.length} edit op${ops.length === 1 ? "" : "s"} (${totalChanged} clip change${totalChanged === 1 ? "" : "s"})`,
             plannerMs
           );
           return;

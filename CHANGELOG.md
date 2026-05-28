@@ -4,6 +4,88 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.6.1] — 2026-05-28
+
+### Changed — manual edits move from a static toolbar to a chat intent
+
+The Tinker toolbar shipped in 1.6.0 contradicted the project thesis
+("the LLM does ALL intent understanding — no regex or keyword
+heuristics on the server"). v1.6.1 deletes the static UI and routes
+those same edit operations through chat instead.
+
+#### Removed
+
+`components/ManualEditToolbar.tsx` and its CSS file are gone. The
+`<ManualEditToolbar />` reference in `EditorStage` is dropped.
+The store actions (`trimFirstSeconds`, `trimLastSeconds`, `keepRange`,
+`dropRange`, `splitAtTime`, `resetActiveSourceClips`) are kept — they
+are now invoked by the chat intent handler instead of by buttons.
+
+#### New — `edit` intent mode
+
+A sixth `IntentMode` joins `plan` / `moment` / `extract` / `acknowledge`
+/ `clarify`. The planner emits it whenever the user asks for a
+mechanical timeline mutation in chat — and the client applies a list
+of structured operations sequentially.
+
+```ts
+type EditOperation =
+  | { kind: "trim_first";    seconds: number; sourceId?: string }
+  | { kind: "trim_last";     seconds: number; sourceId?: string }
+  | { kind: "keep_range";    startSeconds: number; endSeconds: number; sourceId?: string }
+  | { kind: "drop_range";    startSeconds: number; endSeconds: number; sourceId?: string }
+  | { kind: "split_selected"; sourceId?: string }
+  | { kind: "split_at";       timeSeconds: number; sourceId?: string }
+  | { kind: "reset_source";   sourceId?: string };
+```
+
+`sourceId` is omitted when the user didn't name a specific video; the
+client falls back to the active source. When provided, the client
+swaps the active source in for the duration of the op then restores
+it afterward so the preview pane stays where the user left it.
+
+#### Phrases the AI now handles
+
+- *"trim the first minute"* → `[{ kind: "trim_first", seconds: 60 }]`
+- *"drop 0:30 to 0:45"* → `[{ kind: "drop_range", startSeconds: 30, endSeconds: 45 }]`
+- *"split this clip"* → `[{ kind: "split_selected" }]`
+- *"keep just the first minute"* → `[{ kind: "keep_range", startSeconds: 0, endSeconds: 60 }]`
+- *"reset video 2"* → `[{ kind: "reset_source", sourceId: "src_..." }]`
+- *"trim first 30s from all videos"* → one op per selected source
+- *"cut the intro and split the ending"* → multiple ops in one turn
+
+The LLM does all of the natural-language → numeric-seconds parsing
+("1m30s" → 90, "minute and a half" → 90, "0:45" → 45). The server
+validates strict numeric shapes — non-finite values, negative ranges,
+and unknown kinds are dropped before reaching the client.
+
+#### `extract` vs `edit`
+
+The planner prompt now distinguishes them clearly:
+- `extract` creates a NEW clip from raw video. Use when no clips
+  exist yet, or the user wants a fresh slice.
+- `edit` mutates EXISTING clips on the timeline. Use when clips are
+  already there.
+
+The user-prompt builder ships a `Highlights on timeline: N` line so
+the LLM can route correctly. When `N == 0`, edit mode is off the
+table and the model picks plan / moment / extract instead.
+
+#### Defensive resolver + clarify fallback
+
+`resolveMode()` in `app/api/agent/route.ts` now recognises a non-empty
+`operations` array as `edit` mode even when the LLM forgot the `mode`
+field, matching the pattern used for extract/clarify/moment. When the
+LLM emits `mode: "edit"` but no parseable operations, the route
+returns a friendly clarify question with quick-reply chips instead
+of crashing.
+
+#### Activity log
+
+Each applied operation logs as a structured `edit.applied` event with
+the full op list and per-op `changed` count, so future planner turns
+see exactly what the user did and bias accordingly.
+
 ## [1.6.0] — 2026-05-28
 
 ### Added — Multi-video library, cross-source AI, manual edit toolbar

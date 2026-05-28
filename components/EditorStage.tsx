@@ -5,7 +5,6 @@ import { useEditorStore } from "@/hooks/useEditorStore";
 import { Timeline } from "./Timeline";
 import { ClipInspector } from "./ClipInspector";
 import { PreviewToolbar } from "./PreviewToolbar";
-import { ManualEditToolbar } from "./ManualEditToolbar";
 import { formatTime } from "@/lib/util/time";
 import styles from "./EditorStage.module.css";
 
@@ -225,7 +224,6 @@ export function EditorStage({ onOpenClips, onRender, isRendering }: Props) {
       <section className="card">
         <div className="card-header">Timeline</div>
         <div className="card-body">
-          <ManualEditToolbar />
           <Timeline />
           <ClipInspector />
         </div>
