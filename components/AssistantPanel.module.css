@@ -1,137 +1,507 @@
+/* =====================================================================
+   AssistantPanel — green "Smart Chat" template.
+
+   Visual vocabulary:
+   - Soft outer card with a subtle accent halo at the top.
+   - User bubbles: filled green, right-aligned, slight gradient.
+   - Assistant bubbles: dark glass card, left-aligned, with an action
+     bar that fades in on hover.
+   - Composer: pill-shaped, focus ring in accent green, big round
+     send button.
+   ===================================================================== */
+
 .panel {
+  position: relative;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
-  min-height: 0;
-  overflow: hidden;
 }
+
+/* Accent halo bleeding from the top — gives the card a tactile,
+   "chat is alive" feel without an actual animated element. */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 80px;
+  background: radial-gradient(
+    80% 100% at 50% 0%,
+    rgba(99, 216, 149, 0.16),
+    transparent 70%
+  );
+  pointer-events: none;
+}
+
+/* ── Header ─────────────────────────────────────────────────── */
 
 .header {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--line);
-  gap: var(--space-3);
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+}
+
+.titleIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #07120c;
+  box-shadow: 0 4px 12px rgba(99, 216, 149, 0.32);
+}
+
+.titleText {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Mode switch — replaced by .autoTag in v1.7.0 (Auto mode is implicit;
+   the server decides per-turn whether to think hard, with persistent
+   memory carrying user intent across turns). The legacy class names
+   below are no longer used by AssistantPanel.tsx. */
+.modeSwitch,
+.modeBtn,
+.modeBtnActive {
+  /* deprecated */
+}
+
+/* The "Auto" tag in the chat header. Static — there is no toggle. */
+.autoTag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: linear-gradient(180deg, rgba(99, 216, 149, 0.18), rgba(99, 216, 149, 0.06));
+  border: 1px solid rgba(99, 216, 149, 0.35);
+  border-radius: 999px;
+  margin-left: 8px;
+}
+
+/* ── Messages ──────────────────────────────────────────────── */
+
 .messages {
+  position: relative;
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4);
+  gap: 18px;
+  padding: 18px 16px;
   min-height: 280px;
   max-height: 60vh;
 }
 
-.message {
+.row {
   display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  animation: rowIn 320ms cubic-bezier(0.2, 0.7, 0.1, 1) backwards;
 }
-.message.user {
+
+.rowUser {
   justify-content: flex-end;
 }
-.message.assistant {
+
+.rowAssistant {
   justify-content: flex-start;
 }
 
-.bubble {
-  max-width: 88%;
-  padding: 10px 14px;
-  border-radius: 14px;
-  background: var(--bg-3);
-  border: 1px solid var(--line);
-  color: var(--text);
-  white-space: pre-wrap;
-  font-size: 13px;
-  line-height: 1.5;
+.avatar {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #07120c;
+  box-shadow: 0 4px 12px rgba(99, 216, 149, 0.28);
 }
 
-.message.user .bubble {
-  background: rgba(99, 216, 149, 0.18);
-  border-color: rgba(99, 216, 149, 0.4);
-}
-
-/* Inferred-fields block */
-.inferred {
+.bubbleWrap {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: var(--space-3);
-  border-radius: var(--radius-card);
-  background: rgba(169, 147, 255, 0.06);
-  border: 1px solid rgba(169, 147, 255, 0.25);
+  max-width: 86%;
+  min-width: 0;
 }
-.inferredHeader {
+
+.rowUser .bubbleWrap {
+  align-items: flex-end;
+}
+
+.bubble {
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+/* User bubble: filled green with a gentle gradient and strong contrast. */
+.rowUser .bubble {
+  background: linear-gradient(
+    180deg,
+    rgba(99, 216, 149, 0.95),
+    rgba(76, 199, 129, 0.92)
+  );
+  color: #07120c;
+  border: 1px solid var(--accent-strong);
+  border-bottom-right-radius: 4px;
+  box-shadow:
+    0 8px 22px rgba(99, 216, 149, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  font-weight: 500;
+}
+
+.rowAssistant .bubble {
+  border-bottom-left-radius: 4px;
+}
+
+/* Action bar under each assistant message — stays at low opacity until
+   the user hovers the row OR uses keyboard focus, matching the modern
+   ChatGPT/Claude pattern. */
+.actionRow {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--violet);
+  gap: 4px;
+  margin-left: 4px;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 160ms ease, transform 160ms ease;
 }
+
+.row:hover .actionRow,
+.row:focus-within .actionRow {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-faint);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 80ms ease;
+}
+.actionBtn:hover {
+  background: rgba(99, 216, 149, 0.12);
+  color: var(--accent);
+  border-color: rgba(99, 216, 149, 0.3);
+}
+.actionBtn:active { transform: scale(0.92); }
+
+.actionBtnActive {
+  background: rgba(99, 216, 149, 0.18);
+  color: var(--accent);
+  border-color: rgba(99, 216, 149, 0.45);
+}
+
+/* Always show actions on the most recent assistant message so the
+   primary affordance (Regenerate) is discoverable without hover. */
+.row:last-child .actionRow {
+  opacity: 0.7;
+  transform: translateY(0);
+}
+
+/* ── Typing indicator ──────────────────────────────────────── */
+
+.typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, rgba(99, 216, 149, 0.06), rgba(99, 216, 149, 0.02));
+  border-color: rgba(99, 216, 149, 0.2);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: bounce 1.2s ease-in-out infinite;
+}
+.dot:nth-child(2) { animation-delay: 0.15s; }
+.dot:nth-child(3) { animation-delay: 0.3s; }
+
+.typingLabel {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+@keyframes bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30%           { transform: translateY(-4px); opacity: 1; }
+}
+
+@keyframes rowIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Inferred / clarify / starter blocks ───────────────────── */
+
+.inferred {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(99, 216, 149, 0.06), rgba(99, 216, 149, 0.02));
+  border: 1px solid rgba(99, 216, 149, 0.22);
+}
+
+.inferredHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .inferredList {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
+
 .inferredPill {
-  border-color: rgba(169, 147, 255, 0.4);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(99, 216, 149, 0.08);
+  border: 1px solid rgba(99, 216, 149, 0.3);
   color: var(--text);
-  background: rgba(169, 147, 255, 0.08);
+  font-size: 11px;
 }
+
+.inferredEq {
+  color: var(--text-faint);
+}
+
 .inferredHint {
-  margin: 2px 0 0 0;
+  margin: 0;
   font-size: 11px;
   color: var(--text-faint);
 }
 
-/* Starter suggestions */
 .starter {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: var(--space-3);
-  border-radius: var(--radius-card);
-  background: rgba(99, 216, 149, 0.04);
-  border: 1px dashed rgba(99, 216, 149, 0.25);
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed rgba(99, 216, 149, 0.28);
 }
+
 .starterHint {
-  margin: 0 0 4px 0;
+  margin: 0;
   font-size: 12px;
   color: var(--text-muted);
 }
+
 .starterRow {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
+
 .starterChip {
-  padding: 6px 10px;
-  height: auto;
+  padding: 7px 12px;
   font-size: 12px;
+  font-weight: 500;
   line-height: 1.2;
+  border-radius: 999px;
+  border: 1px solid rgba(99, 216, 149, 0.3);
+  background: rgba(99, 216, 149, 0.06);
+  color: var(--text);
+  transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+}
+.starterChip:hover:not(:disabled) {
+  background: rgba(99, 216, 149, 0.16);
+  border-color: var(--accent);
+}
+.starterChip:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.starterChip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Composer ──────────────────────────────────────────────── */
+
+.composerWrap {
+  padding: 14px 16px 6px;
 }
 
 .composer {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--line);
+  align-items: flex-end;
+  gap: 10px;
+  padding: 8px 8px 8px 16px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
-.composer .btn {
-  align-self: flex-end;
+.composer:focus-within {
+  border-color: rgba(99, 216, 149, 0.55);
+  box-shadow: 0 0 0 4px rgba(99, 216, 149, 0.12);
 }
 
-.actions {
+.composerBusy {
+  opacity: 0.85;
+}
+
+.input {
+  flex: 1 1 auto;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  padding: 8px 0;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text);
+  min-height: 22px;
+  max-height: 110px;
+}
+
+.input::placeholder {
+  color: var(--text-faint);
+}
+
+.sendBtn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #07120c;
+  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  border: 1px solid var(--accent-strong);
+  box-shadow: 0 8px 18px rgba(99, 216, 149, 0.28);
+  transition: transform 100ms ease, box-shadow 160ms ease, opacity 120ms ease;
+}
+.sendBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(99, 216, 149, 0.36);
+}
+.sendBtn:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
+}
+.sendBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.hint {
+  margin: 6px 4px 0;
+  font-size: 10px;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+}
+
+.hint kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  margin: 0 1px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ── Footer (clips / export) ───────────────────────────────── */
+
+.footer {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-4) var(--space-3) var(--space-4);
+  gap: 8px;
+  padding: 8px 16px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.footerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.footerBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.footerBtnAccent {
+  background: rgba(99, 216, 149, 0.1);
+  color: var(--accent);
+  border-color: rgba(99, 216, 149, 0.35);
+}
+.footerBtnAccent:hover {
+  background: rgba(99, 216, 149, 0.18);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row, .dot, .actionRow, .sendBtn { animation: none; transition: none; }
 }

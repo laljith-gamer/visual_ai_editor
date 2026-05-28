@@ -87,11 +87,31 @@ export function normalizePlan(raw: unknown): NormalizeResult {
   // library is reachable; here we only sanitize types and length.
   const sources = stringArray(r.sources).slice(0, 16);
 
+  // v1.7.1 — userSpecifiedDuration. Strict-true only when the planner
+  // explicitly sets it. Default false so any LLM that forgets the
+  // field gets the new no-budget behaviour. Old persisted plans
+  // missing the field also fall through to false on rehydrate, which
+  // matches the "let timelines grow naturally on append" goal.
+  const userSpecifiedDuration =
+    r.userSpecifiedDuration === true
+      ? true
+      : r.userSpecifiedDuration === false
+        ? false
+        : false;
+  // qualityFloor — clamp to [0, 1] when present, otherwise use the
+  // default. Only used when userSpecifiedDuration === false.
+  const qualityFloor =
+    typeof r.qualityFloor === "number" && isFinite(r.qualityFloor)
+      ? clamp(r.qualityFloor, 0, 1)
+      : undefined;
+
   return {
     plan: {
       scenarios,
       labelWeights,
       targetShortSeconds: target,
+      userSpecifiedDuration,
+      qualityFloor,
       maxClipSeconds: maxClip,
       minClipSeconds: minClip,
       selectionStrategy,
@@ -142,6 +162,17 @@ export function normalizePlanPatch(raw: unknown): {
   }
   if (typeof r.targetShortSeconds === "number") {
     patch.targetShortSeconds = clampToBound(r.targetShortSeconds, PLAN_BOUNDS.targetShortSeconds);
+    // v1.7.1 — any explicit numeric duration on a patch is treated as
+    // a deliberate user-set duration, even if the LLM forgot the
+    // userSpecifiedDuration flag. Keeps the soft over-budget notice
+    // working when the LLM is sloppy.
+    patch.userSpecifiedDuration = true;
+  }
+  if (r.userSpecifiedDuration === true || r.userSpecifiedDuration === false) {
+    patch.userSpecifiedDuration = r.userSpecifiedDuration;
+  }
+  if (typeof r.qualityFloor === "number" && isFinite(r.qualityFloor)) {
+    patch.qualityFloor = clamp(r.qualityFloor, 0, 1);
   }
   if (typeof r.maxClipSeconds === "number") {
     patch.maxClipSeconds = clampToBound(r.maxClipSeconds, PLAN_BOUNDS.maxClipSeconds);

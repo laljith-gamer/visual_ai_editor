@@ -50,7 +50,7 @@ export function Topbar({ onOpenActivity, newActivityCount = 0 }: Props) {
 
       <div className={styles.actions}>
         <button
-          className="btn"
+          className={styles.newChatBtn}
           onClick={() => {
             logUser({
               sessionId,
@@ -60,34 +60,22 @@ export function Topbar({ onOpenActivity, newActivityCount = 0 }: Props) {
             });
             newSession();
           }}
+          title="Clear the conversation and start fresh"
         >
-          <Plus size={14} />
-          New chat
+          <Plus size={14} strokeWidth={2.5} />
+          <span>New chat</span>
         </button>
 
         <button
-          className="btn"
+          className={styles.iconBtn}
           onClick={onOpenActivity}
           aria-label="Open activity log"
           title="Activity log"
-          style={{ position: "relative" }}
         >
           <ActivityIcon size={14} />
-          Activity
+          <span className={styles.iconBtnLabel}>Activity</span>
           {newActivityCount > 0 && (
-            <span
-              aria-hidden
-              style={{
-                position: "absolute",
-                top: 4,
-                right: 6,
-                width: 8,
-                height: 8,
-                borderRadius: 999,
-                background: "var(--accent)",
-                boxShadow: "0 0 0 2px var(--bg-2)"
-              }}
-            />
+            <span aria-hidden className={styles.activityDot} />
           )}
         </button>
 

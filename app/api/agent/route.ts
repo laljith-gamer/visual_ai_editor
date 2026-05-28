@@ -16,6 +16,8 @@ import {
 } from "@/lib/plan/prompt";
 import { normalizePlan, normalizePlanPatch } from "@/lib/plan/normalize";
 import { mergePlan } from "@/lib/plan/merge";
+import { extractFacts } from "@/lib/memory/extract";
+import { decayFacts, mergeFacts } from "@/lib/memory/store";
 import { extractJsonObject } from "@/lib/util/safeJson";
 import { newId } from "@/lib/util/id";
 import { CONVERSATION, PLAN_DEFAULTS, RATE_LIMITS, SIGNAL_DEFAULTS } from "@/lib/config";
@@ -29,6 +31,7 @@ import type {
   ExtractRange,
   InferredField,
   IntentMode,
+  MemoryFact,
   PlanPatch,
   RateLimitDecision,
   SessionMemory,
@@ -88,6 +91,13 @@ export async function POST(req: NextRequest) {
   const latest = messages[messages.length - 1];
   const userText = latest.content;
 
+  // ---- Read persistent memory facts (v1.7.0) -------------------------
+  // We decay everyone's facts once per turn — this keeps low-confidence
+  // legacy facts from drifting forward forever. Decay is small (-0.02)
+  // so reinforced facts (those the planner re-emits) easily stay above
+  // the eviction floor.
+  const priorFacts = decayFacts(session.facts ?? []);
+
   // ---- Build the planner prompt -------------------------------------
   // No regex / keyword heuristics on the server. The LLM does ALL intent
   // understanding from the user's words + the structured context below.
@@ -101,6 +111,7 @@ export async function POST(req: NextRequest) {
     selectedClipId: body.selectedClipId,
     highlights: body.timelineClips,
     memory: body.memory,
+    facts: priorFacts,
     recentActivity:
       typeof body.recentActivity === "string" ? body.recentActivity : undefined
   });
@@ -157,6 +168,24 @@ export async function POST(req: NextRequest) {
   // input" rule still holds. Picking a reasonable mode beats crashing.
   const mode: IntentMode = resolveMode(parsed);
   const userTier = normalizeUserTier(parsed.userTier);
+
+  // v1.7.0 — extract candidate memory facts from THIS turn's planner
+  // output and merge them into the session store. We do this once,
+  // up-front, so every mode-specific branch below benefits without
+  // having to remember to call it. The extracted facts go in
+  // session.facts; the cookie save happens at the end.
+  const freshFacts = extractFacts(parsed);
+  const newFacts: MemoryFact[] =
+    freshFacts.length > 0 ? mergeFacts(priorFacts, freshFacts) : priorFacts;
+  // Only schedule a cookie save when something actually changed — this
+  // avoids hot-path Set-Cookie headers on every turn.
+  const factsChanged =
+    freshFacts.length > 0 || newFacts.length !== (session.facts ?? []).length;
+  if (factsChanged) {
+    session.facts = newFacts;
+    // Fire-and-forget; the response can ship before the save completes.
+    void session.save().catch(() => {});
+  }
 
   // ---- ACKNOWLEDGE (v1.5.2) -----------------------------------------
   // Context-update turn. The user told us a fact about the footage
@@ -259,6 +288,55 @@ export async function POST(req: NextRequest) {
       target,
       question,
       message: stringOr(parsed.message, "Looking at that clip\u2026"),
+      inferred,
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
+    });
+  }
+
+  // ---- BRIEFING (v1.7.0) --------------------------------------------
+  // The user wants a structured *description* of the video — overview
+  // + best parts + suggested follow-ups — without any rendering. The
+  // planner classifies the intent and emits a sample plan; the client
+  // does the actual frame extraction and POSTs to /api/agent/briefing
+  // for the vision call. This route just brokers the intent + sample
+  // plan + waiting message. The pipeline does NOT run.
+  if (mode === "briefing") {
+    const samplePlan = normalizeBriefingSamplePlan(parsed.samplePlan);
+    const question =
+      typeof parsed.question === "string" && parsed.question.trim()
+        ? parsed.question.trim().slice(0, 500)
+        : userText.slice(0, 500);
+
+    if (!question) {
+      // No question to forward. Fall back to clarify rather than
+      // burning a vision call on an empty prompt.
+      return NextResponse.json<AgentResponse>({
+        mode: "clarify",
+        message:
+          "Tell me what you'd like me to look for, or just say 'describe the whole video'.",
+        questions: [
+          {
+            id: "briefing_intent",
+            prompt: "What should I focus on?",
+            suggestions: [
+              "Describe the whole video",
+              "Tell me the best parts",
+              "Just summarize it"
+            ],
+            kind: "single-choice"
+          }
+        ],
+        warnings,
+        ...(quotaWarning ? { quotaWarning } : {})
+      });
+    }
+    const inferred = normalizeInferred(parsed.inferred);
+    return NextResponse.json<AgentResponse>({
+      mode: "briefing",
+      question,
+      samplePlan,
+      message: stringOr(parsed.message, "Watching the whole thing now\u2026"),
       inferred,
       warnings,
       ...(quotaWarning ? { quotaWarning } : {})
@@ -540,6 +618,7 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
     raw === "extract" ||
     raw === "edit" ||
     raw === "describe" ||
+    raw === "briefing" ||
     raw === "acknowledge" ||
     raw === "clarify"
   ) {
@@ -555,6 +634,16 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
     (parsed.question as string).trim()
   ) {
     return "describe";
+  }
+  // v1.7.0 — briefing turns carry a samplePlan envelope without a
+  // target.kind. Detect by shape if mode is missing.
+  if (
+    parsed.samplePlan &&
+    typeof parsed.samplePlan === "object" &&
+    typeof parsed.question === "string" &&
+    (parsed.question as string).trim()
+  ) {
+    return "briefing";
   }
   if (parsed.extractRange && typeof parsed.extractRange === "object") {
     return "extract";
@@ -575,6 +664,50 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
     return "acknowledge";
   }
   return "clarify";
+}
+
+/**
+ * v1.7.0 — Validate the samplePlan envelope from the planner's
+ * briefing-mode JSON. Falls back to sensible defaults so the client
+ * always gets a workable plan even if the LLM was sloppy.
+ *
+ *   count: clamped to [4, 16]; default 12.
+ *   range: optional; rejected if startSeconds >= endSeconds or either
+ *          is non-finite. The client interprets a missing range as
+ *          "whole active video".
+ */
+function normalizeBriefingSamplePlan(
+  raw: unknown
+): { count: number; range?: { startSeconds: number; endSeconds: number } } {
+  const o =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  let count = 12;
+  if (typeof o.count === "number" && Number.isFinite(o.count)) {
+    count = Math.round(o.count);
+  } else if (typeof o.count === "string") {
+    const parsed = Number(o.count);
+    if (Number.isFinite(parsed)) count = Math.round(parsed);
+  }
+  count = Math.min(16, Math.max(4, count));
+
+  let range: { startSeconds: number; endSeconds: number } | undefined;
+  if (o.range && typeof o.range === "object") {
+    const r = o.range as Record<string, unknown>;
+    const num = (v: unknown): number | null => {
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v === "string") {
+        const p = Number(v);
+        if (Number.isFinite(p)) return p;
+      }
+      return null;
+    };
+    const s = num(r.startSeconds);
+    const e = num(r.endSeconds);
+    if (s != null && e != null && s >= 0 && e > s + 0.5) {
+      range = { startSeconds: s, endSeconds: e };
+    }
+  }
+  return range ? { count, range } : { count };
 }
 
 function resolvePlan(args: {
@@ -887,10 +1020,21 @@ function defaultClarifyQuestion(
       kind: "single-choice"
     };
   }
+  // v1.7.1 — When a refinement-mode plan exists but the planner didn't
+  // give us enough to act, we used to fall back to a "duration"
+  // question with hardcoded chips. That ask is gone — total timing is
+  // now emergent (see Duration & append rules in the planner prompt).
+  // Use the same "next step" question as the no-plan path so the user
+  // is never trapped in a templated duration picker.
   return {
-    id: "duration",
-    prompt: "How long should the short be?",
-    suggestions: ["15 seconds", "30 seconds", "60 seconds", "90 seconds"],
+    id: "next_step",
+    prompt: "What would you like next \u2014 describe what's there, add more clips, or trim?",
+    suggestions: [
+      "Describe the whole video",
+      "Add more clips",
+      "Trim to fit",
+      "Find a specific moment"
+    ],
     kind: "single-choice"
   };
 }
@@ -1039,10 +1183,18 @@ function synthesizeVaguePlan(args: {
     args.memory?.duration ??
     args.currentPlan?.targetShortSeconds ??
     PLAN_DEFAULTS.targetShortSeconds;
+  // v1.7.1 — synthesizeVaguePlan fires when the user gave us nothing
+  // to go on. Keeping userSpecifiedDuration false means the pipeline
+  // will pick clips by quality floor instead of trimming to a 30s
+  // budget the user never asked for.
+  const userSpecifiedDuration =
+    args.memory?.duration !== undefined ||
+    args.currentPlan?.userSpecifiedDuration === true;
   return {
     scenarios,
     labelWeights,
     targetShortSeconds: target,
+    userSpecifiedDuration,
     maxClipSeconds: PLAN_DEFAULTS.maxClipSeconds,
     minClipSeconds: PLAN_DEFAULTS.minClipSeconds,
     selectionStrategy: PLAN_DEFAULTS.selectionStrategy,
