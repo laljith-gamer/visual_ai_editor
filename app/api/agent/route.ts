@@ -292,7 +292,9 @@ export async function POST(req: NextRequest) {
 
     const questions = normalizeClarifyQuestions(parsed.questions);
     if (questions.length === 0) {
-      questions.push(defaultClarifyQuestion(body.currentPlan ?? null));
+      questions.push(
+        defaultClarifyQuestion(body.currentPlan ?? null, clarifyContext(body))
+      );
     }
     return NextResponse.json<AgentResponse>({
       mode: "clarify",
@@ -319,7 +321,7 @@ export async function POST(req: NextRequest) {
         mode: "clarify",
         message:
           "I need a bit more before I can run the analysis — what should the short be about?",
-        questions: missingFieldsToQuestions(buildResult.missing),
+        questions: missingFieldsToQuestions(buildResult.missing, body),
         warnings,
         ...(quotaWarning ? { quotaWarning } : {})
       });
@@ -369,7 +371,9 @@ export async function POST(req: NextRequest) {
   return NextResponse.json<AgentResponse>({
     mode: "clarify",
     message: "I didn't quite catch that — what would you like me to do?",
-    questions: [defaultClarifyQuestion(body.currentPlan ?? null)],
+    questions: [
+      defaultClarifyQuestion(body.currentPlan ?? null, clarifyContext(body))
+    ],
     warnings,
     ...(quotaWarning ? { quotaWarning } : {})
   });
@@ -723,17 +727,39 @@ function normalizeClarifyQuestions(raw: unknown): ClarifyQuestion[] {
   return out;
 }
 
-function defaultClarifyQuestion(currentPlan: EditPlan | null): ClarifyQuestion {
+function defaultClarifyQuestion(
+  currentPlan: EditPlan | null,
+  context?: {
+    /** Active source duration in seconds, if known. Adapts the chip
+     *  suggestions: long videos (>5 min) lean broad/exploratory; short
+     *  videos can lean narrow. v1.6.3. */
+    durationSeconds?: number;
+    /** Per-source notes the user volunteered ("this is a podcast",
+     *  "wedding ceremony"). Used as light hints — never as keyword
+     *  switches. v1.6.3. */
+    notes?: string[];
+  }
+): ClarifyQuestion {
   if (!currentPlan) {
+    // Universal chips that read naturally for any genre. The narrow
+    // ones (Funniest / Most action) sit alongside broad alternatives
+    // (Highlights / Key moments) so the user isn't forced to pick a
+    // sports/comedy framing for a lecture or a meditation tape.
+    //
+    // Order matters — the chip the user picks becomes the topic the
+    // LLM acts on. We also include "Just describe it…" so users with
+    // a specific idea aren't railroaded into a quick-reply.
+    const dur = context?.durationSeconds ?? 0;
+    const isLong = dur >= 300; // 5 minutes
+    const broad = ["Highlights", "Key moments", "Best parts"];
+    const narrow = ["Funniest moments", "Most action", "Most emotional"];
+    const picks = isLong
+      ? [...broad, "Find a specific scene"]
+      : [...narrow, "Highlights", "Find a specific scene"];
     return {
       id: "topic",
       prompt: "What kind of moments should I look for?",
-      suggestions: [
-        "Funniest moments",
-        "Most action",
-        "Most emotional",
-        "Find a specific scene instead"
-      ],
+      suggestions: picks.slice(0, 5),
       kind: "single-choice"
     };
   }
@@ -745,11 +771,36 @@ function defaultClarifyQuestion(currentPlan: EditPlan | null): ClarifyQuestion {
   };
 }
 
-function missingFieldsToQuestions(missing: string[]): ClarifyQuestion[] {
+function missingFieldsToQuestions(
+  missing: string[],
+  body?: AgentRequest
+): ClarifyQuestion[] {
   // Right now both branches return the same default; left as a function so
   // future field-specific clarifications can plug in here.
   void missing;
-  return [defaultClarifyQuestion(null)];
+  return [
+    defaultClarifyQuestion(null, body ? clarifyContext(body) : undefined)
+  ];
+}
+
+/**
+ * v1.6.3 — Derive a small context bundle from the agent request so
+ * defaultClarifyQuestion can pick chip suggestions that fit the
+ * footage genre. We use only the active source's duration + any notes
+ * the user volunteered. This is NOT a regex on user text — it's a
+ * shape read on metadata + structured chips.
+ */
+function clarifyContext(body: AgentRequest): {
+  durationSeconds?: number;
+  notes?: string[];
+} {
+  const lib = body.videoLibrary ?? [];
+  const active =
+    lib.find((s) => s.id === body.activeSourceId) ?? lib[0] ?? null;
+  return {
+    durationSeconds: active?.duration ?? body.videoMeta?.duration,
+    notes: active?.notes
+  };
 }
 
 function stringOr(v: unknown, fallback: string): string {

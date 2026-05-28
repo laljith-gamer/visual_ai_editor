@@ -4,6 +4,76 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.6.3] — 2026-05-28
+
+### Changed — Genre-agnostic priming
+
+The pipeline was already universal at the architecture level — SigLIP
+is a general vision-language model, motion / saliency are pure pixel
+math, and "best parts" prompts skip semantic scoring entirely so they
+work regardless of footage type. But the system prompt was peppered
+with sports / gaming examples ("dunks", "goalie saves", "goal
+celebrations"), which primed the LLM to bias toward that aesthetic
+on ambiguous prompts. v1.6.3 widens the priming so cooking demos,
+lectures, weddings, nature footage, lectures, podcasts, dance,
+animation, and meditation videos all get equal-quality plans.
+
+#### Planner system prompt
+
+A new `# Universal scope (genre-agnostic)` section enumerates the
+range of footage types the editor sees in production and explicitly
+forbids assuming a genre from training priors:
+
+> *NEVER assume a genre from your training priors. Use only:*
+> 1. *The user's literal words.*
+> 2. *Source video metadata (filename, duration, dimensions, aspect).*
+> 3. *Per-source notes the user has volunteered.*
+> 4. *Conversation memory.*
+
+Inline examples through the body now span every category: cooking
+("plating the dish"), lectures ("speaker at whiteboard"), weddings
+("bride and groom kiss"), music ("guitar solo"), dance ("dancer
+mid-spin"), nature ("drone shot over a forest canopy"). The EditPlan
+schema's `sampleEverySeconds` comment documents tempo across genres
+("~0.5 for fast action — sports, dance, gameplay; 1–2 for talking-
+head — interview, lecture; 3–5 for slow scenes — nature, meditation,
+ceremony").
+
+A new `# Genre-blind scenario building` section instructs the LLM to
+prefer DESCRIPTIVE scenarios ("a person standing arms raised,
+surrounded by movement") over NAMING ones ("a goal celebration"),
+since SigLIP scores against literal text and descriptive prompts
+generalise better across content types.
+
+#### Default clarify chips
+
+`defaultClarifyQuestion` in `app/api/agent/route.ts` now picks chip
+suggestions based on the active source's duration:
+- Long videos (≥ 5 minutes) lean broad: *Highlights, Key moments,
+  Best parts, Find a specific scene*.
+- Short videos lean narrow but still include a broad fallback:
+  *Funniest moments, Most action, Most emotional, Highlights, Find
+  a specific scene*.
+
+The previous static set ("Funniest moments, Most action, Most
+emotional, Find a specific scene instead") was sports/comedy-leaning
+and felt off for lectures, meditation videos, or product demos. The
+new tiered set always includes a "Highlights" chip that's
+universally appropriate.
+
+`missingFieldsToQuestions` and the trailing-clarify fallback both
+take the request body now so they get the same context-aware chips.
+
+#### What's still universal
+
+- The pipeline itself: SigLIP, motion, saliency. No code path branches
+  on genre.
+- Vague-plan path (`signals.semantic = 0`): SigLIP is skipped entirely
+  for "best parts" / "highlights" / "you decide" — works equally well
+  on every kind of footage because it never tries to identify content.
+- The activity log + memory chips: drives plan refinement on what the
+  user actually does, not on assumed content type.
+
 ## [1.6.2] — 2026-05-28
 
 ### Fixed — Clarify loop on quick-reply answers
