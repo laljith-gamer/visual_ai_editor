@@ -505,3 +505,29 @@
 @media (prefers-reduced-motion: reduce) {
   .row, .dot, .actionRow, .sendBtn { animation: none; transition: none; }
 }
+
+
+
+/* v1.7.5 — "Local" pill on assistant messages produced by the
+   client-side intent shortcut path. Subtle accent — visible but
+   doesn't compete with the message content. */
+.shortcutPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: linear-gradient(180deg, rgba(99, 216, 149, 0.18), rgba(99, 216, 149, 0.06));
+  border: 1px solid rgba(99, 216, 149, 0.35);
+  border-radius: 999px;
+  margin-right: 2px;
+  height: 18px;
+  cursor: help;
+}
+.shortcutPill svg {
+  filter: drop-shadow(0 0 2px rgba(99, 216, 149, 0.6));
+}
