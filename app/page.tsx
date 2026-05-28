@@ -19,6 +19,10 @@ import { runTemporalPass } from "@/lib/pipeline/temporal";
 import { buildHighlights } from "@/lib/pipeline/highlights";
 import { buildMomentHighlight } from "@/lib/pipeline/moment";
 import { buildExtractedHighlight } from "@/lib/pipeline/extract";
+import {
+  executeForSource,
+  mergeAcrossSources
+} from "@/lib/pipeline/executePerSource";
 import { planSignaturePayload } from "@/lib/plan/normalize";
 import {
   getPredictions,
@@ -34,7 +38,8 @@ import type {
   EditPlan,
   FrameScore,
   InferredField,
-  IntentMode
+  IntentMode,
+  VideoLibraryEntry
 } from "@/lib/types";
 
 interface QuotaWarning {
@@ -109,222 +114,179 @@ export default function Home() {
   );
 
   // -----------------------------------------------------------------------
-  // Pipeline execution. Extracted so both handleAgent (refinement auto-run
-  // path) and handleRunPipeline (PlanPreview confirm button) can call it.
-  // Reads the *current* plan from the store, NOT a captured closure.
+  // v1.6.0 — Multi-source pipeline orchestrator.
+  //
+  // 1. Resolve which library sources are eligible for THIS run:
+  //    intersect (selectedSourceIds) ∩ (plan.sources OR all-eligible).
+  // 2. If only one source is eligible, run executeForSource once and
+  //    set its highlights directly. Same UX as v1.5.x.
+  // 3. If multiple sources are eligible, loop sequentially — each call
+  //    runs sample → score → temporal → buildHighlights for its source
+  //    and returns a tagged highlights[] without touching the store.
+  //    We accumulate, merge globally via mergeAcrossSources (time-fused
+  //    + budget-capped), then setHighlights once at the end so the user
+  //    never sees mid-loop flicker.
+  //
+  // The orchestrator owns: status messages, progress bar, top-level
+  // chat replies. The executor owns: caching, sampling, scoring,
+  // selection. This split is intentional — multi-source policy can
+  // evolve here without changing the per-source steps.
   // -----------------------------------------------------------------------
   const runPipeline = useCallback(
     async (mode: IntentMode) => {
-      const activePlan = useEditorStore.getState().plan;
-      if (!activePlan || !videoBlob || !videoHash || !videoMeta) return;
-      const previousPlanForCacheKey = activePlan; // sig is computed against active
+      const state = useEditorStore.getState();
+      const activePlan = state.plan;
+      if (!activePlan) return;
+      if (mode !== "plan" && mode !== "moment") return;
+
+      // Resolve eligible sources.
+      const allSources = state.sources;
+      const selected = new Set(state.selectedSourceIds);
+      const planFilter = activePlan.sources && activePlan.sources.length > 0
+        ? new Set(activePlan.sources)
+        : null;
+      const eligible = allSources.filter(
+        (s) => selected.has(s.id) && (!planFilter || planFilter.has(s.id))
+      );
+
+      if (eligible.length === 0) {
+        pushMessage({
+          role: "assistant",
+          content: allSources.length === 0
+            ? "Upload a video to the library first, then I can pick the best parts."
+            : "No videos selected for AI use \u2014 tick at least one in the library."
+        });
+        setStatus("idle", "No source selected");
+        setProgress(0);
+        setPendingExecution(false);
+        return;
+      }
+
+      const userTier = state.userTier;
+      const t0 = Date.now();
 
       try {
-        const sig = await sha1String(planSignaturePayload(activePlan));
-        const cached = await getPredictions(videoHash, sig);
-        let frameScores: FrameScore[];
+        const perSource: Array<{
+          sourceName: string;
+          sourceId: string;
+          weakOnly: boolean;
+          scoreMax: number;
+          highlights: ReturnType<typeof Array.from> | unknown;
+          count: number;
+        }> = [];
+        const aggregate = [] as Awaited<
+          ReturnType<typeof executeForSource>
+        >[];
 
-        if (cached) {
-          logSession.system(
-            "cache.hit",
-            { signature: sig.slice(0, 12), frames: cached.frames.length },
-            `Cache hit: reused ${cached.frames.length} frame scores`
-          );
-          frameScores = cached.frames;
-          setStatus("scoring", "Reused cached predictions");
-          setProgress(0.5);
-        } else {
-          logSession.system(
-            "cache.miss",
-            { signature: sig.slice(0, 12) },
-            "Cache miss — fresh sample+score pass"
-          );
-          frameScores = await sampleAndScore(activePlan);
-        }
-
-        // v1.5.0: when the plan carries an extractRange, narrow the scored
-        // frames to that range before selection. Cached frames cover the
-        // full video, so this is a post-filter on cache hits and a
-        // pre-filter on cache misses (sampleAndScore reads the range too).
-        if (activePlan.extractRange) {
-          const r = activePlan.extractRange;
-          const start = r.kind === "last" ? Math.max(0, videoMeta.duration - (r.endSeconds - r.startSeconds)) : r.startSeconds;
-          const end = r.kind === "last" ? videoMeta.duration : r.endSeconds;
-          frameScores = frameScores.filter((f) => f.t >= start && f.t < end);
-        }
-
-        if (mode === "moment") {
-          setStatus("temporal", "Finding the exact moment");
-          setProgress(0.65);
-          const t1 = Date.now();
-          // v1.4.0: pass userTier through so moment-mode also gets the
-          // novice force-min fallback. The store value was set from the
-          // last agent response (or defaults to "novice").
-          const momentTier = useEditorStore.getState().userTier;
-          const buildResult = await buildMomentHighlight({
-            videoBlob,
-            frameScores,
+        for (let i = 0; i < eligible.length; i++) {
+          const src = eligible[i];
+          const baseProgress = i / eligible.length;
+          const slot = 1 / eligible.length;
+          const result = await executeForSource({
+            source: src,
             plan: activePlan,
-            videoDuration: videoMeta.duration,
-            userTier: momentTier,
-            videoMeta,
-            onProgress: (done, total) =>
-              setProgress(0.65 + (done / Math.max(total, 1)) * 0.3)
-          });
-          const built = buildResult.highlights;
-          if (built.length === 0) {
-            pushMessage({
-              role: "assistant",
-              content:
-                "I couldn't lock onto that moment. Try describing what you'd actually see on screen \u2014 colours, action, who or what is doing what."
-            });
-            setStatus("ready", "No moment found");
-            setProgress(0);
-            logSession.ai(
-              "moment.localized",
-              { found: false, userTier: momentTier },
-              "Moment not found"
-            );
-            return;
-          }
-          setHighlights(built);
-          if (buildResult.weakOnly) {
-            pushMessage({
-              role: "assistant",
-              content: `Picked the closest match I could find (${(built[0].end - built[0].start).toFixed(1)}s) \u2014 confidence is on the low side. Reword the moment for a tighter pick.`
-            });
-          } else {
-            pushMessage({
-              role: "assistant",
-              content: `Found it. Picked a ${(built[0].end - built[0].start).toFixed(1)}s clip.`
-            });
-          }
-          setStatus("ready", "Ready to render");
-          setProgress(1);
-          logSession.ai(
-            "moment.localized",
-            {
-              found: true,
-              start: built[0].start,
-              end: built[0].end,
-              score: built[0].score,
-              weakOnly: buildResult.weakOnly,
-              userTier: momentTier
-            },
-            `Moment localized: ${built[0].start.toFixed(1)}s \u2192 ${built[0].end.toFixed(1)}s${buildResult.weakOnly ? " (low confidence)" : ""}`,
-            Date.now() - t1
-          );
-          return;
-        }
-
-        // PLAN mode — multi-clip pipeline.
-        setStatus("temporal", "Finding event windows");
-        setProgress(0.62);
-
-        // v1.4.0: tier comes straight from the LLM via the store (no
-        // server- or client-side regex). The detector and the highlights
-        // builder use this to widen / narrow selection adaptively.
-        const userTier = useEditorStore.getState().userTier;
-
-        const detectionResult = detectCandidateWindows(
-          frameScores,
-          activePlan,
-          { userTier, videoMeta }
-        );
-        const candidates = detectionResult.windows;
-        const scoreStats = detectionResult.stats;
-        logSession.ai(
-          "events.detected",
-          {
-            candidateCount: candidates.length,
-            framesScored: frameScores.length,
+            mode,
+            capTier: cap.tier,
             userTier,
-            percentile: detectionResult.percentile,
-            cutoff: round2(detectionResult.cutoff),
-            scoreMax: round2(scoreStats.max),
-            scoreMean: round2(scoreStats.mean)
-          },
-          `${candidates.length} candidate window${candidates.length === 1 ? "" : "s"} from ${frameScores.length} frames (tier=${userTier}, top ${(detectionResult.percentile * 100).toFixed(0)}%)`
-        );
-
-        if (candidates.length === 0) {
-          pushMessage({
-            role: "assistant",
-            content:
-              "I couldn't read frames from the video. Re-upload it and try again."
+            log: logSession,
+            progress: {
+              setStatus: (s, detail) =>
+                setStatus(
+                  s as Parameters<typeof setStatus>[0],
+                  eligible.length > 1
+                    ? `${detail ?? s} (${i + 1}/${eligible.length})`
+                    : detail
+                ),
+              setProgress: (p) =>
+                setProgress(Math.min(1, baseProgress + p * slot))
+            }
           });
-          setStatus("ready", "No candidates");
-          setProgress(0);
-          return;
+          aggregate.push(result);
+          perSource.push({
+            sourceName: src.meta.name,
+            sourceId: src.id,
+            weakOnly: result.weakOnly,
+            scoreMax: result.scoreMax,
+            highlights: undefined,
+            count: result.highlights.length
+          });
         }
 
-        const t2 = Date.now();
-        const verdicts = await runTemporalPass({
-          videoBlob,
-          candidates,
-          plan: activePlan,
-          onProgress: (done, total) =>
-            setProgress(0.65 + (done / Math.max(total, 1)) * 0.25)
-        });
-        for (const v of verdicts) {
-          logSession.ai(
-            "temporal.verdict",
-            { start: v.start, end: v.end, keepScore: v.keepScore, reason: v.reason },
-            `${v.start.toFixed(1)}s\u2013${v.end.toFixed(1)}s keep=${v.keepScore.toFixed(2)} (${v.reason})`
-          );
-        }
+        // Merge + cap to plan budget. mergeAcrossSources also handles
+        // moment-mode ("pick the single winner across sources").
+        const merged = mergeAcrossSources(aggregate, activePlan, mode);
 
-        setStatus("selecting", "Picking the final clips");
-        setProgress(0.92);
-        const buildResult = buildHighlights({
-          candidates,
-          verdicts,
-          plan: activePlan,
-          videoDuration: videoMeta.duration,
-          userTier,
-          scoreStats
-        });
-        const built = buildResult.highlights;
-        setHighlights(built);
-        const totalSel = built.reduce((acc, h) => acc + (h.end - h.start), 0);
-        logSession.ai(
-          "highlights.built",
-          {
-            count: built.length,
-            totalSeconds: round1(totalSel),
-            selectionStrategy: activePlan.selectionStrategy,
-            weakOnly: buildResult.weakOnly,
-            consideredCount: buildResult.consideredCount,
-            userTier
-          },
-          `Built ${built.length} clip${built.length === 1 ? "" : "s"} (${totalSel.toFixed(1)}s total${buildResult.weakOnly ? ", low confidence" : ""})`,
-          Date.now() - t2
-        );
-
-        if (built.length === 0) {
-          // Only happens for advanced tier with no usable matches OR
-          // a pathological zero-frame scoring run. Be honest, but keep
-          // the copy human.
-          pushMessage({
-            role: "assistant",
-            content: `Nothing in this video matched strongly enough (top frame score ${scoreStats.max.toFixed(2)}). Try broader scenarios, or describe a single moment ("find the part where ___").`
-          });
+        if (merged.highlights.length === 0) {
+          const msg =
+            mode === "moment"
+              ? "I couldn't lock onto that moment in any selected video. Try describing what would be on screen \u2014 colours, action, who's doing what."
+              : `Nothing across the selected video${eligible.length === 1 ? "" : "s"} matched strongly enough (top score ${merged.scoreMax.toFixed(2)}). Try broader scenarios, or describe a single moment ("find the part where ___").`;
+          pushMessage({ role: "assistant", content: msg });
           setStatus("ready", "No strong matches");
           setProgress(0);
           return;
         }
 
-        if (buildResult.weakOnly) {
-          pushMessage({
-            role: "assistant",
-            content: `Picked ${built.length} clip${built.length === 1 ? "" : "s"} but match confidence is on the low side (top score ${scoreStats.max.toFixed(2)}). Try broader scenarios for stronger picks.`
-          });
-        } else {
-          pushMessage({
-            role: "assistant",
-            content: `Picked ${built.length} clip${built.length === 1 ? "" : "s"} totalling ${totalSel.toFixed(1)}s. Tap "Render" to assemble the short.`
-          });
+        setHighlights(merged.highlights);
+
+        // Pick the active source to whatever the first kept clip points
+        // at, so the preview pane plays the right footage immediately.
+        const firstSourceId = merged.highlights[0]?.sourceId;
+        if (firstSourceId && firstSourceId !== state.activeSourceId) {
+          useEditorStore.getState().setActiveSource(firstSourceId);
         }
+
+        const total = merged.highlights.reduce(
+          (acc, h) => acc + (h.end - h.start),
+          0
+        );
+
+        // Build a friendly summary that mentions the source breakdown
+        // when the run was multi-source.
+        let summary: string;
+        if (eligible.length === 1) {
+          summary =
+            mode === "moment"
+              ? `Found it. Picked a ${(merged.highlights[0].end - merged.highlights[0].start).toFixed(1)}s clip from "${eligible[0].meta.name}".`
+              : `Picked ${merged.highlights.length} clip${merged.highlights.length === 1 ? "" : "s"} totalling ${total.toFixed(1)}s from "${eligible[0].meta.name}". Tap "Render" to assemble.`;
+        } else {
+          const breakdown = perSource
+            .filter((s) => s.count > 0)
+            .map((s) => `"${s.sourceName}" (${s.count})`)
+            .join(", ");
+          summary =
+            mode === "moment"
+              ? `Found the moment in "${eligible.find((e) => e.id === merged.highlights[0].sourceId)?.meta.name ?? "library"}".`
+              : `Picked ${merged.highlights.length} clip${merged.highlights.length === 1 ? "" : "s"} (${total.toFixed(1)}s) from ${breakdown}. Tap "Render".`;
+        }
+        if (merged.weakOnly) {
+          summary +=
+            ` Heads up \u2014 match confidence is on the low side (top score ${merged.scoreMax.toFixed(2)}).`;
+        }
+        pushMessage({ role: "assistant", content: summary });
+
+        logSession.ai(
+          "highlights.merged",
+          {
+            mode,
+            sourceCount: eligible.length,
+            keptClips: merged.highlights.length,
+            totalSeconds: round1(total),
+            weakOnly: merged.weakOnly,
+            strategy: activePlan.selectionStrategy,
+            perSource: perSource.map((s) => ({
+              sourceId: s.sourceId,
+              count: s.count,
+              weakOnly: s.weakOnly,
+              scoreMax: round1(s.scoreMax)
+            }))
+          },
+          eligible.length === 1
+            ? `Picked ${merged.highlights.length} clip${merged.highlights.length === 1 ? "" : "s"}`
+            : `Merged ${merged.highlights.length} clip${merged.highlights.length === 1 ? "" : "s"} from ${eligible.length} sources`,
+          Date.now() - t0
+        );
+
         setStatus("ready", "Ready to render");
         setProgress(1);
       } catch (err) {
@@ -342,78 +304,8 @@ export default function Home() {
       } finally {
         setPendingExecution(false);
       }
-
-      // -- inner helper to keep both cache-hit/miss branches DRY -----
-      async function sampleAndScore(p: EditPlan): Promise<FrameScore[]> {
-        if (!videoBlob || !videoHash) {
-          throw new Error("video blob disappeared");
-        }
-        setStatus("sampling", "Extracting frames");
-        const tA = Date.now();
-        // v1.5.0: pass the plan's extractRange so we don't decode frames
-        // outside the user-asked range. Saves ~80% of work on a 10-min
-        // source when the prompt was "first 1 min".
-        const range = p.extractRange
-          ? p.extractRange.kind === "last"
-            ? {
-                startSeconds: Math.max(
-                  0,
-                  (videoMeta?.duration ?? 0) -
-                    (p.extractRange.endSeconds - p.extractRange.startSeconds)
-                ),
-                endSeconds: videoMeta?.duration ?? 0
-              }
-            : {
-                startSeconds: p.extractRange.startSeconds,
-                endSeconds: p.extractRange.endSeconds
-              }
-          : undefined;
-        const frames = await sampleFrames(videoBlob, {
-          every: p.sampleEverySeconds,
-          width: p.inferenceWidth,
-          range,
-          onProgress: (pp) => setProgress(0.05 + pp * 0.2)
-        });
-        logSession.ai(
-          "frames.sampled",
-          { count: frames.length, everySeconds: p.sampleEverySeconds, widthPx: p.inferenceWidth },
-          `Sampled ${frames.length} frames every ${p.sampleEverySeconds}s @${p.inferenceWidth}px`,
-          Date.now() - tA
-        );
-
-        setStatus("scoring", `Scoring ${frames.length} frames (${cap.tier})`);
-        const tier = cap.tier === "low" ? "cloud" : "siglip-local";
-        const tB = Date.now();
-        const scored = await scoreFrames({
-          frames,
-          plan: p,
-          tier,
-          onProgress: (done, total) =>
-            setProgress(0.25 + (done / total) * 0.35)
-        });
-        logSession.ai(
-          "frames.scored",
-          { count: scored.length, tier, cacheHit: false },
-          `Scored ${scored.length} frames via ${tier}`,
-          Date.now() - tB
-        );
-        await savePredictions({
-          videoHash,
-          scenarioSignature: await sha1String(planSignaturePayload(p)),
-          sampleEverySeconds: p.sampleEverySeconds,
-          frames: scored,
-          createdAt: Date.now()
-        });
-        await trimCache();
-        return scored;
-      }
-      // Keep typescript happy about the captured closures.
-      void previousPlanForCacheKey;
     },
     [
-      videoBlob,
-      videoMeta,
-      videoHash,
       cap.tier,
       pushMessage,
       setStatus,
@@ -437,6 +329,41 @@ export default function Home() {
 
         const history = [...useEditorStore.getState().messages];
         const recentActivity = summarizeRecentActivity();
+        // v1.6.0 — Build the planner-visible library snapshot. Names,
+        // dimensions, aspect, selected flag, plus any per-source notes
+        // accumulated from acknowledge-mode chips. The LLM uses this to
+        // emit "sources": [...] when the user names specific videos.
+        const storeNow = useEditorStore.getState();
+        const videoLibrary: VideoLibraryEntry[] | undefined =
+          storeNow.sources.length > 0
+            ? storeNow.sources.map((s) => {
+                // Per-source notes: pluck any inferred chip whose
+                // "field" mentions this source's name. We don't yet
+                // attach inferred chips to a sourceId explicitly, so
+                // we surface the global chip list per source for now —
+                // the planner is told to treat the global notes as
+                // applying across the library.
+                const notes = storeNow.inferred
+                  .filter(
+                    (c) =>
+                      c.field.toLowerCase().includes("avoid") ||
+                      c.field.toLowerCase().includes("style") ||
+                      c.field.toLowerCase().includes("note")
+                  )
+                  .map((c) => `${c.field}: ${formatChipValue(c.value)}`)
+                  .slice(0, 4);
+                return {
+                  id: s.id,
+                  name: s.meta.name,
+                  duration: s.meta.duration,
+                  width: s.meta.width,
+                  height: s.meta.height,
+                  aspect: s.meta.aspect,
+                  selected: storeNow.selectedSourceIds.includes(s.id),
+                  notes: notes.length > 0 ? notes : undefined
+                };
+              })
+            : undefined;
         const reqBody: AgentRequest = {
           messages: history,
           currentPlan: previousPlan,
@@ -447,6 +374,7 @@ export default function Home() {
                 height: videoMeta.height
               }
             : undefined,
+          videoLibrary,
           memory,
           recentActivity: recentActivity || undefined
         };
@@ -787,8 +715,15 @@ export default function Home() {
     );
     const t0 = Date.now();
     try {
+      // v1.6.0 — pass the library + multi-source highlights. The hook
+      // resolves which source blobs are actually needed (only those
+      // referenced by highlights' `sourceId`), encodes them as `in0.mp4`,
+      // `in1.mp4`, …, and remaps each clip's inputIndex so the filter
+      // graph stitches across uploaded sources cleanly.
+      const sources = useEditorStore.getState().sources;
       const blob = await ffmpeg.render({
-        videoBlob,
+        sources: sources.length > 0 ? sources : undefined,
+        videoBlob: sources.length === 0 ? videoBlob ?? undefined : undefined,
         highlights,
         format: plan.format,
         transition: plan.transition,
@@ -882,4 +817,15 @@ function round1(n: number): number {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+
+/** v1.6.0 — Render a chip value (string | number | bool | string[]) into a
+ *  short single-line phrase the planner can read inside the library
+ *  notes block. Caps at 80 chars to keep the prompt small. */
+function formatChipValue(
+  v: string | number | boolean | string[]
+): string {
+  if (Array.isArray(v)) return v.slice(0, 4).join(", ").slice(0, 80);
+  return String(v).slice(0, 80);
 }

@@ -92,6 +92,7 @@ export async function POST(req: NextRequest) {
     messages,
     currentPlan: body.currentPlan ?? null,
     videoMeta: body.videoMeta,
+    videoLibrary: body.videoLibrary,
     memory: body.memory,
     recentActivity:
       typeof body.recentActivity === "string" ? body.recentActivity : undefined

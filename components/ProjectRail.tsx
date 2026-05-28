@@ -1,19 +1,32 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { Upload, Trash2, History as HistoryIcon } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
+import {
+  Upload,
+  Plus,
+  Trash2,
+  History as HistoryIcon,
+  Film
+} from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { sha256Blob } from "@/lib/util/hash";
 import { probeVideo } from "@/lib/pipeline/sample";
 import { formatTime } from "@/lib/util/time";
 import { logUser } from "@/lib/log/recorders";
+import { LIBRARY_LIMITS, SOURCE_COLORS } from "@/lib/config";
 import styles from "./ProjectRail.module.css";
 
 export function ProjectRail() {
   const fileRef = useRef<HTMLInputElement>(null);
-  const videoMeta = useEditorStore((s) => s.videoMeta);
-  const setVideo = useEditorStore((s) => s.setVideo);
-  const clearVideo = useEditorStore((s) => s.clearVideo);
+  const sources = useEditorStore((s) => s.sources);
+  const activeSourceId = useEditorStore((s) => s.activeSourceId);
+  const selectedSourceIds = useEditorStore((s) => s.selectedSourceIds);
+  const addSource = useEditorStore((s) => s.addSource);
+  const removeSource = useEditorStore((s) => s.removeSource);
+  const setActiveSource = useEditorStore((s) => s.setActiveSource);
+  const toggleSourceSelection = useEditorStore((s) => s.toggleSourceSelection);
+  const selectAllSources = useEditorStore((s) => s.selectAllSources);
+  const selectActiveOnlySource = useEditorStore((s) => s.selectActiveOnlySource);
   const status = useEditorStore((s) => s.status);
   const progress = useEditorStore((s) => s.progress);
   const statusDetail = useEditorStore((s) => s.statusDetail);
@@ -28,85 +41,230 @@ export function ProjectRail() {
     void refreshHistory();
   }, [refreshHistory]);
 
-  async function handleFile(file: File) {
-    try {
-      const probe = await probeVideo(file);
-      const hash = await sha256Blob(file);
-      setVideo(file, {
-        name: file.name,
-        size: file.size,
-        duration: probe.duration,
-        width: probe.width,
-        height: probe.height
-      }, hash);
-      logUser({
-        sessionId,
-        kind: "video.uploaded",
-        payload: {
-          name: file.name,
-          sizeBytes: file.size,
-          durationSeconds: Math.round(probe.duration),
-          width: probe.width,
-          height: probe.height
-        },
-        summary: `Uploaded "${file.name}" (${Math.round(probe.duration)}s, ${probe.width}×${probe.height})`
-      });
-    } catch (err) {
-      console.error("Failed to load video", err);
-      alert(`Couldn't read this video: ${(err as Error).message}`);
+  const totalBytes = useMemo(
+    () => sources.reduce((acc, s) => acc + s.meta.size, 0),
+    [sources]
+  );
+  const atCountCap = sources.length >= LIBRARY_LIMITS.maxCount;
+  const atByteCap = totalBytes >= LIBRARY_LIMITS.maxTotalBytes;
+
+  async function handleFiles(fileList: FileList) {
+    const files = Array.from(fileList);
+    for (const file of files) {
+      // Per-source size guard. Friendly error rather than "Failed to fetch".
+      if (file.size > LIBRARY_LIMITS.maxSingleBytes) {
+        alert(
+          `"${file.name}" is ${(file.size / 1024 / 1024).toFixed(0)} MB \u2014 ` +
+            `larger than the per-file limit of ${Math.round(
+              LIBRARY_LIMITS.maxSingleBytes / 1024 / 1024
+            )} MB. Try a shorter clip or a lower-resolution export.`
+        );
+        continue;
+      }
+      try {
+        const probe = await probeVideo(file);
+        const hash = await sha256Blob(file);
+        const added = addSource(
+          file,
+          {
+            name: file.name,
+            size: file.size,
+            duration: probe.duration,
+            width: probe.width,
+            height: probe.height
+          },
+          hash
+        );
+        if (!added) {
+          alert(
+            "Library is full \u2014 remove a video before adding another, " +
+              "or open a new session."
+          );
+          break;
+        }
+        logUser({
+          sessionId,
+          kind: "video.uploaded",
+          payload: {
+            sourceId: added.id,
+            name: file.name,
+            sizeBytes: file.size,
+            durationSeconds: Math.round(probe.duration),
+            width: probe.width,
+            height: probe.height
+          },
+          summary: `Added "${file.name}" (${Math.round(probe.duration)}s, ${probe.width}\u00d7${probe.height})`
+        });
+      } catch (err) {
+        console.error("Failed to load video", err);
+        alert(`Couldn't read "${file.name}": ${(err as Error).message}`);
+      }
     }
   }
 
-  function handleClearVideo() {
-    if (videoMeta) {
-      logUser({
-        sessionId,
-        kind: "video.removed",
-        payload: { name: videoMeta.name },
-        summary: `Removed "${videoMeta.name}"`
-      });
-    }
-    clearVideo();
+  function handleRemoveSource(id: string, name: string) {
+    logUser({
+      sessionId,
+      kind: "video.removed",
+      payload: { sourceId: id, name },
+      summary: `Removed "${name}" from library`
+    });
+    removeSource(id);
   }
 
   return (
     <aside className={`rail ${styles.rail}`}>
+      {/* ─── Library card ──────────────────────────────────────────── */}
       <div className="card">
-        <div className="card-header">Source</div>
+        <div className="card-header">
+          <div className={styles.libraryHeader}>
+            <Film size={14} />
+            <span>Library</span>
+            <span className="muted mono" style={{ fontSize: 11 }}>
+              {sources.length}/{LIBRARY_LIMITS.maxCount}
+            </span>
+            {sources.length > 1 && (
+              <div className={styles.libraryActions}>
+                <button
+                  className={styles.libraryActionBtn}
+                  onClick={() => selectAllSources()}
+                  title="Use every video in the library for the next AI run"
+                >
+                  All
+                </button>
+                <button
+                  className={styles.libraryActionBtn}
+                  onClick={() => selectActiveOnlySource()}
+                  title="Only use the currently-active video for the next AI run"
+                >
+                  Active only
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
         <div className="card-body">
-          {videoMeta ? (
-            <div className={styles.fileSummary}>
-              <p className={styles.fileName}>{videoMeta.name}</p>
-              <p className="faint">
-                {formatTime(videoMeta.duration)} · {videoMeta.width}×{videoMeta.height} ·{" "}
-                {(videoMeta.size / 1024 / 1024).toFixed(1)} MB
-              </p>
-              <button className="btn danger" onClick={handleClearVideo}>
-                <Trash2 size={14} /> Remove
-              </button>
-            </div>
-          ) : (
+          {sources.length === 0 ? (
             <button
               className={`btn primary ${styles.uploadBtn}`}
               onClick={() => fileRef.current?.click()}
             >
-              <Upload size={14} /> Upload video
+              <Upload size={14} /> Upload videos
             </button>
+          ) : (
+            <>
+              <ul className={styles.libraryList}>
+                {sources.map((s, i) => {
+                  const color = SOURCE_COLORS[i % SOURCE_COLORS.length];
+                  const isActive = activeSourceId === s.id;
+                  const isSelected = selectedSourceIds.includes(s.id);
+                  return (
+                    <li
+                      key={s.id}
+                      className={`${styles.libraryItem} ${isActive ? styles.active : ""}`}
+                    >
+                      <span
+                        className={styles.colorDot}
+                        style={{ background: color }}
+                        aria-hidden
+                      />
+                      <button
+                        className={styles.libraryItemBody}
+                        onClick={() => setActiveSource(s.id)}
+                        title={
+                          isActive
+                            ? "Active in preview"
+                            : "Click to make this the active source"
+                        }
+                      >
+                        <span className={styles.libraryItemName}>
+                          {s.meta.name}
+                        </span>
+                        <span className={styles.libraryItemMeta}>
+                          <span className="mono">
+                            {formatTime(s.meta.duration)}
+                          </span>
+                          <span>
+                            {`${s.meta.width}\u00d7${s.meta.height}`}
+                          </span>
+                          {s.meta.aspect && (
+                            <span className="badge">{s.meta.aspect}</span>
+                          )}
+                          <span>
+                            {(s.meta.size / 1024 / 1024).toFixed(1)} MB
+                          </span>
+                        </span>
+                      </button>
+                      <div className={styles.libraryItemActions}>
+                        <input
+                          type="checkbox"
+                          className={styles.libraryCheckbox}
+                          checked={isSelected}
+                          onChange={() => toggleSourceSelection(s.id)}
+                          title={
+                            isSelected
+                              ? "Eligible for AI \u2014 click to exclude"
+                              : "Excluded from AI \u2014 click to include"
+                          }
+                          aria-label={`Include ${s.meta.name} in AI runs`}
+                        />
+                        <button
+                          className={styles.removeIconBtn}
+                          onClick={() => handleRemoveSource(s.id, s.meta.name)}
+                          aria-label={`Remove ${s.meta.name}`}
+                          title="Remove from library"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              <button
+                className={styles.libraryAddBtn}
+                onClick={() => fileRef.current?.click()}
+                disabled={atCountCap || atByteCap}
+                title={
+                  atCountCap
+                    ? `Library cap is ${LIBRARY_LIMITS.maxCount} videos`
+                    : atByteCap
+                      ? "Library size cap reached \u2014 remove one to add more"
+                      : "Upload more videos"
+                }
+              >
+                <Plus size={13} />
+                {atCountCap || atByteCap
+                  ? "Library full"
+                  : "Add another video"}
+              </button>
+
+              <div className={styles.libraryFooter}>
+                <span>
+                  {selectedSourceIds.length} of {sources.length} selected for AI
+                </span>
+                <span className="mono">
+                  {(totalBytes / 1024 / 1024).toFixed(0)} MB
+                </span>
+              </div>
+            </>
           )}
           <input
             ref={fileRef}
             type="file"
             accept="video/*"
+            multiple
             hidden
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void handleFile(f);
+              if (e.target.files) void handleFiles(e.target.files);
               e.currentTarget.value = "";
             }}
           />
         </div>
       </div>
 
+      {/* ─── Progress ──────────────────────────────────────────────── */}
       <div className="card">
         <div className="card-header">Progress</div>
         <div className="card-body">
@@ -124,6 +282,7 @@ export function ProjectRail() {
         </div>
       </div>
 
+      {/* ─── Memory ────────────────────────────────────────────────── */}
       <div className="card">
         <div className="card-header">Memory</div>
         <div className="card-body">
@@ -146,6 +305,7 @@ export function ProjectRail() {
         </div>
       </div>
 
+      {/* ─── History ───────────────────────────────────────────────── */}
       <div className="card">
         <div className="card-header">
           <HistoryIcon size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
@@ -163,7 +323,12 @@ export function ProjectRail() {
                     onClick={() => void restoreSession(h.id)}
                   >
                     <span className={styles.historyTitle}>{h.title}</span>
-                    <span className="faint">{new Date(h.updatedAt).toLocaleString()}</span>
+                    <span className="faint">
+                      {new Date(h.updatedAt).toLocaleString()}
+                      {h.sources && h.sources.length > 1
+                        ? ` \u00b7 ${h.sources.length} videos`
+                        : ""}
+                    </span>
                   </button>
                   <button
                     className="btn icon danger"

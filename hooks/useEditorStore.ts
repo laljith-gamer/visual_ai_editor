@@ -12,10 +12,13 @@ import type {
   PlanPatch,
   Session,
   SessionMemory,
-  UserTier
+  UserTier,
+  VideoSource,
+  VideoSourceMeta,
+  VideoSourceSummary
 } from "@/lib/types";
 import { newId } from "@/lib/util/id";
-import { GREETINGS } from "@/lib/config";
+import { GREETINGS, LIBRARY_LIMITS } from "@/lib/config";
 import { mergePlan } from "@/lib/plan/merge";
 import {
   deleteSession,
@@ -31,7 +34,20 @@ interface EditorState {
   createdAt: number;
   updatedAt: number;
 
-  // Source video (held only in memory; re-pickable from the rail)
+  // ----- v1.6.0 video library ----------------------------------------
+  /** Every uploaded source held in memory for this session. */
+  sources: VideoSource[];
+  /** Which source plays in the preview pane and is the target of
+   *  manual edits. */
+  activeSourceId: string | null;
+  /** Subset of source ids the next AI run is allowed to pull from. */
+  selectedSourceIds: string[];
+
+  // ----- mirror fields kept in sync with the active source ----------
+  // The pipeline + many components still read these directly. v1.6.0
+  // keeps them as straight fields (not getters) so zustand's selector
+  // change-detection works without any wrapping. setActiveSource +
+  // addSource + removeSource keep them coherent.
   videoBlob: Blob | null;
   videoUrl: string | null;
   videoMeta?: Session["videoMeta"];
@@ -75,11 +91,34 @@ interface EditorState {
   renderedBlob: Blob | null;
   renderedUrl: string | null;
 
-  // ----- actions -----
+  // ----- actions: session lifecycle ---------------------------------
   newSession: () => void;
+
+  // ----- actions: video library (v1.6.0) ----------------------------
+  /** Add a source to the library. Returns the new VideoSource (or null
+   *  if the library is at the cap or this hash is already present). */
+  addSource: (
+    blob: Blob,
+    meta: VideoSourceMeta,
+    hash: string
+  ) => VideoSource | null;
+  removeSource: (id: string) => void;
+  setActiveSource: (id: string) => void;
+  toggleSourceSelection: (id: string) => void;
+  setSourceSelection: (ids: string[]) => void;
+  selectAllSources: () => void;
+  selectActiveOnlySource: () => void;
+  /** Total bytes across the library. Used by the rail to surface a
+   *  "library is getting full" hint. */
+  libraryBytes: () => number;
+
+  /** Single-video back-compat shim. Equivalent to addSource + setActive.
+   *  Older callers (probeVideo path) still call this. */
   setVideo: (blob: Blob, meta: Session["videoMeta"], hash: string) => void;
+  /** Wipe the entire library and dependent state (plan, highlights). */
   clearVideo: () => void;
 
+  // ----- actions: plan / highlights ---------------------------------
   /** Replace the entire plan (fresh-plan path). */
   setPlan: (plan: EditPlan) => void;
   /** Apply a partial patch to the current plan. Returns the new plan. */
@@ -90,6 +129,21 @@ interface EditorState {
   removeHighlight: (id: string) => void;
   selectClip: (id: string | null) => void;
 
+  // ----- actions: manual edits (v1.6.0) -----------------------------
+  /** Drop or shorten clips in [0, seconds) for the active source. */
+  trimFirstSeconds: (seconds: number) => { changed: number };
+  /** Drop or shorten clips in [duration−seconds, duration) for active. */
+  trimLastSeconds: (seconds: number) => { changed: number };
+  /** Replace active-source clips with one clip [start, end]. */
+  keepRange: (start: number, end: number) => { changed: number };
+  /** Drop or split clips overlapping [start, end] on the active source. */
+  dropRange: (start: number, end: number) => { changed: number };
+  /** Split the clip under `time` into two halves. Active source. */
+  splitAtTime: (time: number) => { changed: number };
+  /** Wipe highlights from the active source only (other sources kept). */
+  resetActiveSourceClips: () => { changed: number };
+
+  // ----- actions: chat / status / memory ---------------------------
   pushMessage: (m: Omit<ChatMessage, "id" | "timestamp">) => ChatMessage;
 
   setStatus: (s: JobStatus, detail?: string) => void;
@@ -122,13 +176,16 @@ function freshState() {
     title: "Untitled session",
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    videoBlob: null,
-    videoUrl: null,
-    videoMeta: undefined,
-    videoHash: undefined,
-    plan: null,
-    highlights: [],
-    selectedClipId: null,
+    sources: [] as VideoSource[],
+    activeSourceId: null as string | null,
+    selectedSourceIds: [] as string[],
+    videoBlob: null as Blob | null,
+    videoUrl: null as string | null,
+    videoMeta: undefined as Session["videoMeta"] | undefined,
+    videoHash: undefined as string | undefined,
+    plan: null as EditPlan | null,
+    highlights: [] as Highlight[],
+    selectedClipId: null as string | null,
     mode: null as IntentMode | null,
     inferred: [] as InferredField[],
     pendingClarify: null as EditorState["pendingClarify"],
@@ -144,10 +201,10 @@ function freshState() {
     ],
     status: "idle" as JobStatus,
     progress: 0,
-    statusDetail: undefined,
+    statusDetail: undefined as string | undefined,
     memory: emptyMemory,
-    renderedBlob: null,
-    renderedUrl: null
+    renderedBlob: null as Blob | null,
+    renderedUrl: null as string | null
   };
 }
 
@@ -163,36 +220,174 @@ function memoryFromPlan(prev: SessionMemory, plan: EditPlan): SessionMemory {
   };
 }
 
+/** Compute a 16:9-style aspect string for display. */
+function aspectLabel(width: number, height: number): string | undefined {
+  if (!width || !height) return undefined;
+  const r = width / height;
+  if (Math.abs(r - 16 / 9) < 0.05) return "16:9";
+  if (Math.abs(r - 9 / 16) < 0.05) return "9:16";
+  if (Math.abs(r - 1) < 0.05) return "1:1";
+  if (Math.abs(r - 4 / 3) < 0.05) return "4:3";
+  if (Math.abs(r - 21 / 9) < 0.05) return "21:9";
+  return r.toFixed(2);
+}
+
+/** Round a clip endpoint to 2 dp for stability across reads + render. */
+function r2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 export const useEditorStore = create<EditorState>()((set, get) => ({
   ...freshState(),
   history: [],
 
   newSession: () => {
     const cur = get();
-    if (cur.videoUrl) URL.revokeObjectURL(cur.videoUrl);
+    for (const s of cur.sources) URL.revokeObjectURL(s.url);
     if (cur.renderedUrl) URL.revokeObjectURL(cur.renderedUrl);
     set({ ...freshState() });
   },
 
-  setVideo: (blob, meta, hash) => {
+  // ----- video library ---------------------------------------------
+  addSource: (blob, meta, hash) => {
     const cur = get();
-    if (cur.videoUrl) URL.revokeObjectURL(cur.videoUrl);
+    // Cap by count and total bytes to keep tabs healthy on lower-end
+    // hardware. Both limits are configurable in lib/config.ts.
+    if (cur.sources.length >= LIBRARY_LIMITS.maxCount) return null;
+    const totalBytes = cur.sources.reduce((acc, s) => acc + s.meta.size, 0);
+    if (totalBytes + meta.size > LIBRARY_LIMITS.maxTotalBytes) return null;
+    // De-dupe by hash so re-uploading the same file is a no-op.
+    const existing = cur.sources.find((s) => s.hash === hash);
+    if (existing) {
+      set({ activeSourceId: existing.id });
+      syncMirrorFields(set, existing);
+      return existing;
+    }
+    const id = newId("src");
     const url = URL.createObjectURL(blob);
+    const enrichedMeta: VideoSourceMeta = {
+      ...meta,
+      aspect: meta.aspect ?? aspectLabel(meta.width, meta.height)
+    };
+    const source: VideoSource = {
+      id,
+      hash,
+      blob,
+      url,
+      meta: enrichedMeta,
+      addedAt: Date.now()
+    };
+    const sources = [...cur.sources, source];
+    const selectedSourceIds = Array.from(
+      new Set([...cur.selectedSourceIds, id])
+    );
     set({
-      videoBlob: blob,
-      videoUrl: url,
-      videoMeta: meta,
-      videoHash: hash,
-      title: meta?.name ?? cur.title,
+      sources,
+      activeSourceId: id,
+      selectedSourceIds,
+      title: cur.sources.length === 0 ? meta.name : cur.title,
+      updatedAt: Date.now()
+    });
+    syncMirrorFields(set, source);
+    return source;
+  },
+
+  removeSource: (id) => {
+    const cur = get();
+    const target = cur.sources.find((s) => s.id === id);
+    if (!target) return;
+    URL.revokeObjectURL(target.url);
+    const sources = cur.sources.filter((s) => s.id !== id);
+    const selectedSourceIds = cur.selectedSourceIds.filter((x) => x !== id);
+    // Drop highlights that came from this source so we never render
+    // against a missing input.
+    const highlights = cur.highlights.filter((h) => h.sourceId !== id);
+    let activeSourceId = cur.activeSourceId;
+    if (activeSourceId === id) {
+      activeSourceId = sources[0]?.id ?? null;
+    }
+    set({
+      sources,
+      selectedSourceIds,
+      activeSourceId,
+      highlights,
+      selectedClipId:
+        cur.selectedClipId &&
+        highlights.some((h) => h.id === cur.selectedClipId)
+          ? cur.selectedClipId
+          : highlights[0]?.id ?? null,
+      updatedAt: Date.now()
+    });
+    const newActive = sources.find((s) => s.id === activeSourceId) ?? null;
+    syncMirrorFields(set, newActive);
+  },
+
+  setActiveSource: (id) => {
+    const cur = get();
+    const target = cur.sources.find((s) => s.id === id);
+    if (!target) return;
+    set({ activeSourceId: id, updatedAt: Date.now() });
+    syncMirrorFields(set, target);
+  },
+
+  toggleSourceSelection: (id) => {
+    const cur = get();
+    if (!cur.sources.some((s) => s.id === id)) return;
+    const has = cur.selectedSourceIds.includes(id);
+    const next = has
+      ? cur.selectedSourceIds.filter((x) => x !== id)
+      : [...cur.selectedSourceIds, id];
+    // We always keep at least one selected source if any exist — having
+    // nothing selected makes the planner UI confusing.
+    if (next.length === 0 && cur.sources.length > 0) {
+      next.push(cur.activeSourceId ?? cur.sources[0].id);
+    }
+    set({ selectedSourceIds: next, updatedAt: Date.now() });
+  },
+
+  setSourceSelection: (ids) => {
+    const cur = get();
+    const valid = new Set(cur.sources.map((s) => s.id));
+    const filtered = ids.filter((x) => valid.has(x));
+    set({
+      selectedSourceIds:
+        filtered.length === 0 && cur.sources.length > 0
+          ? [cur.activeSourceId ?? cur.sources[0].id]
+          : filtered,
       updatedAt: Date.now()
     });
   },
 
+  selectAllSources: () =>
+    set((s) => ({
+      selectedSourceIds: s.sources.map((x) => x.id),
+      updatedAt: Date.now()
+    })),
+
+  selectActiveOnlySource: () =>
+    set((s) => ({
+      selectedSourceIds: s.activeSourceId ? [s.activeSourceId] : [],
+      updatedAt: Date.now()
+    })),
+
+  libraryBytes: () =>
+    get().sources.reduce((acc, s) => acc + s.meta.size, 0),
+
+  // Single-video back-compat — used by the original ProjectRail upload
+  // path. Adds a source if absent, sets it active.
+  setVideo: (blob, meta, hash) => {
+    if (!meta) return;
+    get().addSource(blob, meta, hash);
+  },
+
   clearVideo: () => {
     const cur = get();
-    if (cur.videoUrl) URL.revokeObjectURL(cur.videoUrl);
+    for (const s of cur.sources) URL.revokeObjectURL(s.url);
     if (cur.renderedUrl) URL.revokeObjectURL(cur.renderedUrl);
     set({
+      sources: [],
+      activeSourceId: null,
+      selectedSourceIds: [],
       videoBlob: null,
       videoUrl: null,
       videoMeta: undefined,
@@ -210,6 +405,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     });
   },
 
+  // ----- plan / highlights -----------------------------------------
   setPlan: (plan) =>
     set((s) => ({
       plan,
@@ -253,6 +449,201 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
   selectClip: (id) => set({ selectedClipId: id }),
 
+  // ----- manual edits ----------------------------------------------
+  // Each primitive operates on the ACTIVE source only. The user can
+  // switch the active source and tinker each one independently, which
+  // keeps the model consistent with the preview pane.
+  trimFirstSeconds: (seconds) => {
+    const s = get();
+    const sid = s.activeSourceId;
+    if (!sid || seconds <= 0) return { changed: 0 };
+    let changed = 0;
+    const out: Highlight[] = [];
+    for (const h of s.highlights) {
+      if (h.sourceId && h.sourceId !== sid) {
+        out.push(h);
+        continue;
+      }
+      if (h.end <= seconds) {
+        // entirely inside the trim — drop.
+        changed++;
+        continue;
+      }
+      if (h.start < seconds) {
+        out.push({ ...h, start: r2(seconds) });
+        changed++;
+        continue;
+      }
+      out.push(h);
+    }
+    set({ highlights: out, updatedAt: Date.now() });
+    return { changed };
+  },
+
+  trimLastSeconds: (seconds) => {
+    const s = get();
+    const sid = s.activeSourceId;
+    if (!sid || seconds <= 0) return { changed: 0 };
+    const dur =
+      s.sources.find((x) => x.id === sid)?.meta.duration ??
+      s.videoMeta?.duration ??
+      0;
+    if (dur <= 0) return { changed: 0 };
+    const cutoff = dur - seconds;
+    let changed = 0;
+    const out: Highlight[] = [];
+    for (const h of s.highlights) {
+      if (h.sourceId && h.sourceId !== sid) {
+        out.push(h);
+        continue;
+      }
+      if (h.start >= cutoff) {
+        changed++;
+        continue;
+      }
+      if (h.end > cutoff) {
+        out.push({ ...h, end: r2(cutoff) });
+        changed++;
+        continue;
+      }
+      out.push(h);
+    }
+    set({ highlights: out, updatedAt: Date.now() });
+    return { changed };
+  },
+
+  keepRange: (start, end) => {
+    const s = get();
+    const sid = s.activeSourceId;
+    if (!sid || end <= start) return { changed: 0 };
+    const dur =
+      s.sources.find((x) => x.id === sid)?.meta.duration ??
+      s.videoMeta?.duration ??
+      0;
+    const a = Math.max(0, r2(start));
+    const b = Math.min(dur || end, r2(end));
+    if (b <= a) return { changed: 0 };
+    const otherSources = s.highlights.filter(
+      (h) => h.sourceId && h.sourceId !== sid
+    );
+    const removed = s.highlights.length - otherSources.length;
+    const newClip: Highlight = {
+      id: newId("clip"),
+      start: a,
+      end: b,
+      score: 1,
+      reason: `Kept ${a.toFixed(1)}s \u2013 ${b.toFixed(1)}s`,
+      transition: "none",
+      confidence: "high",
+      sourceId: sid
+    };
+    const next = [...otherSources, newClip].sort((x, y) => x.start - y.start);
+    set({
+      highlights: next,
+      selectedClipId: newClip.id,
+      updatedAt: Date.now()
+    });
+    return { changed: removed + 1 };
+  },
+
+  dropRange: (start, end) => {
+    const s = get();
+    const sid = s.activeSourceId;
+    if (!sid || end <= start) return { changed: 0 };
+    const a = Math.max(0, r2(start));
+    const b = r2(end);
+    if (b <= a) return { changed: 0 };
+    let changed = 0;
+    const out: Highlight[] = [];
+    for (const h of s.highlights) {
+      if (h.sourceId && h.sourceId !== sid) {
+        out.push(h);
+        continue;
+      }
+      // No overlap — keep.
+      if (h.end <= a || h.start >= b) {
+        out.push(h);
+        continue;
+      }
+      // Fully inside drop — remove.
+      if (h.start >= a && h.end <= b) {
+        changed++;
+        continue;
+      }
+      // Drop hits the left edge.
+      if (h.start < a && h.end <= b) {
+        out.push({ ...h, end: a });
+        changed++;
+        continue;
+      }
+      // Drop hits the right edge.
+      if (h.start >= a && h.end > b) {
+        out.push({ ...h, start: b });
+        changed++;
+        continue;
+      }
+      // Drop is in the middle — split into two clips.
+      out.push({ ...h, end: a });
+      out.push({
+        ...h,
+        id: newId("clip"),
+        start: b
+      });
+      changed++;
+    }
+    // Filter out any clips that became too short after the split.
+    const filtered = out.filter((h) => h.end - h.start >= 0.2);
+    set({
+      highlights: filtered.sort((x, y) => x.start - y.start),
+      updatedAt: Date.now()
+    });
+    return { changed };
+  },
+
+  splitAtTime: (time) => {
+    const s = get();
+    const sid = s.activeSourceId;
+    if (!sid) return { changed: 0 };
+    const t = r2(time);
+    let changed = 0;
+    const out: Highlight[] = [];
+    for (const h of s.highlights) {
+      if (h.sourceId && h.sourceId !== sid) {
+        out.push(h);
+        continue;
+      }
+      if (t > h.start + 0.2 && t < h.end - 0.2) {
+        out.push({ ...h, end: t });
+        out.push({ ...h, id: newId("clip"), start: t });
+        changed++;
+      } else {
+        out.push(h);
+      }
+    }
+    set({
+      highlights: out.sort((x, y) => x.start - y.start),
+      updatedAt: Date.now()
+    });
+    return { changed };
+  },
+
+  resetActiveSourceClips: () => {
+    const s = get();
+    const sid = s.activeSourceId;
+    if (!sid) return { changed: 0 };
+    const before = s.highlights.length;
+    const next = s.highlights.filter(
+      (h) => h.sourceId && h.sourceId !== sid
+    );
+    set({
+      highlights: next,
+      selectedClipId: next[0]?.id ?? null,
+      updatedAt: Date.now()
+    });
+    return { changed: before - next.length };
+  },
+
+  // ----- chat / status ---------------------------------------------
   pushMessage: (m) => {
     const message: ChatMessage = {
       id: newId("m"),
@@ -294,13 +685,16 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     const s = await loadSession(id);
     if (!s) return;
     const cur = get();
-    if (cur.videoUrl) URL.revokeObjectURL(cur.videoUrl);
+    for (const x of cur.sources) URL.revokeObjectURL(x.url);
     if (cur.renderedUrl) URL.revokeObjectURL(cur.renderedUrl);
     set({
       sessionId: s.id,
       title: s.title,
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
+      sources: [],
+      activeSourceId: null,
+      selectedSourceIds: [],
       videoBlob: null,
       videoUrl: null,
       videoMeta: s.videoMeta,
@@ -328,6 +722,12 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
   persist: async () => {
     const s = get();
+    const sourcesSummary: VideoSourceSummary[] = s.sources.map((x) => ({
+      id: x.id,
+      hash: x.hash,
+      meta: x.meta,
+      addedAt: x.addedAt
+    }));
     await saveSession({
       id: s.sessionId,
       title: s.title,
@@ -335,6 +735,10 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       updatedAt: Date.now(),
       videoMeta: s.videoMeta,
       videoHash: s.videoHash,
+      sources: sourcesSummary.length > 0 ? sourcesSummary : undefined,
+      selectedSourceIds:
+        s.selectedSourceIds.length > 0 ? s.selectedSourceIds : undefined,
+      activeSourceId: s.activeSourceId ?? undefined,
       plan: s.plan ?? undefined,
       memory: s.memory,
       highlights: s.highlights,
@@ -346,6 +750,40 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     await s.refreshHistory();
   }
 }));
+
+// ---------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------
+
+/** Keep the legacy single-video mirror fields in sync with the active
+ *  source so the existing pipeline + components keep working unchanged. */
+function syncMirrorFields(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  set: (partial: any) => void,
+  source: VideoSource | null
+) {
+  if (!source) {
+    set({
+      videoBlob: null,
+      videoUrl: null,
+      videoMeta: undefined,
+      videoHash: undefined
+    });
+    return;
+  }
+  set({
+    videoBlob: source.blob,
+    videoUrl: source.url,
+    videoMeta: {
+      name: source.meta.name,
+      size: source.meta.size,
+      duration: source.meta.duration,
+      width: source.meta.width,
+      height: source.meta.height
+    },
+    videoHash: source.hash
+  });
+}
 
 /** Compare scenario id sets to decide whether the scoring cache is still valid. */
 export function scenariosChanged(a: EditPlan | null, b: EditPlan | null): boolean {

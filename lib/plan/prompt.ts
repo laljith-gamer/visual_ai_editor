@@ -1,4 +1,9 @@
-import type { ChatMessage, EditPlan, SessionMemory } from "@/lib/types";
+import type {
+  ChatMessage,
+  EditPlan,
+  SessionMemory,
+  VideoLibraryEntry
+} from "@/lib/types";
 import { CONVERSATION } from "@/lib/config";
 
 /**
@@ -203,6 +208,24 @@ When in doubt between two modes:
   - "moment" vs "plan" — if there's a single locatable event, choose moment.
   - "plan" vs "clarify" — if you can fill the gaps from memory + inference responsibly, choose plan; otherwise clarify.
 
+# Library awareness (v1.6.0)
+
+The user can upload MULTIPLE source videos into a "library" and toggle which ones the AI is allowed to pull from. When a library is in scope you'll see a "Video library" block in the user-message context with each source's id, name, duration, dimensions, aspect, whether it is selected for AI use, and any per-source notes the user has volunteered.
+
+How to behave:
+  - If only ONE source is selected (or there's only one in the library), behave exactly as before.
+  - If MULTIPLE sources are selected and the user's request implicitly covers all of them ("best parts", "highlights", "30s reel of the funniest bits"), DO NOT emit a "sources" field — leave it empty so the pipeline pulls from every selected source.
+  - If the user names specific sources ("the goal one and the celebration one", "use clip 2 and clip 3", "skip the podcast", "just the first video") add a "sources" field with the matching VideoSource.id values you saw in the library block. Use the names to map — don't guess.
+  - If the user says something that contradicts their checkbox state ("just use video 2") trust the words over the checkboxes; emit "sources": ["src_2id"].
+  - Per-source notes from previous acknowledge turns are AUTHORITATIVE: if the user said "video 1 has bad audio" treat that as a permanent fact about video 1 and bias styles/avoid accordingly when picking from it.
+  - Cross-source moments: if the user asks for a single moment ("find the goalie save"), look for it across all selected sources but emit ONE moment plan — the pipeline will pick whichever source wins.
+  - Cross-source highlight reels: clips from different sources will be time-fused (sorted by composite score) on output, not source-grouped.
+
+# EditPlan extensions for the library
+
+  "sources": ["src_xxx", "src_yyy"]   // optional. Sources to pull from.
+                                       // Omit/empty = use every selected source.
+
 # Information hierarchy
 
 Fill every field from the FIRST source that has it:
@@ -298,14 +321,35 @@ export function buildPlannerUserPrompt(args: {
   messages: ChatMessage[];
   currentPlan: EditPlan | null;
   videoMeta?: { duration: number; width: number; height: number };
+  /** v1.6.0 — full library; takes precedence over `videoMeta` for the
+   *  context block. */
+  videoLibrary?: VideoLibraryEntry[];
   memory?: SessionMemory;
   /** Optional summary of recent activity events. See lib/log/summarize.ts. */
   recentActivity?: string;
 }): string {
   const lines: string[] = [];
 
-  // --- Source video context -----------------------------------------
-  if (args.videoMeta) {
+  // --- Source / library context -------------------------------------
+  if (args.videoLibrary && args.videoLibrary.length > 0) {
+    const lib = args.videoLibrary;
+    const selectedCount = lib.filter((s) => s.selected).length;
+    lines.push(
+      `Video library: ${lib.length} source${lib.length === 1 ? "" : "s"} ` +
+        `(${selectedCount} selected for AI use).`
+    );
+    for (const s of lib) {
+      const aspect = s.aspect ?? (s.width && s.height ? (s.width / s.height).toFixed(2) : "?");
+      const flag = s.selected ? "selected" : "skip";
+      const notes =
+        s.notes && s.notes.length > 0
+          ? ` notes=[${s.notes.slice(0, 4).join(" | ").slice(0, 200)}]`
+          : "";
+      lines.push(
+        `  - ${s.id} "${s.name}" \u2014 ${Math.round(s.duration)}s, ${s.width}\u00d7${s.height}, aspect ${aspect}, ${flag}.${notes}`
+      );
+    }
+  } else if (args.videoMeta) {
     const w = args.videoMeta.width;
     const h = args.videoMeta.height;
     const aspect = w && h ? (w / h).toFixed(2) : "?";

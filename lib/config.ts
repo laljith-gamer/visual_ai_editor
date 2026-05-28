@@ -315,3 +315,40 @@ export const ADAPT = {
     mediumMin: 0.25
   }
 } as const;
+
+
+
+/**
+ * v1.6.0 — video-library limits. Stops a single tab from chewing memory
+ * by uploading 50 huge files. Both caps are independent: hitting either
+ * one blocks further uploads (the rail surfaces a clear message).
+ *
+ * Tunable per deployment without touching call sites.
+ */
+export const LIBRARY_LIMITS = {
+  /** Max number of videos a single session can hold at once. */
+  maxCount: 8,
+  /** Max combined byte size across the whole library. 1.5 GB. */
+  maxTotalBytes: 1.5 * 1024 * 1024 * 1024,
+  /** Per-source upper bound. Sources larger than this are rejected
+   *  outright with a friendly error. 800 MB. */
+  maxSingleBytes: 800 * 1024 * 1024
+} as const;
+
+/**
+ * v1.6.0 — palette used to color-code clips by source on the timeline.
+ * 8 entries paired with the LIBRARY_LIMITS.maxCount. Hand-tuned for
+ * legibility on the dark background and to be visually distinct from
+ * the focus / accent tokens in globals.css. If you bump maxCount,
+ * extend this array to match.
+ */
+export const SOURCE_COLORS: readonly string[] = [
+  "#7AA2F7", // indigo
+  "#9ECE6A", // green
+  "#E0AF68", // amber
+  "#F7768E", // rose
+  "#BB9AF7", // violet
+  "#7DCFFF", // cyan
+  "#E5C07B", // sand
+  "#FF9E64"  // orange
+] as const;

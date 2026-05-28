@@ -47,6 +47,12 @@ export interface EditPlan {
   extractRange?: ExtractRange;
   /** Optional human-readable explanation from the planner. */
   rationale?: string;
+  /** v1.6.0 — which library sources the planner wants to pull clips
+   *  from. Omitted/empty means "all selected sources are eligible".
+   *  Each entry is a VideoSource.id. The pipeline filters
+   *  `selectedSourceIds` through this list when both are present so
+   *  the user's library checkboxes always remain authoritative. */
+  sources?: string[];
 }
 
 /** A scored frame from the per-frame pass.
@@ -123,11 +129,75 @@ export interface Highlight {
    *  lib/pipeline/adapt.ts. Lets the chat surface "low confidence"
    *  picks without lying about what was chosen. */
   confidence?: "high" | "medium" | "low";
+  /** v1.6.0 — which uploaded source this clip is taken from. Optional
+   *  for back-compat with single-video sessions; when omitted the
+   *  pipeline assumes the currently-active source. The render worker
+   *  uses this to pick the right input file in its filter graph. */
+  sourceId?: string;
 }
 
 // ---------------------------------------------------------------------
-// Session, memory, history
+// Video library (v1.6.0)
 // ---------------------------------------------------------------------
+
+/**
+ * One uploaded video held in memory. The library is a list of these.
+ * Blob + url are runtime-only (NOT persisted). After a session restore
+ * users re-pick the file from disk; `meta` and `hash` are enough to
+ * resolve identity and warm cached predictions.
+ */
+export interface VideoSource {
+  /** Stable internal id ("src_…"). Used as a foreign key on Highlight.sourceId. */
+  id: string;
+  /** sha-256 of the file bytes. Cache key for the predictions store. */
+  hash: string;
+  /** Held in memory only — re-uploaded on session restore. */
+  blob: Blob;
+  /** Object URL backing both preview panes. Revoked when the source is
+   *  removed or the session is reset. */
+  url: string;
+  meta: VideoSourceMeta;
+  addedAt: number;
+}
+
+export interface VideoSourceMeta {
+  name: string;
+  size: number;
+  duration: number;
+  width: number;
+  height: number;
+  /** Display aspect "16:9" / "9:16" / "1:1" — derived; cheaper than recomputing. */
+  aspect?: string;
+}
+
+/** Compact summary the planner sees in the user-prompt block. We send
+ *  metadata only — never the blob — so the prompt stays small. */
+export interface VideoLibraryEntry {
+  id: string;
+  name: string;
+  duration: number;
+  width: number;
+  height: number;
+  aspect?: string;
+  /** Is this source eligible for the next AI pick? Mirrors the
+   *  `selectedSourceIds` checkbox state. The planner MUST honour this. */
+  selected: boolean;
+  /** Per-source notes accumulated from acknowledge-mode chips
+   *  ("source 2 has bad audio", "source 1 is 4K"). Free-text. */
+  notes?: string[];
+}
+
+/** Persisted-only snapshot of the library — no blobs, no URLs. The user
+ *  re-uploads sources on restore; we keep the names + hashes so we can
+ *  show "your previous library had 3 sources" hints later. */
+export interface VideoSourceSummary {
+  id: string;
+  hash: string;
+  meta: VideoSourceMeta;
+  addedAt: number;
+}
+
+
 
 /** Memory chips persisted across edits in a session. */
 export interface SessionMemory {
@@ -166,6 +236,14 @@ export interface Session {
   };
   /** Hash of the source file bytes (cache key). */
   videoHash?: string;
+  /** v1.6.0 — full library snapshot (metadata only, no blobs). When
+   *  present, takes precedence over the legacy single `videoMeta` /
+   *  `videoHash` pair, which we keep for restoring older sessions. */
+  sources?: VideoSourceSummary[];
+  /** v1.6.0 — IDs of sources the user had selected for AI use at save time. */
+  selectedSourceIds?: string[];
+  /** v1.6.0 — which source was active in the preview pane. */
+  activeSourceId?: string;
   plan?: EditPlan;
   memory: SessionMemory;
   highlights: Highlight[];
@@ -269,12 +347,17 @@ export interface AgentRequest {
   messages: ChatMessage[];
   /** The currently-active plan, if any. Enables refinement turns. */
   currentPlan?: EditPlan | null;
-  /** Source video metadata for inference. */
+  /** Source video metadata for inference. Single-video back-compat —
+   *  v1.6.0 prefers `videoLibrary` below when present. */
   videoMeta?: {
     duration: number;
     width: number;
     height: number;
   };
+  /** v1.6.0 — full library the planner can see. The LLM picks which
+   *  sources to pull clips from via `EditPlan.sources`, honouring the
+   *  `selected` flag on each entry. */
+  videoLibrary?: VideoLibraryEntry[];
   /** Cross-turn memory chips. */
   memory?: SessionMemory;
   /** Compact summary of recent activity events for the planner.

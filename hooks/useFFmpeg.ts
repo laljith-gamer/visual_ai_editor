@@ -1,10 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Highlight, EditPlan } from "@/lib/types";
+import type { Highlight, EditPlan, VideoSource } from "@/lib/types";
 
 interface RenderArgs {
-  videoBlob: Blob;
+  /** v1.5.x single-source path. Either this OR `sources` must be set. */
+  videoBlob?: Blob;
+  /** v1.6.0 multi-source path — every uploaded library entry available
+   *  for this render. The hook sends only those whose ids appear in
+   *  highlights, in the order they're referenced. */
+  sources?: VideoSource[];
   highlights: Highlight[];
   format: EditPlan["format"];
   transition: EditPlan["transition"];
@@ -21,6 +26,12 @@ interface UseFFmpegResult {
 /**
  * Lazily spins up the ffmpeg.wasm worker on first call to render(). Until
  * then, no wasm is downloaded — this keeps initial page load tiny.
+ *
+ * v1.6.0: render() now accepts either a single videoBlob (legacy) or a
+ * `sources` library + highlights tagged with `sourceId`. We resolve the
+ * minimal set of inputs the worker needs, transfer their bytes, and
+ * remap each highlight to an `inputIndex` so the filter graph picks
+ * the right `[N:v]/[N:a]`.
  */
 export function useFFmpeg(): UseFFmpegResult {
   const workerRef = useRef<Worker | null>(null);
@@ -62,7 +73,64 @@ export function useFFmpeg(): UseFFmpegResult {
   const render = useCallback(
     async (args: RenderArgs): Promise<Blob> => {
       const worker = await ensureWorker();
-      const videoBytes = new Uint8Array(await args.videoBlob.arrayBuffer());
+
+      // v1.6.0: resolve the minimal set of inputs. If we only have
+      // legacy videoBlob, wrap it as a single input. Otherwise pluck
+      // each source referenced by highlights[i].sourceId in order of
+      // first appearance — the worker will see them as in0.mp4, in1.mp4
+      // and the highlight's `inputIndex` selects which one.
+      let inputs: { name: string; bytes: Uint8Array }[];
+      let mappedHighlights: {
+        id: string;
+        start: number;
+        end: number;
+        inputIndex: number;
+      }[];
+      const transfers: ArrayBuffer[] = [];
+
+      if (args.sources && args.sources.length > 0) {
+        const seen = new Map<string, number>();
+        const used: { id: string; blob: Blob }[] = [];
+        for (const h of args.highlights) {
+          const sid = h.sourceId ?? args.sources[0].id;
+          if (!seen.has(sid)) {
+            const src = args.sources.find((s) => s.id === sid);
+            if (!src) {
+              throw new Error(
+                `Highlight references missing source ${sid}; cannot render.`
+              );
+            }
+            seen.set(sid, used.length);
+            used.push({ id: sid, blob: src.blob });
+          }
+        }
+        // Materialise bytes for transfer.
+        inputs = await Promise.all(
+          used.map(async (u, i) => ({
+            name: `in${i}.mp4`,
+            bytes: new Uint8Array(await u.blob.arrayBuffer())
+          }))
+        );
+        for (const inp of inputs) transfers.push(inp.bytes.buffer as ArrayBuffer);
+        mappedHighlights = args.highlights.map((h) => ({
+          id: h.id,
+          start: h.start,
+          end: h.end,
+          inputIndex: seen.get(h.sourceId ?? args.sources![0].id) ?? 0
+        }));
+      } else if (args.videoBlob) {
+        const bytes = new Uint8Array(await args.videoBlob.arrayBuffer());
+        inputs = [{ name: "in0.mp4", bytes }];
+        transfers.push(bytes.buffer as ArrayBuffer);
+        mappedHighlights = args.highlights.map((h) => ({
+          id: h.id,
+          start: h.start,
+          end: h.end,
+          inputIndex: 0
+        }));
+      } else {
+        throw new Error("render: provide either `sources` or `videoBlob`.");
+      }
 
       return new Promise<Blob>((resolve, reject) => {
         const id = `render_${Date.now()}`;
@@ -87,13 +155,12 @@ export function useFFmpeg(): UseFFmpegResult {
           {
             id,
             type: "render",
-            videoBytes,
-            inputName: "input.mp4",
-            highlights: args.highlights,
+            inputs,
+            highlights: mappedHighlights,
             format: args.format,
             transition: args.transition
           },
-          [videoBytes.buffer]
+          transfers
         );
       });
     },

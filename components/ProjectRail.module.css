@@ -97,3 +97,178 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* ──────────────────────────────────────────────────────────────────
+ * v1.6.0 — Video library card
+ * ────────────────────────────────────────────────────────────────── */
+
+.libraryHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.libraryActions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.libraryActionBtn {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.libraryActionBtn:hover {
+  color: var(--text);
+  border-color: var(--line-2);
+  background: var(--bg-1);
+}
+
+.libraryList {
+  list-style: none;
+  margin: 0 0 var(--space-2) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.libraryItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-input);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  position: relative;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.libraryItem:hover {
+  border-color: var(--line-2);
+}
+.libraryItem.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
+}
+
+.colorDot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--bg-1);
+}
+
+.libraryItemBody {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+}
+.libraryItemBody:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.libraryItemName {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.libraryItemMeta {
+  font-size: 11px;
+  color: var(--text-faint);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.libraryItemMeta .badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-2);
+  color: var(--text-faint);
+}
+
+.libraryItemActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.libraryCheckbox {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.libraryAddBtn {
+  width: 100%;
+  justify-content: center;
+  border: 1px dashed var(--line-2);
+  background: transparent;
+  color: var(--text-faint);
+  padding: 10px;
+  border-radius: var(--radius-input);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.libraryAddBtn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.libraryAddBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.libraryFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 6px;
+}
+
+.removeIconBtn {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+}
+.removeIconBtn:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}

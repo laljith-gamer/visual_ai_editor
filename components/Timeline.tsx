@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { formatTime } from "@/lib/util/time";
 import { logUser } from "@/lib/log/recorders";
+import { SOURCE_COLORS } from "@/lib/config";
 import styles from "./Timeline.module.css";
 
 type DragMode = "move" | "resize-l" | "resize-r" | null;
@@ -16,20 +17,76 @@ interface DragState {
   origEnd: number;
 }
 
+/**
+ * Multi-source-aware timeline. v1.6.0.
+ *
+ * The track itself still shows a single source's worth of horizontal
+ * space at a time — laying every source's worth side-by-side hurts
+ * legibility on small screens. Instead we show a row of source tabs
+ * above the track when there's more than one source, and the active
+ * tab decides which source's clips are visible. Other sources' clips
+ * are kept in state untouched.
+ *
+ * Each clip gets a small color-coded "S1"/"S2"/… badge tinted to match
+ * its source's library color so when the user does cross-source mixes
+ * (an upcoming v1.6.x feature) they can tell at a glance which input
+ * each clip came from. Today, with a single visible source per tab,
+ * the badge is mostly affordance — preparing the eye for the multi-
+ * source preview pane that already swaps source on click.
+ */
 export function Timeline() {
   const highlights = useEditorStore((s) => s.highlights);
-  const videoMeta = useEditorStore((s) => s.videoMeta);
+  const sources = useEditorStore((s) => s.sources);
+  const activeSourceId = useEditorStore((s) => s.activeSourceId);
+  const setActiveSource = useEditorStore((s) => s.setActiveSource);
   const updateHighlight = useEditorStore((s) => s.updateHighlight);
   const selectClip = useEditorStore((s) => s.selectClip);
   const selectedId = useEditorStore((s) => s.selectedClipId);
   const sessionId = useEditorStore((s) => s.sessionId);
+  const videoMeta = useEditorStore((s) => s.videoMeta);
 
   const trackRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
 
-  const duration = videoMeta?.duration ?? Math.max(...highlights.map((h) => h.end), 60);
+  // Resolve a per-source color map once per render. Library order
+  // determines the index — that's stable for a session.
+  const colorById = useMemo(() => {
+    const m = new Map<string, string>();
+    sources.forEach((s, i) => {
+      m.set(s.id, SOURCE_COLORS[i % SOURCE_COLORS.length]);
+    });
+    return m;
+  }, [sources]);
+
+  const indexById = useMemo(() => {
+    const m = new Map<string, number>();
+    sources.forEach((s, i) => m.set(s.id, i + 1));
+    return m;
+  }, [sources]);
+
+  // Scope visible clips to the active source. Older single-source
+  // sessions have highlights without a sourceId — those still belong
+  // to whatever the active source is, so include them.
+  const visibleHighlights = useMemo(
+    () =>
+      highlights.filter(
+        (h) => !h.sourceId || h.sourceId === activeSourceId
+      ),
+    [highlights, activeSourceId]
+  );
+
+  const activeSource = sources.find((s) => s.id === activeSourceId) ?? null;
+  const duration =
+    activeSource?.meta.duration ??
+    videoMeta?.duration ??
+    Math.max(...visibleHighlights.map((h) => h.end), 60);
 
   const totalSelected = useMemo(
+    () => visibleHighlights.reduce((acc, h) => acc + (h.end - h.start), 0),
+    [visibleHighlights]
+  );
+
+  const totalAcrossLibrary = useMemo(
     () => highlights.reduce((acc, h) => acc + (h.end - h.start), 0),
     [highlights]
   );
@@ -60,7 +117,7 @@ export function Timeline() {
     const deltaSec = pxToSec(e.clientX - drag.startX);
     if (drag.mode === "move") {
       const len = drag.origEnd - drag.origStart;
-      let start = Math.max(0, Math.min(duration - len, drag.origStart + deltaSec));
+      const start = Math.max(0, Math.min(duration - len, drag.origStart + deltaSec));
       updateHighlight(drag.id, { start, end: start + len });
     } else if (drag.mode === "resize-l") {
       const start = Math.max(0, Math.min(drag.origEnd - 0.5, drag.origStart + deltaSec));
@@ -74,7 +131,6 @@ export function Timeline() {
   function onMouseUp(e: React.PointerEvent<HTMLDivElement>) {
     (e.target as Element).releasePointerCapture?.(e.pointerId);
     if (drag) {
-      // Log the release-level mutation only — pixel-level moves are too noisy.
       const current = useEditorStore.getState().highlights.find((h) => h.id === drag.id);
       if (current) {
         const fromStart = drag.origStart;
@@ -123,12 +179,51 @@ export function Timeline() {
 
   return (
     <div className={styles.timeline}>
+      {/* Source tabs — only visible when the library has more than one. */}
+      {sources.length > 1 && (
+        <div className={styles.tabs}>
+          {sources.map((s, i) => {
+            const isActive = s.id === activeSourceId;
+            const c = SOURCE_COLORS[i % SOURCE_COLORS.length];
+            const clipsHere = highlights.filter(
+              (h) => (h.sourceId ?? activeSourceId) === s.id
+            ).length;
+            return (
+              <button
+                key={s.id}
+                className={`${styles.tab} ${isActive ? styles.active : ""}`}
+                onClick={() => setActiveSource(s.id)}
+                title={`Switch the timeline to "${s.meta.name}"`}
+              >
+                <span
+                  className={styles.tabDot}
+                  style={{ background: c }}
+                  aria-hidden
+                />
+                S{i + 1}
+                <span className="muted mono" style={{ fontSize: 10 }}>
+                  {clipsHere > 0 ? `(${clipsHere})` : ""}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className={styles.header}>
         <span className="muted">
-          {highlights.length} clip{highlights.length === 1 ? "" : "s"}
+          {visibleHighlights.length} clip{visibleHighlights.length === 1 ? "" : "s"}
         </span>
         <span className="muted">·</span>
-        <span className="muted">{formatTime(totalSelected)} selected</span>
+        <span className="muted">{formatTime(totalSelected)} on this source</span>
+        {sources.length > 1 && (
+          <>
+            <span className="muted">·</span>
+            <span className="faint">
+              {formatTime(totalAcrossLibrary)} across library
+            </span>
+          </>
+        )}
         <div className="spacer" />
         <span className="faint">Source: {formatTime(duration)}</span>
       </div>
@@ -140,21 +235,32 @@ export function Timeline() {
         onPointerUp={onMouseUp}
         onPointerCancel={onMouseUp}
       >
-        {highlights.length === 0 && (
+        {visibleHighlights.length === 0 && (
           <p className={`faint ${styles.empty}`}>
-            No clips yet. Send the assistant a request to plan a short.
+            No clips on this source. Send the assistant a request, or use
+            the manual edit tools.
           </p>
         )}
 
-        {highlights.map((h) => {
+        {visibleHighlights.map((h) => {
           const left = (h.start / duration) * 100;
           const width = ((h.end - h.start) / duration) * 100;
           const selected = selectedId === h.id;
+          const sid = h.sourceId ?? activeSourceId ?? "";
+          const color = colorById.get(sid) ?? "#9ECE6A";
+          const idx = indexById.get(sid) ?? 1;
           return (
             <div
               key={h.id}
               className={`${styles.clip} ${selected ? styles.selected : ""}`}
-              style={{ left: `${left}%`, width: `${width}%` }}
+              style={{
+                left: `${left}%`,
+                width: `${width}%`,
+                background: `linear-gradient(180deg,
+                  color-mix(in srgb, ${color} 50%, transparent),
+                  color-mix(in srgb, ${color} 22%, transparent))`,
+                borderColor: `color-mix(in srgb, ${color} 70%, transparent)`
+              }}
               onPointerDown={(e) => onMouseDown(e, h, "move")}
               onClick={() => selectClip(h.id)}
               role="button"
@@ -169,6 +275,14 @@ export function Timeline() {
               />
               <div className={styles.clipBody}>
                 <span className={styles.clipName}>
+                  {sources.length > 1 && (
+                    <span
+                      className={styles.sourceBadge}
+                      style={{ background: color }}
+                    >
+                      S{idx}
+                    </span>
+                  )}
                   {h.label ?? "clip"}
                 </span>
                 <span className={`mono ${styles.clipDuration}`}>

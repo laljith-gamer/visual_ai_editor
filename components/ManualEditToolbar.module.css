@@ -1,0 +1,91 @@
+/* ──────────────────────────────────────────────────────────────────
+ * Manual edit toolbar — sits above the timeline. Pure local mutations,
+ * no LLM. v1.6.0.
+ * ────────────────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input);
+  margin-bottom: var(--space-3);
+}
+
+.label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  margin-right: 4px;
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  border-right: 1px solid var(--line);
+}
+.group:last-child {
+  border-right: none;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-2));
+  border-color: var(--accent);
+  color: var(--text);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg-2));
+  border-color: var(--danger);
+}
+
+.timeInput {
+  width: 64px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: var(--mono, ui-monospace, monospace);
+  background: var(--bg-0);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.timeInput:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.dim {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.empty {
+  color: var(--text-faint);
+  font-size: 12px;
+  font-style: italic;
+}

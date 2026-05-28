@@ -1,27 +1,25 @@
 /// <reference lib="webworker" />
 /**
- * ffmpeg.wasm rendering worker. v1.5.1 rewrite.
+ * ffmpeg.wasm rendering worker. v1.6.0 multi-source.
  *
- * Receives:
+ * Receives one of:
  *   { id, type: "init" }
- *   { id, type: "render", videoBytes, highlights, format, transition }
+ *   { id, type: "render", inputs: [{ name, bytes }, ...],
+ *     highlights: [{ start, end, inputIndex }, ...],
+ *     format, transition }
  *
- * Emits progress events ({ type: "progress", progress }) during render
- * and a final { id, payload: Uint8Array } with the encoded MP4.
+ * Each highlight names the input it pulls from via `inputIndex` so a
+ * single render can stitch clips from multiple uploaded sources. For
+ * v1.5.x single-source callers, set `inputIndex: 0` for every clip and
+ * pass a one-entry `inputs` array — behaviour matches v1.5.1 exactly.
  *
- * v1.5.1 changes:
- *   - Single ffmpeg.exec() per render. We build ONE filter_complex graph
- *     that does trim → scale → fade → concat for every highlight at once.
- *     Replaces the old N+1 invocation pattern (one full encode per
- *     segment + a concat pass). 3-5x faster end-to-end.
- *   - Switched preset to "ultrafast" + tune=fastdecode. ffmpeg.wasm runs
- *     single-threaded so encoder choice dominates wall time. Trade-off:
- *     ~10-15% larger MP4 output for huge speedup. Acceptable for shorts.
- *   - Continuous progress 0..1 (was N segments × 0..1 in series).
+ * Filter graph reads `[N:v]/[N:a]` per highlight and concats them all
+ * in one pass. The audio path falls back to video-only when ANY of the
+ * sources lacks an audio track (the concat filter's a=1 mode requires
+ * every input to have one).
  *
- * All ffmpeg knobs live in lib/config.ts → RENDER. Workers can't reliably
- * import non-relative paths so we keep a parallel local copy mirrored
- * to lib/config.ts. Change one, change the other.
+ * Single ffmpeg.exec() per render, ultrafast preset, fastdecode tune.
+ * 3-5x faster than the pre-v1.5.1 N+1 invocation pattern.
  */
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL } from "@ffmpeg/util";
@@ -43,10 +41,17 @@ const RENDER = {
   }
 } as const;
 
-interface Highlight {
+interface MultiSourceHighlight {
   id: string;
   start: number;
   end: number;
+  /** Index into the `inputs` array. */
+  inputIndex: number;
+}
+
+interface InputFile {
+  name: string;
+  bytes: Uint8Array;
 }
 
 interface InitMessage {
@@ -56,13 +61,25 @@ interface InitMessage {
 interface RenderMessage {
   id: string;
   type: "render";
-  videoBytes: Uint8Array;
-  inputName: string;
-  highlights: Highlight[];
+  inputs: InputFile[];
+  highlights: MultiSourceHighlight[];
   format: "vertical" | "horizontal" | "square";
   transition: "none" | "fade" | "crossfade";
 }
-type Incoming = InitMessage | RenderMessage;
+
+// v1.5.x compat: single-source render messages still arrive in their
+// old shape. We adapt them at runtime to the multi-source format.
+interface LegacyRenderMessage {
+  id: string;
+  type: "render";
+  videoBytes: Uint8Array;
+  inputName: string;
+  highlights: { id: string; start: number; end: number }[];
+  format: RenderMessage["format"];
+  transition: RenderMessage["transition"];
+}
+
+type Incoming = InitMessage | RenderMessage | LegacyRenderMessage;
 
 const ffmpeg = new FFmpeg();
 let initialized = false;
@@ -90,7 +107,22 @@ self.onmessage = async (e: MessageEvent<Incoming>) => {
     }
     if (msg.type === "render") {
       await init();
-      const out = await renderShort(msg);
+      // Adapt legacy single-source messages to the multi-source schema.
+      const adapted: RenderMessage =
+        "inputs" in msg
+          ? msg
+          : {
+              id: msg.id,
+              type: "render",
+              inputs: [{ name: msg.inputName, bytes: msg.videoBytes }],
+              highlights: msg.highlights.map((h) => ({
+                ...h,
+                inputIndex: 0
+              })),
+              format: msg.format,
+              transition: msg.transition
+            };
+      const out = await renderShort(adapted);
       (self as unknown as Worker).postMessage(
         { id: msg.id, payload: out },
         { transfer: [out.buffer] }
@@ -107,32 +139,35 @@ self.onmessage = async (e: MessageEvent<Incoming>) => {
 
 /**
  * Render in a single ffmpeg call. Builds a filter_complex graph with
- * one trim+scale+fade chain per highlight, then concat=n=N at the end.
+ * one trim+scale+fade chain per highlight, referencing the right input
+ * by index, then concat=n=N at the end.
  *
- * Audio handling: we try with audio (most common). If the source has
- * no audio track, ffmpeg's `concat=n=*:a=1` will fail. We catch that and
- * retry with the video-only filter graph as a fallback so silent sources
- * still render successfully.
+ * Audio handling: we try with audio first. When concat fails (missing
+ * audio track on any input) we retry with video-only.
  */
 async function renderShort(msg: RenderMessage): Promise<Uint8Array> {
-  const inputName = "input.mp4";
-  await ffmpeg.writeFile(inputName, msg.videoBytes);
+  // Write every input file to ffmpeg's virtual FS up front. Names are
+  // derived from the index so they're guaranteed unique even if two
+  // sources share a basename (`in0.mp4`, `in1.mp4`, …).
+  const writtenNames: string[] = [];
+  for (let i = 0; i < msg.inputs.length; i++) {
+    const fname = `in${i}.mp4`;
+    await ffmpeg.writeFile(fname, msg.inputs[i].bytes);
+    writtenNames.push(fname);
+  }
 
   // First attempt: video + audio path.
-  const withAudio = buildArgs(inputName, msg, true);
+  const withAudio = buildArgs(writtenNames, msg, true);
   let succeeded = false;
   try {
     await ffmpeg.exec(withAudio);
     succeeded = true;
   } catch (err) {
-    // Most likely the source had no audio track. Fall through to
-    // video-only retry below. Other errors (corrupt input, OOM) will
-    // resurface there too.
     void err;
   }
 
   if (!succeeded) {
-    const videoOnly = buildArgs(inputName, msg, false);
+    const videoOnly = buildArgs(writtenNames, msg, false);
     await ffmpeg.exec(videoOnly);
   }
 
@@ -141,7 +176,7 @@ async function renderShort(msg: RenderMessage): Promise<Uint8Array> {
   // Best-effort cleanup; failures here don't matter (next render
   // overwrites these names anyway).
   await Promise.all([
-    ffmpeg.deleteFile(inputName).catch(() => {}),
+    ...writtenNames.map((n) => ffmpeg.deleteFile(n).catch(() => {})),
     ffmpeg.deleteFile("output.mp4").catch(() => {})
   ]);
 
@@ -150,13 +185,20 @@ async function renderShort(msg: RenderMessage): Promise<Uint8Array> {
 
 /** Build the full ffmpeg argv for a single-pass render. */
 function buildArgs(
-  inputName: string,
+  inputNames: string[],
   msg: RenderMessage,
   withAudio: boolean
 ): string[] {
-  const filter = buildFilterComplex(msg.highlights, msg.format, msg.transition, withAudio);
+  const filter = buildFilterComplex(
+    msg.highlights,
+    msg.format,
+    msg.transition,
+    withAudio
+  );
 
-  const args: string[] = ["-y", "-i", inputName, "-filter_complex", filter, "-map", "[outv]"];
+  const args: string[] = ["-y"];
+  for (const n of inputNames) args.push("-i", n);
+  args.push("-filter_complex", filter, "-map", "[outv]");
   if (withAudio) args.push("-map", "[outa]");
 
   args.push(
@@ -186,12 +228,13 @@ function buildArgs(
 
 /** Build the filter_complex graph string for all highlights. */
 function buildFilterComplex(
-  highlights: Highlight[],
+  highlights: MultiSourceHighlight[],
   format: RenderMessage["format"],
   transition: RenderMessage["transition"],
   withAudio: boolean
 ): string {
-  const dim = RENDER.outputDimensions[format] ?? RENDER.outputDimensions.horizontal;
+  const dim =
+    RENDER.outputDimensions[format] ?? RENDER.outputDimensions.horizontal;
   const scale = scaleExpr(format, dim);
   const fade = transition === "fade" || transition === "crossfade";
 
@@ -203,10 +246,11 @@ function buildFilterComplex(
     const fadeDur = fade
       ? Math.min(RENDER.fadeMaxSeconds, dur * RENDER.fadeFractionOfClip)
       : 0;
+    const idx = Math.max(0, Math.floor(h.inputIndex || 0));
 
     // Video chain: trim → reset PTS → scale/crop → optional fade.
     let v =
-      `[0:v]trim=start=${fmt(h.start)}:end=${fmt(h.end)},` +
+      `[${idx}:v]trim=start=${fmt(h.start)}:end=${fmt(h.end)},` +
       `setpts=PTS-STARTPTS,${scale}`;
     if (fadeDur > 0) {
       v +=
@@ -219,7 +263,7 @@ function buildFilterComplex(
 
     if (withAudio) {
       let a =
-        `[0:a]atrim=start=${fmt(h.start)}:end=${fmt(h.end)},` +
+        `[${idx}:a]atrim=start=${fmt(h.start)}:end=${fmt(h.end)},` +
         `asetpts=PTS-STARTPTS`;
       if (fadeDur > 0) {
         a +=
@@ -247,14 +291,12 @@ function scaleExpr(
   switch (format) {
     case "vertical":
     case "square":
-      // Fill the output, then center-crop. Looks best for portrait sources.
       return (
         `scale=${d.w}:${d.h}:force_original_aspect_ratio=increase,` +
         `crop=${d.w}:${d.h}`
       );
     case "horizontal":
     default:
-      // Letterbox so widescreen content keeps its full frame.
       return (
         `scale=${d.w}:${d.h}:force_original_aspect_ratio=decrease,` +
         `pad=${d.w}:${d.h}:(ow-iw)/2:(oh-ih)/2:black`

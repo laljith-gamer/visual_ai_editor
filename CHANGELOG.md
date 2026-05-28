@@ -4,6 +4,126 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.6.0] — 2026-05-28
+
+### Added — Multi-video library, cross-source AI, manual edit toolbar
+
+A foundational change. The editor now holds a **library** of uploaded
+sources (cap: 8 videos / 1.5 GB / 800 MB per file) instead of a single
+source. The AI can pull clips from any subset of selected videos, the
+preview pane auto-swaps to whichever source the chosen clip belongs
+to, and a new toolbar above the timeline lets users tinker with cuts
+without ever calling the LLM.
+
+#### Library
+
+`VideoSource` is the new state primitive (`lib/types.ts`):
+`{ id, hash, blob, url, meta, addedAt }`. The store gains `sources[]`,
+`activeSourceId`, `selectedSourceIds`, plus actions `addSource`,
+`removeSource`, `setActiveSource`, `toggleSourceSelection`,
+`selectAllSources`, `selectActiveOnlySource`. The legacy
+`videoBlob`/`videoUrl`/`videoMeta`/`videoHash` fields are kept as
+mirrors of the active source so the existing pipeline + components
+keep working unchanged.
+
+`Highlight` gains an optional `sourceId` so a single timeline can mix
+clips from different uploaded videos. The render worker now accepts a
+multi-input filter graph (`-i in0.mp4 -i in1.mp4 …`) and references
+`[N:v]/[N:a]` per clip so cross-source reels render in a single
+ffmpeg.exec — same single-pass speedup we got in 1.5.1, now across
+many sources.
+
+The new `ProjectRail` library card lists every uploaded video with a
+color dot, name, duration, dimensions, aspect, size, an "active" radio
+(which one plays in the preview pane), a "selected" checkbox (which
+ones the AI considers), and a remove button. Bulk-toggle buttons:
+"All", "Active only".
+
+#### Cross-source AI pickup
+
+The planner system prompt grew a **Library awareness** section. Every
+agent request now includes a `videoLibrary` array with each source's
+id, name, duration, aspect, selection flag, and any per-source notes
+accumulated from acknowledge-mode chips. The LLM emits an optional
+`sources: ["src_a", "src_b"]` field on the plan when the user names
+specific videos ("just the first one", "use clip 2 and 3"); otherwise
+the pipeline pulls from every selected source.
+
+The pipeline orchestrator in `app/page.tsx` was refactored from a
+single 250-line callback to a thin loop calling a new
+`executeForSource()` helper (`lib/pipeline/executePerSource.ts`) once
+per eligible source. Results are accumulated, then merged via
+`mergeAcrossSources()` which:
+  - **Best strategy** — sorts every candidate by composite score and
+    greedily fills the `targetShortSeconds` budget.
+  - **Balanced strategy** — round-robins picks across sources by
+    descending score for a more even mix.
+Final clips are sorted by `(sourceId, start)` so the output reads as
+"Source A chapter, Source B chapter, …" on the timeline.
+
+Moment mode picks the single best matching clip across all selected
+sources.
+
+#### Manual edit toolbar
+
+New `ManualEditToolbar` component above the timeline. Six primitives,
+all pure-client, zero LLM calls:
+  - **Trim first N** (15s / 30s / 1m) — drop or shorten clips inside
+    `[0, N)` on the active source.
+  - **Trim last N** (15s / 30s / 1m) — same for `[duration−N, duration)`.
+  - **Keep range [a, b]** — replace active-source clips with one
+    `{start: a, end: b}` clip. mm:ss / "1m30s" / plain seconds parsing.
+  - **Drop range [a, b]** — split or trim out clips overlapping the
+    range; clips fully inside are removed, clips bracketing the range
+    are split into two halves.
+  - **Split** — bisects the selected clip in two equal halves.
+  - **Reset** — clears every clip from the active source. Other
+    sources stay untouched.
+
+Each action logs a structured activity event so the planner sees what
+the user did on the next AI turn ("user trimmed first 60s → they want
+it concise") and biases future plans accordingly.
+
+#### Multi-source render worker
+
+`lib/pipeline/render.worker.ts` — accepts an `inputs: [{name, bytes}]`
+array and per-clip `inputIndex`. Builds one `filter_complex` graph
+referencing `[N:v]/[N:a]` per highlight, concats them all in a single
+ffmpeg.exec call. Legacy single-source render messages are auto-
+adapted at runtime so older callers keep working. `useFFmpeg`
+materialises only the source blobs that are actually referenced by
+highlights so unused library entries don't get transferred.
+
+#### Timeline source affordance
+
+The timeline now shows a small color-coded "S1"/"S2"/… badge on each
+clip when the library has more than one source, and a row of source
+tabs above the track lets the user switch which source's timeline is
+visible. Switching is purely visual — clips from other sources stay
+in state. Per-source clip color matches the library color dot and the
+badge for instant visual coherence.
+
+#### Cross-source preview auto-swap
+
+`EditorStage` listens for `selectedClip.sourceId` changes and calls
+`setActiveSource` so the right pane plays whichever source the
+selected clip lives in. Every click on the timeline "just plays the
+right thing" without the user having to switch the active video by
+hand.
+
+#### Persistence
+
+`Session` schema gains `sources?` (metadata-only summaries — no blobs
+ever hit IndexedDB), `selectedSourceIds?`, `activeSourceId?`. On
+session restore the user re-uploads the actual files; the library
+metadata + plan + clips are preserved.
+
+#### Configuration
+
+New `LIBRARY_LIMITS` block in `lib/config.ts`: `maxCount: 8`,
+`maxTotalBytes: 1.5 GB`, `maxSingleBytes: 800 MB`. New `SOURCE_COLORS`
+palette of 8 hand-tuned hues for source badges + dots.
+
 ## [1.5.2] — 2026-05-28
 
 ### Fixed — "Planner returned an unknown mode" crash on context-update turns

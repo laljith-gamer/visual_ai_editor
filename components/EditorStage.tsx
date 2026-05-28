@@ -5,6 +5,7 @@ import { useEditorStore } from "@/hooks/useEditorStore";
 import { Timeline } from "./Timeline";
 import { ClipInspector } from "./ClipInspector";
 import { PreviewToolbar } from "./PreviewToolbar";
+import { ManualEditToolbar } from "./ManualEditToolbar";
 import { formatTime } from "@/lib/util/time";
 import styles from "./EditorStage.module.css";
 
@@ -41,11 +42,32 @@ export function EditorStage({ onOpenClips, onRender, isRendering }: Props) {
   const renderedUrl = useEditorStore((s) => s.renderedUrl);
   const highlights = useEditorStore((s) => s.highlights);
   const selectedClipId = useEditorStore((s) => s.selectedClipId);
+  const sources = useEditorStore((s) => s.sources);
+  const activeSourceId = useEditorStore((s) => s.activeSourceId);
+  const setActiveSource = useEditorStore((s) => s.setActiveSource);
 
   const selectedClip = useMemo(
     () => highlights.find((h) => h.id === selectedClipId) ?? null,
     [highlights, selectedClipId]
   );
+
+  // v1.6.0 — when the user clicks a clip whose sourceId differs from
+  // the currently-active source, swap the active source automatically
+  // so the preview pane plays the right footage. This makes cross-
+  // source highlight reels feel native: every click "just plays the
+  // right thing".
+  useEffect(() => {
+    if (!selectedClip?.sourceId) return;
+    if (selectedClip.sourceId === activeSourceId) return;
+    if (!sources.some((s) => s.id === selectedClip.sourceId)) return;
+    setActiveSource(selectedClip.sourceId);
+  }, [
+    selectedClip?.sourceId,
+    activeSourceId,
+    sources,
+    setActiveSource,
+    selectedClip
+  ]);
 
   const totalSelected = useMemo(
     () => highlights.reduce((acc, h) => acc + (h.end - h.start), 0),
@@ -203,6 +225,7 @@ export function EditorStage({ onOpenClips, onRender, isRendering }: Props) {
       <section className="card">
         <div className="card-header">Timeline</div>
         <div className="card-body">
+          <ManualEditToolbar />
           <Timeline />
           <ClipInspector />
         </div>

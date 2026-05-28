@@ -82,6 +82,10 @@ export function normalizePlan(raw: unknown): NormalizeResult {
     typeof r.rationale === "string" && r.rationale.trim()
       ? r.rationale.trim().slice(0, 600)
       : undefined;
+  // v1.6.0 — optional list of source IDs the planner picked. Validation
+  // of "is this a known id?" lives client-side (page.tsx) where the
+  // library is reachable; here we only sanitize types and length.
+  const sources = stringArray(r.sources).slice(0, 16);
 
   return {
     plan: {
@@ -99,7 +103,8 @@ export function normalizePlan(raw: unknown): NormalizeResult {
       inferenceWidth,
       signals: signals ?? undefined,
       extractRange: extractRange ?? undefined,
-      rationale
+      rationale,
+      sources: sources.length > 0 ? sources : undefined
     },
     missing: [],
     warnings
@@ -180,6 +185,10 @@ export function normalizePlanPatch(raw: unknown): {
   if (signals) patch.signals = signals;
   const extractRange = normalizeExtractRange(r.extractRange);
   if (extractRange) patch.extractRange = extractRange;
+  if (Array.isArray(r.sources)) {
+    const sources = stringArray(r.sources).slice(0, 16);
+    if (sources.length > 0) patch.sources = sources;
+  }
   return { patch, warnings };
 }
 

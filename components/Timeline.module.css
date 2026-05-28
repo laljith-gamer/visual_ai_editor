@@ -103,3 +103,56 @@
 .tick em {
   font-style: normal;
 }
+
+
+/* ──────────────────────────────────────────────────────────────────
+ * v1.6.0 — Source badges + multi-source clip styling.
+ * ────────────────────────────────────────────────────────────────── */
+
+.sourceBadge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-right: 6px;
+  letter-spacing: 0.04em;
+  color: rgba(11, 26, 18, 0.85);
+  /* background colour set inline per source */
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-1);
+  color: var(--text-faint);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.tab:hover {
+  color: var(--text);
+  border-color: var(--line-2);
+}
+.tab.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-1));
+}
+.tabDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}

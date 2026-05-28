@@ -1,0 +1,421 @@
+/**
+ * v1.6.0 — Per-source pipeline execution.
+ *
+ * Runs the full sample → score → temporal → buildHighlights flow
+ * for ONE video source and returns the resulting highlights tagged
+ * with the source's id. The orchestrator (in app/page.tsx) calls this
+ * once per eligible library source and merges the outputs.
+ *
+ * This is a pure-data helper: it takes everything it needs as
+ * arguments and returns a structured result. It does NOT call
+ * setHighlights, pushMessage, or any other store mutation — those
+ * belong to the orchestrator so it can reason globally about budget,
+ * messaging, and progress.
+ *
+ * The body is the verbatim logic that lived inline in runPipeline
+ * pre-v1.6.0; only the data plumbing changed.
+ */
+
+import type {
+  CapabilityTier,
+  EditPlan,
+  FrameScore,
+  Highlight,
+  ScoreStats,
+  UserTier,
+  VideoSource
+} from "@/lib/types";
+import { sampleFrames } from "./sample";
+import { scoreFrames } from "./score";
+import { detectCandidateWindows } from "./events";
+import { runTemporalPass } from "./temporal";
+import { buildHighlights } from "./highlights";
+import { buildMomentHighlight } from "./moment";
+import { planSignaturePayload } from "@/lib/plan/normalize";
+import { sha1String } from "@/lib/util/hash";
+import { getPredictions, savePredictions, trimCache } from "@/lib/store/cache";
+
+/** Activity-log fan-out passed in by the orchestrator. */
+export interface SourceLogger {
+  ai: (kind: string, payload: Record<string, unknown>, summary?: string, ms?: number) => void;
+  system: (kind: string, payload: Record<string, unknown>, summary?: string) => void;
+}
+
+export interface ProgressSink {
+  setStatus: (s: string, detail?: string) => void;
+  /** Progress within THIS source's run (0..1). The orchestrator scales
+   *  it to global progress. */
+  setProgress: (p: number) => void;
+}
+
+export interface ExecuteForSourceArgs {
+  source: VideoSource;
+  plan: EditPlan;
+  mode: "plan" | "moment";
+  capTier: CapabilityTier;
+  userTier: UserTier;
+  log: SourceLogger;
+  progress: ProgressSink;
+}
+
+export interface ExecuteForSourceResult {
+  /** Highlights tagged with source.id and ready to merge globally. */
+  highlights: Highlight[];
+  /** True if the only matches were below the strong threshold; the
+   *  orchestrator may want to qualify the assistant message. */
+  weakOnly: boolean;
+  /** Max composite score seen — used for "no strong matches" copy. */
+  scoreMax: number;
+  scoreStats: ScoreStats | null;
+  /** Was the per-source predictions cache reused? */
+  cacheHit: boolean;
+}
+
+/**
+ * Run the full pipeline for one source. Throws on unrecoverable
+ * decoding errors; returns an empty `highlights` array when nothing
+ * matched (the orchestrator decides whether to surface that).
+ */
+export async function executeForSource(
+  args: ExecuteForSourceArgs
+): Promise<ExecuteForSourceResult> {
+  const { source, plan, mode, capTier, userTier, log, progress } = args;
+  const videoBlob = source.blob;
+  const videoHash = source.hash;
+  const videoMeta = {
+    duration: source.meta.duration,
+    width: source.meta.width,
+    height: source.meta.height
+  };
+
+  // ---- Cache lookup ------------------------------------------------
+  const sig = await sha1String(planSignaturePayload(plan));
+  const cached = await getPredictions(videoHash, sig);
+  let frameScores: FrameScore[];
+  let cacheHit = false;
+
+  if (cached) {
+    log.system(
+      "cache.hit",
+      { sourceId: source.id, signature: sig.slice(0, 12), frames: cached.frames.length },
+      `Cache hit on "${source.meta.name}" (${cached.frames.length} frames)`
+    );
+    frameScores = cached.frames;
+    progress.setStatus("scoring", `Reused cache for ${source.meta.name}`);
+    progress.setProgress(0.5);
+    cacheHit = true;
+  } else {
+    log.system(
+      "cache.miss",
+      { sourceId: source.id, signature: sig.slice(0, 12) },
+      `Cache miss on "${source.meta.name}" — running fresh sample+score`
+    );
+    frameScores = await sampleAndScore({
+      videoBlob,
+      videoHash,
+      plan,
+      capTier,
+      videoMeta,
+      progress,
+      log,
+      sourceName: source.meta.name
+    });
+  }
+
+  // ---- Time-bound filter ------------------------------------------
+  if (plan.extractRange) {
+    const r = plan.extractRange;
+    const start =
+      r.kind === "last"
+        ? Math.max(0, videoMeta.duration - (r.endSeconds - r.startSeconds))
+        : r.startSeconds;
+    const end = r.kind === "last" ? videoMeta.duration : r.endSeconds;
+    frameScores = frameScores.filter((f) => f.t >= start && f.t < end);
+  }
+
+  // ---- MOMENT mode -------------------------------------------------
+  if (mode === "moment") {
+    progress.setStatus("temporal", `Locating in ${source.meta.name}`);
+    progress.setProgress(0.65);
+    const t1 = Date.now();
+    const buildResult = await buildMomentHighlight({
+      videoBlob,
+      frameScores,
+      plan,
+      videoDuration: videoMeta.duration,
+      userTier,
+      videoMeta,
+      onProgress: (done, total) =>
+        progress.setProgress(0.65 + (done / Math.max(total, 1)) * 0.3)
+    });
+    const tagged = buildResult.highlights.map((h) => ({
+      ...h,
+      sourceId: source.id
+    }));
+    log.ai(
+      "moment.localized",
+      {
+        sourceId: source.id,
+        found: tagged.length > 0,
+        count: tagged.length,
+        weakOnly: buildResult.weakOnly,
+        userTier
+      },
+      tagged.length > 0
+        ? `Moment in "${source.meta.name}": ${tagged[0].start.toFixed(1)}s → ${tagged[0].end.toFixed(1)}s${buildResult.weakOnly ? " (low conf)" : ""}`
+        : `Moment NOT found in "${source.meta.name}"`,
+      Date.now() - t1
+    );
+    return {
+      highlights: tagged,
+      weakOnly: buildResult.weakOnly,
+      scoreMax: tagged[0]?.score ?? 0,
+      scoreStats: null,
+      cacheHit
+    };
+  }
+
+  // ---- PLAN mode ---------------------------------------------------
+  progress.setStatus("temporal", `Finding events in ${source.meta.name}`);
+  progress.setProgress(0.62);
+
+  const detectionResult = detectCandidateWindows(frameScores, plan, {
+    userTier,
+    videoMeta
+  });
+  const candidates = detectionResult.windows;
+  const scoreStats = detectionResult.stats;
+
+  log.ai(
+    "events.detected",
+    {
+      sourceId: source.id,
+      candidateCount: candidates.length,
+      framesScored: frameScores.length,
+      userTier,
+      percentile: detectionResult.percentile,
+      cutoff: round2(detectionResult.cutoff),
+      scoreMax: round2(scoreStats.max),
+      scoreMean: round2(scoreStats.mean)
+    },
+    `${candidates.length} candidates from "${source.meta.name}" (top ${(detectionResult.percentile * 100).toFixed(0)}%)`
+  );
+
+  if (candidates.length === 0) {
+    return { highlights: [], weakOnly: false, scoreMax: scoreStats.max, scoreStats, cacheHit };
+  }
+
+  const t2 = Date.now();
+  const verdicts = await runTemporalPass({
+    videoBlob,
+    candidates,
+    plan,
+    onProgress: (done, total) =>
+      progress.setProgress(0.65 + (done / Math.max(total, 1)) * 0.25)
+  });
+
+  progress.setStatus("selecting", `Picking from ${source.meta.name}`);
+  progress.setProgress(0.92);
+  const buildResult = buildHighlights({
+    candidates,
+    verdicts,
+    plan,
+    videoDuration: videoMeta.duration,
+    userTier,
+    scoreStats
+  });
+  const tagged = buildResult.highlights.map((h) => ({
+    ...h,
+    sourceId: source.id
+  }));
+
+  log.ai(
+    "highlights.built",
+    {
+      sourceId: source.id,
+      count: tagged.length,
+      totalSeconds: round2(tagged.reduce((acc, h) => acc + (h.end - h.start), 0)),
+      weakOnly: buildResult.weakOnly,
+      userTier
+    },
+    `Built ${tagged.length} clip${tagged.length === 1 ? "" : "s"} from "${source.meta.name}"`,
+    Date.now() - t2
+  );
+
+  return {
+    highlights: tagged,
+    weakOnly: buildResult.weakOnly,
+    scoreMax: scoreStats.max,
+    scoreStats,
+    cacheHit
+  };
+}
+
+// ---------------------------------------------------------------------
+// Internal: cache-miss sample + score branch.
+// ---------------------------------------------------------------------
+
+async function sampleAndScore(args: {
+  videoBlob: Blob;
+  videoHash: string;
+  plan: EditPlan;
+  capTier: CapabilityTier;
+  videoMeta: { duration: number; width: number; height: number };
+  progress: ProgressSink;
+  log: SourceLogger;
+  sourceName: string;
+}): Promise<FrameScore[]> {
+  const { videoBlob, videoHash, plan, capTier, videoMeta, progress, log, sourceName } = args;
+  progress.setStatus("sampling", `Extracting frames from ${sourceName}`);
+
+  const tA = Date.now();
+  const range = plan.extractRange
+    ? plan.extractRange.kind === "last"
+      ? {
+          startSeconds: Math.max(
+            0,
+            videoMeta.duration -
+              (plan.extractRange.endSeconds - plan.extractRange.startSeconds)
+          ),
+          endSeconds: videoMeta.duration
+        }
+      : {
+          startSeconds: plan.extractRange.startSeconds,
+          endSeconds: plan.extractRange.endSeconds
+        }
+    : undefined;
+  const frames = await sampleFrames(videoBlob, {
+    every: plan.sampleEverySeconds,
+    width: plan.inferenceWidth,
+    range,
+    onProgress: (pp) => progress.setProgress(0.05 + pp * 0.2)
+  });
+  log.ai(
+    "frames.sampled",
+    {
+      count: frames.length,
+      everySeconds: plan.sampleEverySeconds,
+      widthPx: plan.inferenceWidth
+    },
+    `Sampled ${frames.length} frames from ${sourceName}`,
+    Date.now() - tA
+  );
+
+  progress.setStatus("scoring", `Scoring ${frames.length} frames (${capTier})`);
+  const tier = capTier === "low" ? "cloud" : "siglip-local";
+  const tB = Date.now();
+  const scored = await scoreFrames({
+    frames,
+    plan,
+    tier,
+    onProgress: (done, total) => progress.setProgress(0.25 + (done / total) * 0.35)
+  });
+  log.ai(
+    "frames.scored",
+    { count: scored.length, tier, cacheHit: false },
+    `Scored ${scored.length} frames via ${tier}`,
+    Date.now() - tB
+  );
+
+  await savePredictions({
+    videoHash,
+    scenarioSignature: await sha1String(planSignaturePayload(plan)),
+    sampleEverySeconds: plan.sampleEverySeconds,
+    frames: scored,
+    createdAt: Date.now()
+  });
+  await trimCache();
+  return scored;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Merge highlights from multiple sources into one global timeline.
+ *
+ * v1.6.0 default policy ("time-fused"):
+ *   1. Sort all candidates by composite score, descending.
+ *   2. Greedily pick clips until total length reaches plan.targetShortSeconds.
+ *   3. Re-sort the final pick by source name + start time so the timeline
+ *      reads predictably.
+ *
+ * For "balanced" selection strategy we instead spread picks evenly:
+ *   - Walk each source's clips in time order
+ *   - Round-robin pick one from each source until budget exhausted
+ *
+ * MOMENT mode is a special case — the orchestrator passes pre-merged
+ * results and just wants the single best clip, so this function is a
+ * one-line winner-select.
+ */
+export function mergeAcrossSources(
+  perSource: ExecuteForSourceResult[],
+  plan: EditPlan,
+  mode: "plan" | "moment"
+): { highlights: Highlight[]; weakOnly: boolean; scoreMax: number } {
+  const all = perSource.flatMap((r) => r.highlights);
+  const scoreMax = perSource.reduce((acc, r) => Math.max(acc, r.scoreMax), 0);
+  const weakOnly =
+    perSource.length > 0 && perSource.every((r) => r.weakOnly || r.highlights.length === 0);
+
+  if (all.length === 0) {
+    return { highlights: [], weakOnly, scoreMax };
+  }
+
+  if (mode === "moment") {
+    // Single best clip across all sources.
+    const winner = [...all].sort((a, b) => b.score - a.score)[0];
+    return { highlights: [winner], weakOnly, scoreMax };
+  }
+
+  // Plan mode — merge to fit the target budget.
+  const budget = plan.targetShortSeconds;
+  const sorted = [...all].sort((a, b) => b.score - a.score);
+
+  let chosen: Highlight[];
+  if (plan.selectionStrategy === "balanced") {
+    // Round-robin across sources by descending score.
+    const bySource = new Map<string, Highlight[]>();
+    for (const h of sorted) {
+      const k = h.sourceId ?? "_";
+      if (!bySource.has(k)) bySource.set(k, []);
+      bySource.get(k)!.push(h);
+    }
+    const queues = Array.from(bySource.values());
+    chosen = [];
+    let total = 0;
+    let any = true;
+    while (any && total < budget) {
+      any = false;
+      for (const q of queues) {
+        if (q.length === 0) continue;
+        const next = q.shift()!;
+        chosen.push(next);
+        total += next.end - next.start;
+        any = true;
+        if (total >= budget) break;
+      }
+    }
+  } else {
+    chosen = [];
+    let total = 0;
+    for (const h of sorted) {
+      if (total >= budget) break;
+      chosen.push(h);
+      total += h.end - h.start;
+    }
+  }
+
+  // Final visual order: group by source name (stable across renders),
+  // then by start time inside each source. Reads naturally on the
+  // timeline + plays in chronological chapters per source.
+  chosen.sort((a, b) => {
+    const sa = a.sourceId ?? "";
+    const sb = b.sourceId ?? "";
+    if (sa !== sb) return sa.localeCompare(sb);
+    return a.start - b.start;
+  });
+
+  return { highlights: chosen, weakOnly, scoreMax };
+}
