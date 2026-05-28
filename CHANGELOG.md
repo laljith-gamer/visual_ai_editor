@@ -4,6 +4,62 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.5.2] — 2026-05-28
+
+### Fixed — "Planner returned an unknown mode" crash on context-update turns
+
+When a user said something like "there is a defeated title in this
+video" or "this is a podcast", the planner LLM occasionally produced
+a bare `{ message: "..." }` payload without a `mode` field. The agent
+route then bubbled the dev-string `Planner returned an unknown mode
+"undefined".` straight into the chat. v1.5.2 makes the route
+defensive: every turn now either advances the plan or asks one focused
+question — it never crashes.
+
+### Added — `acknowledge` mode for context-update turns
+
+A fifth intent mode joins `plan` / `moment` / `extract` / `clarify`.
+The planner now classifies messages that *describe the footage* (as
+opposed to requesting an edit) into `acknowledge`. The assistant
+confirms it heard, optionally surfaces an inferred chip (for example
+turning *"there's a defeated title"* into an `avoid: defeat title
+cards` chip), and leaves the existing plan and clip state untouched.
+The pipeline does **not** run on these turns.
+
+Eight turn shapes are now first-class in the planner prompt with
+worked examples: initial plan, vague plan, moment, extract,
+refinement, context update, confirmation, clarify/help. The LLM picks
+exactly one — no regex on user input.
+
+### Added — `resolveMode()` defensive resolver in the agent route
+
+`app/api/agent/route.ts` now resolves the mode from the JSON envelope
+the LLM produced rather than reading `parsed.mode` blindly. Resolution
+order:
+
+1. `mode` is one of the five known values → use it.
+2. `extractRange` present → `extract`.
+3. Non-empty `questions` array → `clarify`.
+4. `momentDescription` string → `moment`.
+5. `plan` or `planPatch` present → `plan`.
+6. `message`-only payload → `acknowledge` (treat as a conversational
+   reply that should leave plan state alone).
+7. Truly empty payload → `clarify` (ask the user to repeat).
+
+The trailing `502 Planner returned an unknown mode "..."` response is
+gone; in the unreachable fallback we now ask a friendly clarify
+question instead. The resolver only inspects the LLM's own structured
+output — it never reads the user's text — so the project-wide rule of
+"no regex/keyword heuristics on user input" still holds.
+
+### Changed — Inferred chips accumulate across acknowledge turns
+
+When acknowledge turns produce inferred fields (`{ field: "avoid",
+value: ["defeat title cards"], reason: "..." }`), they are merged
+with the existing chip set rather than replacing it, deduped by
+`(field, JSON.stringify(value))`, and capped at 8 entries so the chip
+row stays readable across long sessions.
+
 ## [1.5.1] — 2026-05-27
 
 ### Performance — Render is 3-5x faster

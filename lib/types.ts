@@ -218,10 +218,20 @@ export interface PredictionsCacheEntry {
 // Conversational planner (NEW in v1.1.0)
 // ---------------------------------------------------------------------
 
-/** Intent modes the planner can return. v1.5.0 added "extract" for
- *  time-bound verbatim slices ("first 2 min", "last 90 seconds",
- *  "from 0:30 to 1:45"). */
-export type IntentMode = "plan" | "moment" | "extract" | "clarify";
+/** Intent modes the planner can return.
+ *  v1.5.0 added "extract" for time-bound verbatim slices ("first 2 min",
+ *  "last 90 seconds", "from 0:30 to 1:45").
+ *  v1.5.2 added "acknowledge" for context-update turns where the user
+ *  is informing the AI about the footage rather than asking for a new
+ *  plan ("there's a defeated title", "this is 4K", "the audio is bad").
+ *  In acknowledge mode the existing plan and clip state stay untouched
+ *  and the assistant just confirms it heard. */
+export type IntentMode =
+  | "plan"
+  | "moment"
+  | "extract"
+  | "acknowledge"
+  | "clarify";
 
 /** A field the planner inferred from context (rather than the user
  *  stating it explicitly). Surfaced in the UI so the user can override. */
@@ -330,6 +340,21 @@ export type AgentResponse =
       message: string;
       /** 1–2 questions to ask before running the pipeline. */
       questions: ClarifyQuestion[];
+      warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
+    }
+  | {
+      /** v1.5.2 — context-update turn. The user is informing the AI
+       *  about the footage ("there's a defeated title", "this is 4K",
+       *  "the audio is bad", "this is from a podcast") rather than
+       *  asking for a new plan. The assistant just confirms it heard
+       *  and the existing plan / clips stay untouched. */
+      mode: "acknowledge";
+      message: string;
+      /** Optional inferred fields the planner extracted from the note
+       *  (e.g., field="avoid", value="defeat title cards"). The UI may
+       *  surface these as overridable chips. */
+      inferred: InferredField[];
       warnings: string[];
       quotaWarning?: { usage: number; limit: number; fraction: number };
     }

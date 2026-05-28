@@ -33,6 +33,7 @@ import type {
   AgentResponse,
   EditPlan,
   FrameScore,
+  InferredField,
   IntentMode
 } from "@/lib/types";
 
@@ -495,6 +496,57 @@ export default function Home() {
           data.userTier
         ) {
           setUserTier(data.userTier);
+        }
+
+        // ---- ACKNOWLEDGE (v1.5.2) -----------------------------------------
+        // Context-update turn. The user told us a fact about the
+        // footage rather than asking for a new edit ("there's a defeat
+        // title", "this is 4K", "the audio is bad"). We confirm we
+        // heard them, surface any inferred chips, and leave the plan,
+        // clips, and pipeline state exactly as they were. We deliberately
+        // do NOT touch `mode` in the store — the user's last action mode
+        // (plan/moment) stays active so a follow-up refinement still
+        // patches the right plan.
+        if (data.mode === "acknowledge") {
+          if (data.inferred && data.inferred.length > 0) {
+            // Merge with any existing chips so we accumulate context
+            // across multiple acknowledge turns instead of clobbering.
+            // Dedupe by (field, value) using JSON.stringify so array
+            // values like ["defeat title cards"] compare correctly.
+            const existing = useEditorStore.getState().inferred ?? [];
+            const seen = new Set(
+              existing.map((c) => `${c.field}::${JSON.stringify(c.value)}`)
+            );
+            const combined: InferredField[] = [...existing];
+            for (const ch of data.inferred) {
+              const key = `${ch.field}::${JSON.stringify(ch.value)}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                combined.push(ch);
+              }
+            }
+            // Cap at 8 so the chip row doesn't grow unbounded.
+            setInferred(combined.slice(-8));
+          }
+          pushMessage({
+            role: "assistant",
+            content: data.message || "Got it \u2014 I'll keep that in mind."
+          });
+          // Status reflects whatever the previous turn left us in. If
+          // there's an active plan we stay "ready", otherwise idle.
+          const hasReadyClips =
+            useEditorStore.getState().highlights.length > 0;
+          setStatus(hasReadyClips ? "ready" : "idle", undefined);
+          logSession.ai(
+            "context.note",
+            {
+              note: userRequest.slice(0, 200),
+              inferred: data.inferred ?? []
+            },
+            `Noted context: ${userRequest.slice(0, 60)}`,
+            plannerMs
+          );
+          return;
         }
 
         // ---- EXTRACT mode (v1.5.0) ----------------------------------------

@@ -26,6 +26,7 @@ import type {
   EditPlan,
   ExtractRange,
   InferredField,
+  IntentMode,
   PlanPatch,
   RateLimitDecision,
   UserTier
@@ -140,8 +141,30 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const mode = parsed.mode;
+  // v1.5.2 — defensively resolve the mode. If the LLM omitted or
+  // mistyped the mode field, infer it from the JSON envelope it DID
+  // send (extractRange present → "extract", questions present → "clarify",
+  // etc.). This NEVER inspects the user's text — only the model's own
+  // structured output — so the "no regex/keyword heuristics on user
+  // input" rule still holds. Picking a reasonable mode beats crashing.
+  const mode: IntentMode = resolveMode(parsed);
   const userTier = normalizeUserTier(parsed.userTier);
+
+  // ---- ACKNOWLEDGE (v1.5.2) -----------------------------------------
+  // Context-update turn. The user told us a fact about the footage
+  // ("there's a defeat title", "this is 4K", "audio is bad", etc.).
+  // We confirm we heard it and leave the existing plan / clip state
+  // untouched. The pipeline does NOT run on this turn.
+  if (mode === "acknowledge") {
+    const inferred = normalizeInferred(parsed.inferred);
+    return NextResponse.json<AgentResponse>({
+      mode: "acknowledge",
+      message: stringOr(parsed.message, "Got it — I'll keep that in mind."),
+      inferred,
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
+    });
+  }
 
   // ---- EXTRACT (v1.5.0) ---------------------------------------------
   // Verbatim time-slice mode. No scoring, no scenarios required. The
@@ -255,13 +278,18 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  return NextResponse.json<AgentResponse>(
-    {
-      mode: "error",
-      error: `Planner returned an unknown mode "${String(mode)}".`
-    },
-    { status: 502 }
-  );
+  // v1.5.2 — Unreachable in normal flow because resolveMode() always
+  // returns a valid IntentMode, but TypeScript can't prove that and we
+  // never want to crash on a future mode either. Surface a friendly
+  // clarify question instead of a dev-string error. The user keeps
+  // their existing plan and just gets asked what they wanted.
+  return NextResponse.json<AgentResponse>({
+    mode: "clarify",
+    message: "I didn't quite catch that — what would you like me to do?",
+    questions: [defaultClarifyQuestion(body.currentPlan ?? null)],
+    warnings,
+    ...(quotaWarning ? { quotaWarning } : {})
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -336,6 +364,67 @@ interface ResolveOk {
 interface ResolveErr {
   ok: false;
   missing: string[];
+}
+
+/**
+ * v1.5.2 — Defensively figure out the mode the planner intended.
+ *
+ * The system prompt instructs the LLM to always emit a "mode" field
+ * with one of five values (plan / moment / extract / acknowledge /
+ * clarify). In practice, frontier models occasionally drop the field
+ * or invent a synonym, especially on context-update turns ("there's
+ * a defeat title in this video") where the LLM just produces a bare
+ * { message: "..." } and forgets the envelope.
+ *
+ * Before v1.5.2 that crashed the route with
+ *   Planner returned an unknown mode "undefined".
+ * which was leaking dev-strings straight into the chat UI.
+ *
+ * This helper rescues the turn by inspecting the JSON the LLM DID
+ * send. It only looks at the model's own structured output — it does
+ * NOT read the user's text — so the project-wide "no regex/keyword
+ * heuristics on user input" rule is preserved.
+ *
+ * Resolution order (most specific first):
+ *   1. mode is one of the five known values → use it.
+ *   2. extractRange present → "extract".
+ *   3. non-empty questions array → "clarify".
+ *   4. momentDescription string → "moment".
+ *   5. plan or planPatch present → "plan".
+ *   6. message-only payload → "acknowledge" (treat as a simple
+ *      conversational reply that should leave state alone).
+ *   7. Truly empty payload → "clarify" (ask the user to repeat).
+ */
+function resolveMode(parsed: Record<string, unknown>): IntentMode {
+  const raw = parsed.mode;
+  if (
+    raw === "plan" ||
+    raw === "moment" ||
+    raw === "extract" ||
+    raw === "acknowledge" ||
+    raw === "clarify"
+  ) {
+    return raw;
+  }
+  if (parsed.extractRange && typeof parsed.extractRange === "object") {
+    return "extract";
+  }
+  if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+    return "clarify";
+  }
+  if (
+    typeof parsed.momentDescription === "string" &&
+    parsed.momentDescription.trim()
+  ) {
+    return "moment";
+  }
+  if (parsed.plan || parsed.planPatch) {
+    return "plan";
+  }
+  if (typeof parsed.message === "string" && parsed.message.trim()) {
+    return "acknowledge";
+  }
+  return "clarify";
 }
 
 function resolvePlan(args: {
