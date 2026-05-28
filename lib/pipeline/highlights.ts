@@ -67,27 +67,40 @@ export function buildHighlights(args: BuildArgs): BuildResult {
 
   // v1.7.1 — Quality-floor selection path.
   //
-  // When the user hasn't named a duration the pipeline doesn't try to
-  // hit a budget. It just keeps every candidate above the quality
-  // floor, sorted chronologically, capped by config so the worst-case
-  // a 30-min source can't spawn 25 clips. The user can later say
-  // "make it 30s" to flip into the budgeted path; existing curation
-  // is then trimmed (cheaply, via cache) rather than re-scored.
+  // v1.7.2 — Progressive-floor fallback. Real-world SigLIP scores on
+  // user footage commonly land in the 0.45-0.65 band; the prior
+  // implementation's hard 0.55 cutoff was rejecting genuine matches
+  // and dropping runs to a single weak clip via forceMinFallback.
+  // We now try three tiers in order:
+  //   1. base floor          → preferred matches
+  //   2. base floor - 0.10   → soft matches (weakOnly = true)
+  //   3. top-N regardless    → borderline matches (weakOnly = true,
+  //                            N = ceil(scoredCount / 4) capped at
+  //                            maxClipsWithoutBudget, min 2)
+  // Each tier's candidates still flow through the same overlap +
+  // duration caps so we never explode beyond maxClipsWithoutBudget.
   if (!args.plan.userSpecifiedDuration) {
-    const floor = args.plan.qualityFloor ?? PLAN_DEFAULTS.qualityFloor;
-    const passing = scored.filter((s) => s.score >= floor);
+    const baseFloor = args.plan.qualityFloor ?? PLAN_DEFAULTS.qualityFloor;
 
-    if (passing.length === 0) {
-      // Nothing cleared the floor — for novices we still want to give
-      // them something back, so reuse the existing weak-only fallback.
-      return forceMinFallback(args, scored);
+    let pool = scored.filter((s) => s.score >= baseFloor);
+    let weakOnly = false;
+    if (pool.length === 0) {
+      pool = scored.filter((s) => s.score >= baseFloor - 0.1);
+      weakOnly = true;
+    }
+    if (pool.length === 0) {
+      const fallbackN = Math.max(
+        2,
+        Math.min(
+          PLAN_DEFAULTS.maxClipsWithoutBudget,
+          Math.ceil(scored.length / 4)
+        )
+      );
+      pool = [...scored].sort((a, b) => b.score - a.score).slice(0, fallbackN);
+      weakOnly = true;
     }
 
-    // Pick top-N by score, non-overlapping, then sort by start time
-    // for the timeline. The cap (maxClipsWithoutBudget) and total-
-    // seconds cap (maxTotalSecondsWithoutBudget) keep the runaway
-    // case from breaking ffmpeg.wasm.
-    const ranked = [...passing].sort((a, b) => b.score - a.score);
+    const ranked = [...pool].sort((a, b) => b.score - a.score);
     const selectedQ: typeof scored = [];
     let totalQ = 0;
     for (const s of ranked) {
@@ -109,12 +122,14 @@ export function buildHighlights(args: BuildArgs): BuildResult {
         start: round2(s.candidate.start),
         end: round2(s.candidate.end),
         score: round2(s.score),
-        reason: s.verdict?.reason ?? "Strong visual match",
+        reason: weakOnly
+          ? `Best available match (top score ${round2(s.score)}) \u2014 try a more specific prompt or use the briefing`
+          : s.verdict?.reason ?? "Strong visual match",
         label: s.verdict?.label,
         transition: i === 0 ? "none" : args.plan.transition,
         confidence: assessConfidence(s.score)
       })),
-      weakOnly: false,
+      weakOnly,
       consideredCount
     };
   }

@@ -369,6 +369,19 @@ export default function Home() {
         if (merged.weakOnly) {
           summary +=
             ` Heads up \u2014 match confidence is on the low side (top score ${merged.scoreMax.toFixed(2)}).`;
+          // v1.7.2 — when there's a recent briefing in scope, point the
+          // user at the cheaper / better path. The briefing already
+          // identified strong moments; promote-mode lifts them onto
+          // the timeline without another vision call.
+          const lastBriefing = useEditorStore.getState().lastBriefing;
+          if (
+            lastBriefing &&
+            lastBriefing.bestParts.length > 0 &&
+            lastBriefing.sourceId === firstSourceId
+          ) {
+            summary +=
+              ` Want me to use the ${lastBriefing.bestParts.length} moments I identified earlier instead? Say "use the briefing".`;
+          }
         }
         pushMessage({ role: "assistant", content: summary });
 
@@ -515,7 +528,28 @@ export default function Home() {
               }))
             : undefined,
           memory,
-          recentActivity: recentActivity || undefined
+          recentActivity: recentActivity || undefined,
+          // v1.7.2 — surface the most recent briefing so the planner
+          // can emit `mode: "promote"` when the user says things like
+          // "clip those", "use the second one", "make a 30s reel of
+          // these". The planner sees each best part by id and time
+          // range; the client converts back to highlights without
+          // another vision call. Limited to bestParts only — the
+          // overview text is irrelevant for promotion decisions and
+          // would just bloat the prompt.
+          lastBriefing: storeNow.lastBriefing
+            ? {
+                sourceId: storeNow.lastBriefing.sourceId,
+                sourceName: storeNow.lastBriefing.sourceName,
+                bestParts: storeNow.lastBriefing.bestParts.map((p) => ({
+                  id: p.id,
+                  startSeconds: p.startSeconds,
+                  endSeconds: p.endSeconds,
+                  label: p.label,
+                  why: p.why
+                }))
+              }
+            : undefined
         };
         const t0 = Date.now();
         const planResp = await fetch("/api/agent", {
@@ -1035,7 +1069,7 @@ export default function Home() {
             // AssistantPanel can render the structured card. The
             // visible content is the overview text — the card adds
             // bestParts + followUps below it.
-            pushMessage({
+            const briefingMsg = pushMessage({
               role: "assistant",
               content: json.overview || "Here's what I see.",
               attachment: {
@@ -1044,6 +1078,19 @@ export default function Home() {
                 followUps: json.followUps ?? [],
                 sourceId: active.id
               }
+            });
+
+            // v1.7.2 — store the briefing so future turns can promote
+            // its bestParts directly into timeline clips without
+            // re-running vision. Keyed by the chat message id so the
+            // user can refer to it ("clip those") and the planner can
+            // see the parts in the AgentRequest's lastBriefing block.
+            useEditorStore.getState().setLastBriefing({
+              id: briefingMsg.id,
+              sourceId: active.id,
+              sourceName: active.meta.name,
+              bestParts: json.bestParts ?? [],
+              ts: Date.now()
             });
 
             setStatus(
@@ -1130,6 +1177,101 @@ export default function Home() {
               durationSec: built[0].end - built[0].start
             },
             `Extracted ${built[0].start.toFixed(1)}s \u2192 ${built[0].end.toFixed(1)}s verbatim`,
+            plannerMs
+          );
+          return;
+        }
+
+        // ---- PROMOTE mode (v1.7.2) ----------------------------------------
+        // The user asked us to use the briefing's identified moments as
+        // actual timeline clips ("clip those", "use the second one",
+        // "make a 30s reel of these"). No new vision call, no SigLIP
+        // run — the briefing already pinned precise (start, end) for
+        // each best part, so we just convert and merge.
+        if (data.mode === "promote") {
+          const storeState = useEditorStore.getState();
+          const briefing = storeState.lastBriefing;
+          if (!briefing || briefing.bestParts.length === 0) {
+            pushMessage({
+              role: "assistant",
+              content:
+                "I don't have a recent briefing in scope to clip from. Ask me to describe the video first."
+            });
+            setStatus(
+              storeState.highlights.length > 0 ? "ready" : "idle",
+              undefined
+            );
+            return;
+          }
+          if (data.inferred && data.inferred.length > 0) {
+            setInferred(data.inferred);
+          }
+          const result = useEditorStore.getState().promoteBriefingParts({
+            partIds: data.partIds,
+            targetSeconds: data.targetSeconds,
+            op: data.op ?? "append"
+          });
+
+          if (result.added === 0 && result.total === 0) {
+            pushMessage({
+              role: "assistant",
+              content:
+                "Couldn't promote any briefing parts \u2014 they may not match the requested ids."
+            });
+            setStatus(
+              useEditorStore.getState().highlights.length > 0 ? "ready" : "idle",
+              undefined
+            );
+            return;
+          }
+
+          const finalTimeline = useEditorStore.getState().highlights;
+          const total = finalTimeline.reduce(
+            (acc, h) => acc + (h.end - h.start),
+            0
+          );
+
+          // Switch active source to the briefing's source so the
+          // preview pane lines up with the new clips.
+          if (
+            briefing.sourceId &&
+            briefing.sourceId !== useEditorStore.getState().activeSourceId
+          ) {
+            const sources = useEditorStore.getState().sources;
+            if (sources.some((s) => s.id === briefing.sourceId)) {
+              useEditorStore.getState().setActiveSource(briefing.sourceId);
+            }
+          }
+
+          const skippedNote =
+            result.skipped > 0
+              ? ` (${result.skipped} skipped \u2014 overlap with existing clips)`
+              : "";
+          const opVerb = data.op === "replace" ? "Replaced" : "Added";
+          pushMessage({
+            role: "assistant",
+            content:
+              data.message ||
+              `${opVerb} ${result.added} clip${result.added === 1 ? "" : "s"} from the briefing${skippedNote}. Timeline is now ${finalTimeline.length} clip${finalTimeline.length === 1 ? "" : "s"}, ${total.toFixed(1)}s total.`
+          });
+
+          setStatus("ready", undefined);
+          setProgress(1);
+          logSession.ai(
+            "promote.applied",
+            {
+              briefingId: briefing.id,
+              partsRequested:
+                Array.isArray(data.partIds) && data.partIds.length > 0
+                  ? data.partIds.length
+                  : briefing.bestParts.length,
+              added: result.added,
+              skipped: result.skipped,
+              total: result.total,
+              op: data.op ?? "append",
+              targetSeconds: data.targetSeconds
+            },
+            `Promoted ${result.added} briefing parts to the timeline`,
             plannerMs
           );
           return;

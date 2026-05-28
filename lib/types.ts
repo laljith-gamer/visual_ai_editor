@@ -345,6 +345,7 @@ export type IntentMode =
   | "edit"
   | "describe"
   | "briefing"
+  | "promote"
   | "acknowledge"
   | "clarify";
 
@@ -482,6 +483,22 @@ export interface AgentRequest {
    *  Built client-side via `summarizeRecentActivity()`. Keeps the prompt
    *  small while letting the LLM reason about implicit user preferences. */
   recentActivity?: string;
+  /** v1.7.2 — When the user has just received a briefing card, the
+   *  client passes the structured best parts here so the planner can
+   *  reference them by id ("clip part 02", "use the third one") and
+   *  emit `mode: "promote"`. Omitted when there's no recent briefing
+   *  in scope. The client's lastBriefing slot is the source of truth. */
+  lastBriefing?: {
+    sourceId: string;
+    sourceName?: string;
+    bestParts: Array<{
+      id: string;
+      startSeconds: number;
+      endSeconds: number;
+      label: string;
+      why: string;
+    }>;
+  };
   /** v1.3.0 — classified user tier (novice | advanced). Lets the
    *  planner bias mode/strategy toward what the prompt actually
    *  signals about the user's experience level. */
@@ -575,6 +592,36 @@ export type AgentResponse =
       question: string;
       /** Short, warm one-liner shown in chat WHILE the vision call is
        *  in flight. The actual answer arrives as a follow-up message. */
+      message: string;
+      inferred: InferredField[];
+      warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
+    }
+  | {
+      /** v1.7.2 — promote briefing best parts into actual timeline
+       *  clips. The user has previously seen a briefing card and is
+       *  now asking us to "use those moments" / "clip those" / "make
+       *  a 30s reel of them". The client reads its stored
+       *  lastBriefing.bestParts (each already carries a precise
+       *  start/end on the source video, courtesy of the prior vision
+       *  call) and converts them directly to highlights via
+       *  mergeHighlights. NO SigLIP scoring; NO new vision call.
+       *  This is the path that makes the briefing's identified
+       *  moments first-class clips instead of throwaway data. */
+      mode: "promote";
+      /** Specific best-part IDs to promote. Empty / undefined means
+       *  "all of them". When provided, only the matching parts from
+       *  lastBriefing are kept. */
+      partIds?: string[];
+      /** When set, trim the result to fit this many seconds total.
+       *  Sets userSpecifiedDuration = true downstream. The trim picks
+       *  highest-confidence (briefing-order) parts first. */
+      targetSeconds?: number;
+      /** "append" (default) preserves existing timeline clips and
+       *  folds the briefing parts in. "replace" wipes the timeline
+       *  first — used when the user said "actually let's use those
+       *  instead". */
+      op?: "append" | "replace";
       message: string;
       inferred: InferredField[];
       warnings: string[];
