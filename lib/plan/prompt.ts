@@ -341,6 +341,53 @@ Pair every briefing turn with a "factsToRemember" entry capturing the user's pre
 
 So next time they say "best parts" by itself, you can lean toward briefing again.
 
+## promote  (NEW v1.7.2)
+
+The user has just received a briefing card (you'll see its best parts in the user-prompt context under "Last briefing best parts") and is now asking us to TURN THOSE MOMENTS INTO ACTUAL CLIPS on the timeline. Triggers:
+
+  - "clip those" / "clip these" / "use those" / "use these" / "use the briefing"
+  - "yes" / "go" / "do it" / "make a reel" — when the previous assistant turn was a briefing AND the user has not yet acted on it
+  - "make a 30s reel of these" / "15s reel" / "tighter version of those" — promotion + duration
+  - "use the second one" / "just the third" / "drop the last one" / "first two only" — promotion of a SUBSET, by 1-indexed position in the briefing's best-parts list
+  - Tapping any of the briefing's followUp chips ("Create a 15s highlight reel", "Show me the chorus closer") — those become user messages; you should still classify as promote
+  - "actually let's use those instead" — promote with op = "replace" (wipes the existing timeline)
+
+Output:
+  "mode": "promote"
+  "partIds": [ "bp_xxx", "bp_yyy" ]    // OPTIONAL. Empty/undefined = ALL best parts.
+                                        // Map "second one" → 2nd entry's id, etc.
+  "targetSeconds": 30                   // OPTIONAL. When set, the client trims the
+                                        // chosen parts to fit; flips userSpecifiedDuration
+                                        // = true so the soft over-budget notice works.
+  "op": "append" | "replace"            // OPTIONAL. Default "append" (preserve existing
+                                        // timeline). Use "replace" only when the user
+                                        // explicitly said "instead of those" / "start over".
+  "message": "<one short, warm confirmation>"
+
+NEVER use promote when:
+  - There is no "Last briefing best parts" block in the user prompt context. Fall back to plan / moment / extract — there's nothing to promote.
+  - The user wants to ADD NEW clips that aren't in the briefing ("also find the goals") — that's a plan-append, not a promotion.
+  - The user wants to QUESTION a specific best part ("what's in the second one?") — that's describe mode if the part is on the timeline, otherwise briefing again with a sub-range.
+
+Examples:
+  user: "clip those"
+       → mode: "promote", op: "append",
+         message: "Adding those four moments to the timeline."
+
+  user: "make a 15s reel of these"
+       → mode: "promote", targetSeconds: 15, op: "replace",
+         message: "Tightening to 15s using the briefing moments."
+
+  user: "use the second and third"     (briefing has 4 parts: bp_a bp_b bp_c bp_d)
+       → mode: "promote", partIds: ["bp_b", "bp_c"], op: "append",
+         message: "Pulled those two onto the timeline."
+
+  user: "actually let's use those instead"  (timeline already has clips)
+       → mode: "promote", op: "replace",
+         message: "Replaced the timeline with the briefing moments."
+
+Why this mode exists: the briefing already paid for a vision call to identify exact start/end timestamps for each best part. Re-running SigLIP scoring against an open-ended scenario like "combat" almost always produces fewer and weaker clips than the briefing's curated list. Promote skips that whole loop — the clips you saw in the card become the clips on the timeline, exactly.
+
 ## clarify
 
 The request is ambiguous AND you cannot fill the gaps responsibly. Ask ONE focused question — conversationally, in plain English. If the user is asking what YOU need ("what info do you want?", "help"), this is clarify mode — answer with a question, not a plan.
@@ -791,6 +838,21 @@ export function buildPlannerUserPrompt(args: {
   facts?: MemoryFact[];
   /** Optional summary of recent activity events. See lib/log/summarize.ts. */
   recentActivity?: string;
+  /** v1.7.2 — most recent briefing (when in scope). Rendered as an
+   *  authoritative list of best parts the user has already seen, so
+   *  the planner can emit `mode: "promote"` when they say "clip
+   *  those", "use the second one", etc. */
+  lastBriefing?: {
+    sourceId: string;
+    sourceName?: string;
+    bestParts: Array<{
+      id: string;
+      startSeconds: number;
+      endSeconds: number;
+      label: string;
+      why: string;
+    }>;
+  };
 }): string {
   const lines: string[] = [];
 
@@ -908,6 +970,34 @@ export function buildPlannerUserPrompt(args: {
   }
 
   // --- Current user turn --------------------------------------------
+  // --- Last briefing (v1.7.2) ---------------------------------------
+  // When the user has just received a briefing card, surface its best
+  // parts as authoritative context. The planner can emit
+  // `mode: "promote"` to convert these directly into clips without
+  // re-running vision. Each part has a stable id, start/end on the
+  // active source, and the briefing's own one-line "why".
+  if (
+    args.lastBriefing &&
+    args.lastBriefing.bestParts &&
+    args.lastBriefing.bestParts.length > 0
+  ) {
+    const lb = args.lastBriefing;
+    lines.push(
+      `Last briefing best parts (eligible for "promote" mode \u2014 the user has already seen these in chat):`
+    );
+    if (lb.sourceName) {
+      lines.push(`  Source: "${lb.sourceName}" (id: ${lb.sourceId})`);
+    }
+    for (let i = 0; i < lb.bestParts.length; i++) {
+      const p = lb.bestParts[i];
+      const dur = (p.endSeconds - p.startSeconds).toFixed(1);
+      lines.push(
+        `  ${(i + 1).toString().padStart(2, "0")}. id=${p.id} ${formatTime(p.startSeconds)}\u2013${formatTime(p.endSeconds)} (${dur}s) — ${p.label}`
+      );
+    }
+    lines.push("");
+  }
+
   const latest = args.messages[args.messages.length - 1];
   const userText = latest?.role === "user" ? latest.content : "";
   lines.push("");
@@ -915,4 +1005,15 @@ export function buildPlannerUserPrompt(args: {
   lines.push(`<user_request>\n${userText}\n</user_request>`);
 
   return lines.join("\n");
+}
+
+
+/** v1.7.2 — Format seconds as mm:ss for the lastBriefing block in the
+ *  planner prompt. Mirrors the formatT helper used in editor chat
+ *  copy; kept local so prompt.ts has zero runtime dependencies. */
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
