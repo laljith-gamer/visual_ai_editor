@@ -160,3 +160,54 @@ export async function geminiVisionJson(
 
 /** Re-export the classifier so the agent route can format friendlier errors. */
 export { isTransientError };
+
+
+
+/**
+ * Multi-image vision call. Takes a single text prompt + N inline images
+ * (typically 3–8 frames sampled from one clip) and asks the model to
+ * answer a natural-language question about what's happening across them.
+ *
+ * Used by the v1.6.4 "describe" intent so users can chat about any clip
+ * on the timeline ("what happens here?", "where does she enter the
+ * frame?", "is this the right scene?") and get a grounded answer
+ * derived from the actual pixels rather than a hallucination.
+ *
+ * The fallback chain + retry logic is identical to geminiVisionJson —
+ * the only difference is the parts list, which carries multiple
+ * inlineData entries instead of one. Models in the chain all accept
+ * multi-image input.
+ */
+export async function geminiMultiImageJson(
+  prompt: string,
+  images: Array<{ base64: string; mimeType?: string }>,
+  options: { temperature?: number } = {}
+): Promise<string> {
+  if (images.length === 0) {
+    throw new Error("geminiMultiImageJson called with zero images");
+  }
+  return withFallback(async (modelName) => {
+    const model = getModel(modelName);
+    const result = await model.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            ...images.map((img) => ({
+              inlineData: {
+                mimeType: img.mimeType ?? "image/jpeg",
+                data: img.base64
+              }
+            }))
+          ]
+        }
+      ],
+      generationConfig: {
+        temperature: options.temperature ?? 0.3,
+        responseMimeType: "application/json"
+      }
+    });
+    return result.response.text();
+  });
+}

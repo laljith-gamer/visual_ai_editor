@@ -307,12 +307,18 @@ export interface PredictionsCacheEntry {
  *  v1.6.1 added "edit" for direct timeline manipulations on existing
  *  clips ("trim first 30s", "drop 0:30 to 0:45", "split this clip",
  *  "reset video 2"). Distinct from "extract" which creates a NEW clip
- *  from raw video — "edit" only mutates clips already on the timeline. */
+ *  from raw video — "edit" only mutates clips already on the timeline.
+ *  v1.6.4 added "describe" for chat Q&A about a specific clip ("what
+ *  happens here?", "where does she enter the frame?", "describe this
+ *  scene"). The client extracts ~6 frames from the clip and calls
+ *  /api/vision/clip; the answer is rendered back into chat. Pipeline
+ *  does NOT run; existing plan + clips stay untouched. */
 export type IntentMode =
   | "plan"
   | "moment"
   | "extract"
   | "edit"
+  | "describe"
   | "acknowledge"
   | "clarify";
 
@@ -434,6 +440,16 @@ export interface AgentRequest {
   /** v1.6.1 — id of the clip the user has selected on the timeline.
    *  Lets "split this clip" / "drop the selected clip" resolve cleanly. */
   selectedClipId?: string | null;
+  /** v1.6.4 — compact list of clips currently on the timeline so the
+   *  planner can resolve phrases like "clip 2" / "this clip" to a
+   *  clipId for describe / edit modes. Indexed in display order. */
+  timelineClips?: Array<{
+    id: string;
+    start: number;
+    end: number;
+    sourceId?: string;
+    label?: string;
+  }>;
   /** Cross-turn memory chips. */
   memory?: SessionMemory;
   /** Compact summary of recent activity events for the planner.
@@ -501,6 +517,38 @@ export type AgentResponse =
        *  mutations of the highlights array. */
       mode: "edit";
       operations: EditOperation[];
+      message: string;
+      inferred: InferredField[];
+      warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
+    }
+  | {
+      /** v1.6.4 — clip-level Q&A. The user asked the AI editor to look
+       *  at a specific clip and answer a question about it. The client
+       *  resolves the target into a (sourceId, start, end) range,
+       *  extracts ~6 frames, and calls /api/vision/clip with the
+       *  question. The vision response is then pushed back into chat
+       *  as the assistant message. The plan + clip state stay
+       *  untouched on this turn. */
+      mode: "describe";
+      /** Which clip / range the question is about. The LLM emits ONE
+       *  of these — clipId is preferred when the user is clearly
+       *  pointing at a timeline clip ("this clip", "the selected
+       *  one", or by index "clip 2"); the explicit range is used when
+       *  the user gave a time window directly ("describe 0:30 to
+       *  0:45"). */
+      target:
+        | { kind: "clip"; clipId: string }
+        | {
+            kind: "range";
+            sourceId?: string;
+            startSeconds: number;
+            endSeconds: number;
+          };
+      /** The user's verbatim question, forwarded to the vision call. */
+      question: string;
+      /** Short, warm one-liner shown in chat WHILE the vision call is
+       *  in flight. The actual answer arrives as a follow-up message. */
       message: string;
       inferred: InferredField[];
       warnings: string[];

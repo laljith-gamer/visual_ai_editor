@@ -4,6 +4,104 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.6.4] — 2026-05-28
+
+### Added — Chat about any clip on the timeline
+
+A seventh intent mode joins `plan` / `moment` / `extract` / `edit` /
+`acknowledge` / `clarify`. Users can now ask the AI editor questions
+about specific clips on the timeline and get answers grounded in the
+actual pixels rather than hallucinations from clip metadata. Examples:
+
+- *"what happens in this clip?"*
+- *"describe this scene"*
+- *"where does she enter the frame?"*
+- *"where does the dog leave the frame?"*
+- *"is this the wedding kiss?"*
+- *"walk me through clip 2"*
+- *"what's at 0:32?"* (resolves to a ±2s range in the active source)
+
+#### How it works end-to-end
+
+1. **Planner classifies the turn.** The LLM emits
+   `mode: "describe"` with a `target` (either `{ kind: "clip", clipId }`
+   or `{ kind: "range", sourceId?, startSeconds, endSeconds }`) and the
+   user's verbatim `question`.
+2. **Client resolves the target** to a `(blob, start, end)` triple,
+   handling cross-source clips by reading `clip.sourceId` from the
+   highlights array.
+3. **Client samples ~6 evenly-spaced frames** from the range using the
+   existing mediabunny `sampleFrames` helper at 384px width, then
+   base64-encodes each.
+4. **Client calls `POST /api/vision/clip`** with the question + frames
+   + clip range. The new endpoint runs through Gemini's multi-image
+   vision API.
+5. **Vision response** carries a one-paragraph plain-text description
+   plus optional structured fields: `enterTime`, `exitTime`,
+   `keyMoments[]`. The client renders these inline in chat with
+   timestamp cues ("…enters at 0:14, exits at 0:18").
+
+The "while-running" assistant message ("Looking at that clip…") is
+posted immediately so the chat doesn't appear frozen during the
+2-3 second vision round-trip.
+
+#### New files
+
+- `app/api/vision/clip/route.ts` — POST endpoint with the same
+  iron-session, multi-layer rate-limit, and Gemini circuit-breaker
+  conventions as the existing `vision/window` route. Hard caps:
+  ≤ 8 frames per request, ≤ 500-char question, ≤ 800-char response.
+  Treats question + sourceName as untrusted data to the model.
+
+#### Updated files
+
+- `lib/providers/gemini.ts` — new `geminiMultiImageJson()` helper.
+  Same fallback chain + retry semantics as `geminiVisionJson`, but
+  carries multiple `inlineData` parts in a single `parts` list.
+- `lib/types.ts` — `IntentMode` gains `"describe"`, `AgentResponse`
+  gains a discriminated `describe` branch with `target` + `question`.
+- `lib/plan/prompt.ts` — new `## describe (NEW v1.6.4)` mode docs
+  with worked examples for "this clip" / "clip 2" / "at 0:32"
+  resolution. Turn taxonomy now lists 10 patterns (was 9). New
+  in-doubt rule: "describe vs moment — describe ANSWERS a question
+  about an existing clip; moment LOCATES a new scene in raw video.
+  If the user used a question word, choose describe."
+- `lib/plan/prompt.ts` — `buildPlannerUserPrompt()` now ships a
+  per-clip listing in the user-prompt context so the LLM can resolve
+  "clip 2" to a real `clipId`. Capped at 12 entries.
+- `lib/types.ts` → `AgentRequest` gains `timelineClips[]`.
+- `app/api/agent/route.ts` — new describe handler with input
+  validation; `resolveMode()` recognises `target + question` as
+  describe even when the LLM forgets the `mode` field;
+  `normalizeDescribeTarget()` handles both `clip` and `range` shapes,
+  plus a tolerant fallback for older LLM output without an explicit
+  `kind`. When the LLM emits describe but the target is unparseable,
+  the route returns a friendly clarify question with quick-reply chips
+  instead of crashing.
+- `app/page.tsx` — new describe handler:
+  - Posts the "while-running" message immediately.
+  - Resolves target → source blob + range; gracefully handles "clip
+    no longer on timeline" and "source not loaded" cases.
+  - Samples frames via `sampleFrames` + `blobToBase64`.
+  - Calls `/api/vision/clip` and renders the answer with optional
+    timestamp cues.
+  - Logs `describe.answered` activity events for the planner's
+    next-turn memory.
+- `lib/ratelimit/index.ts` — `RateLimitScope` adds `vision-clip`
+  (reuses the `visionWindow` session config; promote to its own
+  bucket if usage warrants).
+
+#### Architectural note
+
+This feature follows the same separation of concerns as the rest of
+the editor:
+- The **planner LLM** classifies intent and resolves the target —
+  no regex on user input on the server.
+- The **vision LLM** answers from pixels — no metadata-only
+  hallucinations.
+- The **client** brokers the data flow.
+- The **store** is untouched (plan + clips stay exactly as they were).
+
 ## [1.6.3] — 2026-05-28
 
 ### Changed — Genre-agnostic priming

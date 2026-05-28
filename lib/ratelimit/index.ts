@@ -21,7 +21,7 @@ import type { RateLimitDecision } from "@/lib/types";
  * on subsequent calls; hard-tier requests are rejected with 503.
  */
 
-export type RateLimitScope = "agent" | "vision-window" | "vision-frame";
+export type RateLimitScope = "agent" | "vision-window" | "vision-frame" | "vision-clip";
 
 interface SessionLimiter {
   burst: Ratelimit | null;
@@ -73,6 +73,14 @@ function sessionConfigFor(scope: RateLimitScope): {
       return RATE_LIMITS.session.visionWindow;
     case "vision-frame":
       return RATE_LIMITS.session.visionFrame;
+    case "vision-clip":
+      // v1.6.4 — chat-driven clip Q&A. The cost profile sits between
+      // a vision-window call (one image) and vision-frame (many images
+      // per turn), so we reuse vision-window's session config rather
+      // than introduce a third tunable bucket. If the workload diverges
+      // (e.g. users start spamming describe), promote this to its own
+      // RATE_LIMITS.session.visionClip block.
+      return RATE_LIMITS.session.visionWindow;
   }
 }
 

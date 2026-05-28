@@ -133,6 +133,74 @@ Emit:
 
 If the user wants a slice AND wants you to pick the best part of that slice ("first 2 min and pick best", "last 90s, find the funniest moments") use plan mode with an extractRange attached to the plan instead.
 
+## describe  (NEW v1.6.4)
+
+The user wants the AI to look at a specific clip on the timeline and answer a natural-language question about what's IN it. They're not asking for an edit, a new plan, or a new clip — they want a grounded description of the pixels.
+
+Use this mode whenever the user asks "what" / "where" / "when" / "describe" / "tell me about" about a clip:
+  - "what happens in this clip?"
+  - "describe this scene"
+  - "where does she enter the frame?"
+  - "where does the dog leave the frame?"
+  - "what is happening at 0:32?"
+  - "is this the wedding kiss?"
+  - "walk me through clip 2"
+  - "tell me about the selected clip"
+  - "what's in the third clip?"
+
+Do NOT use describe mode when:
+  - The user wants to ADD or CHANGE clips ("find a similar moment" → moment / plan).
+  - The user wants to MUTATE clips ("trim", "drop", "split" → edit).
+  - The timeline is empty (Highlights on timeline: 0). Use clarify or plan instead — there's nothing to describe.
+
+Output:
+  "mode": "describe"
+  "target": { ... }       // see below
+  "question": "..."        // user's verbatim question, ≤ 500 chars
+  "message": "..."         // short, warm one-liner shown WHILE the vision call runs
+                            // (e.g. "Looking at that clip now…", "Watching frames 12–18s…")
+                            // The real answer arrives as a separate assistant message.
+
+Target shapes — emit ONE of these:
+
+  // (A) Pointing at a known clip on the timeline. Preferred when the
+  //     user said "this clip" / "the selected clip" / "clip 2" /
+  //     "the third clip". You see clip ids in the user-prompt context.
+  "target": { "kind": "clip", "clipId": "clip_xxx" }
+
+  // (B) The user named a time window directly ("describe 0:30 to 0:45",
+  //     "what's at 1:20?"). The client extracts frames from this range.
+  //     sourceId is optional — when omitted the client uses the active
+  //     source. For a single timestamp, pad ±2s around it.
+  "target": {
+    "kind": "range",
+    "sourceId"?: "src_xxx",
+    "startSeconds": <num>,
+    "endSeconds": <num>
+  }
+
+If the user said "this clip" and there IS a selected clip, target = { kind: "clip", clipId: <selected> }. If they said "this clip" with no selection, fall back to the first clip on the timeline.
+
+If the user said "clip N", look up the Nth clip in the user-prompt context's Highlights list (1-indexed) and emit target = { kind: "clip", clipId: <that one> }.
+
+Examples:
+  user: "what happens in this clip?"  (selected: clip_a1)
+       → mode: "describe", target: { kind: "clip", clipId: "clip_a1" },
+         question: "what happens in this clip?",
+         message: "Looking at that clip now…"
+  user: "where does she enter the frame in clip 2?"
+       → target: { kind: "clip", clipId: "<2nd clip's id>" },
+         question: "where does she enter the frame?",
+         message: "Watching for her entrance in clip 2…"
+  user: "describe what's at 1:20"
+       → target: { kind: "range", startSeconds: 78, endSeconds: 82 },
+         question: "describe what's happening here",
+         message: "Pulling frames around 1:20…"
+  user: "is this the wedding kiss?"  (selected: clip_b3)
+       → target: { kind: "clip", clipId: "clip_b3" },
+         question: "is this the wedding kiss?",
+         message: "Checking that clip…"
+
 ## edit  (NEW v1.6.1)
 
 The user wants a DIRECT TIMELINE MUTATION on clips that already exist on the timeline. Not a new analysis run, not a new clip from raw video — they're nudging the cuts you already made.
@@ -288,7 +356,26 @@ These are the 8 turn shapes you'll see, with examples and the right mode:
      trim N seconds, drop a range, split, reset.
      ⚠️ Requires existing clips on the timeline. If "Highlights on timeline: 0" in the user prompt context, do NOT emit edit — the user probably wants extract or plan instead.
 
-  7. CONTEXT UPDATE — they're telling you about the footage. (NEW v1.5.2)
+  7. DESCRIBE — clip-level Q&A about an EXISTING clip. (NEW v1.6.4)
+       "what happens in this clip?"
+       "describe this scene"
+       "where does she enter the frame?"
+       "where does the dog leave the frame?"
+       "what is happening at 0:32?"
+       "is this the wedding kiss?"
+       "walk me through clip 2"
+       "tell me about the selected clip"
+     → mode: "describe" with target + question. The client extracts
+     ~6 frames from the target clip and asks a vision model. The
+     answer is rendered into chat as a follow-up message.
+     ⚠️ Requires existing clips on the timeline (or a usable time
+     range from the user). If "Highlights on timeline: 0" AND the
+     user didn't give a time range, switch to plan / extract.
+     ⚠️ Distinct from MOMENT — moment LOCATES a new scene from the
+     raw source; describe just answers a question about an existing
+     clip.
+
+  8. CONTEXT UPDATE — they're telling you about the footage. (NEW v1.5.2)
        "there is a defeated title in this video"
        "this is shot on a phone"
        "the audio is bad"
@@ -298,7 +385,7 @@ These are the 8 turn shapes you'll see, with examples and the right mode:
        "I recorded this in 4K"
      → mode: "acknowledge". Existing plan stays. Pipeline does NOT run.
 
-  8. CONFIRMATION — short affirmative or "do it" reply to your previous question.
+  9. CONFIRMATION — short affirmative or "do it" reply to your previous question.
        "yes"
        "go"
        "do it"
@@ -310,7 +397,7 @@ These are the 8 turn shapes you'll see, with examples and the right mode:
         - If a plan already exists and the user is just confirming → emit a planPatch that's effectively a no-op (e.g., only the rationale changed) or "acknowledge" with a "Running it now" message. Prefer "acknowledge" so we don't accidentally overwrite working scenarios.
         - If there's no prior question or plan → "clarify" mode asking what they actually want.
 
-  9. CLARIFY / HELP — they're asking YOU something, not telling you what to make.
+  10. CLARIFY / HELP — they're asking YOU something, not telling you what to make.
        "what info do you need?"
        "help"
        "how does this work?"
@@ -324,6 +411,7 @@ When in doubt between two modes:
   - "plan" vs "clarify" — if you can fill the gaps from memory + inference responsibly, choose plan; otherwise clarify.
   - "edit" vs "extract" — if there are existing clips on the timeline AND the user wants to mutate them, choose edit. If there are no clips OR they want a fresh slice from raw video, choose extract.
   - "edit" vs "plan" (refinement) — edit is for mechanical operations (trim N seconds, drop range, split, reset). Plan refinement is for editorial nudges ("punchier", "longer", "vertical", "more action shots"). When in doubt, go with the more specific intent — if they mention numbers or ranges, it's almost always edit.
+  - "describe" vs "moment" — describe ANSWERS a question about a clip that already exists; moment LOCATES a new scene in the raw video. If the user used a question word ("what", "where", "describe", "tell me about", "is this"), choose describe.
 
 # Anti-loop rule (v1.6.2)
 
@@ -490,6 +578,16 @@ export function buildPlannerUserPrompt(args: {
   /** v1.6.1 — id of the clip the user has selected on the timeline.
    *  Lets "split this clip" / "drop the selected clip" resolve cleanly. */
   selectedClipId?: string | null;
+  /** v1.6.4 — full clip listing so the LLM can map "clip 2" / "this
+   *  clip" to a clipId for describe/edit modes. Indexed in display
+   *  order on the timeline. */
+  highlights?: Array<{
+    id: string;
+    start: number;
+    end: number;
+    sourceId?: string;
+    label?: string;
+  }>;
   memory?: SessionMemory;
   /** Optional summary of recent activity events. See lib/log/summarize.ts. */
   recentActivity?: string;
@@ -533,6 +631,26 @@ export function buildPlannerUserPrompt(args: {
       `Highlights on timeline: ${args.highlightsCount}` +
         (args.selectedClipId ? ` (selected: ${args.selectedClipId})` : "")
     );
+  }
+  // v1.6.4 — list each clip with index + range so the LLM can resolve
+  // "clip 2", "the third clip", "this clip" to a real clipId for
+  // describe / edit / split-selected operations. Capped at 12 entries
+  // to keep the prompt small; if the user has more clips, naming "clip
+  // 13+" is rare enough that we accept the trade-off.
+  if (args.highlights && args.highlights.length > 0) {
+    const cap = 12;
+    const list = args.highlights.slice(0, cap);
+    for (let i = 0; i < list.length; i++) {
+      const h = list[i];
+      const sid = h.sourceId ? ` (source ${h.sourceId})` : "";
+      const lbl = h.label ? ` "${h.label.slice(0, 40)}"` : "";
+      lines.push(
+        `  clip ${i + 1}: id=${h.id} ${h.start.toFixed(1)}s\u2013${h.end.toFixed(1)}s${sid}${lbl}`
+      );
+    }
+    if (args.highlights.length > cap) {
+      lines.push(`  \u2026 ${args.highlights.length - cap} more clips not shown`);
+    }
   }
 
   // --- Memory --------------------------------------------------------

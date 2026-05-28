@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
     activeSourceId: body.activeSourceId,
     highlightsCount: body.highlightsCount,
     selectedClipId: body.selectedClipId,
+    highlights: body.timelineClips,
     memory: body.memory,
     recentActivity:
       typeof body.recentActivity === "string" ? body.recentActivity : undefined
@@ -209,6 +210,55 @@ export async function POST(req: NextRequest) {
       mode: "edit",
       operations,
       message: stringOr(parsed.message, "Done."),
+      inferred,
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
+    });
+  }
+
+  // ---- DESCRIBE (v1.6.4) --------------------------------------------
+  // Clip-level Q&A. The LLM tagged this turn as a question about a
+  // specific clip; we forward the (target, question) tuple to the
+  // client. The client extracts ~6 frames from the target's range
+  // and calls /api/vision/clip — that's where the actual visual
+  // analysis happens. The agent route just brokers the intent.
+  if (mode === "describe") {
+    const target = normalizeDescribeTarget(parsed.target);
+    const question =
+      typeof parsed.question === "string" && parsed.question.trim()
+        ? parsed.question.trim().slice(0, 500)
+        : (userText.length > 0 ? userText.slice(0, 500) : "");
+    if (!target || !question) {
+      // Couldn't resolve the clip target or the question. Ask the
+      // user to point at a clip so we don't burn a vision call on
+      // ambiguous input.
+      return NextResponse.json<AgentResponse>({
+        mode: "clarify",
+        message:
+          "Tell me which clip to look at \u2014 select one on the timeline, or name it (\u201cclip 2\u201d / \u201cthe selected clip\u201d).",
+        questions: [
+          {
+            id: "describe_target",
+            prompt: "Which clip should I look at?",
+            suggestions: [
+              "The selected clip",
+              "Clip 1",
+              "Clip 2",
+              "Describe the whole short"
+            ],
+            kind: "single-choice"
+          }
+        ],
+        warnings,
+        ...(quotaWarning ? { quotaWarning } : {})
+      });
+    }
+    const inferred = normalizeInferred(parsed.inferred);
+    return NextResponse.json<AgentResponse>({
+      mode: "describe",
+      target,
+      question,
+      message: stringOr(parsed.message, "Looking at that clip\u2026"),
       inferred,
       warnings,
       ...(quotaWarning ? { quotaWarning } : {})
@@ -489,6 +539,7 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
     raw === "moment" ||
     raw === "extract" ||
     raw === "edit" ||
+    raw === "describe" ||
     raw === "acknowledge" ||
     raw === "clarify"
   ) {
@@ -496,6 +547,14 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
   }
   if (Array.isArray(parsed.operations) && parsed.operations.length > 0) {
     return "edit";
+  }
+  if (
+    parsed.target &&
+    typeof parsed.target === "object" &&
+    typeof parsed.question === "string" &&
+    (parsed.question as string).trim()
+  ) {
+    return "describe";
   }
   if (parsed.extractRange && typeof parsed.extractRange === "object") {
     return "extract";
@@ -671,6 +730,71 @@ function buildOp(
     default:
       return null;
   }
+}
+
+/**
+ * v1.6.4 — Normalize a `describe` mode target. Accepts either:
+ *   { kind: "clip", clipId: "..." }
+ *   { kind: "range", sourceId?, startSeconds, endSeconds }
+ *
+ * Returns null when the shape is unrecognisable so the caller can fall
+ * back to a clarify question. Numbers are coerced from strings the LLM
+ * may have produced ("12.5" instead of 12.5); negative ranges and
+ * empty clipIds are rejected.
+ */
+function normalizeDescribeTarget(
+  raw: unknown
+):
+  | { kind: "clip"; clipId: string }
+  | { kind: "range"; sourceId?: string; startSeconds: number; endSeconds: number }
+  | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const num = (v: unknown): number | null => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim()) {
+      const p = Number(v.trim());
+      if (Number.isFinite(p)) return p;
+    }
+    return null;
+  };
+
+  if (o.kind === "clip") {
+    const id =
+      typeof o.clipId === "string" && o.clipId.trim()
+        ? o.clipId.trim().slice(0, 64)
+        : null;
+    if (!id) return null;
+    return { kind: "clip", clipId: id };
+  }
+
+  if (o.kind === "range") {
+    const s = num(o.startSeconds);
+    const e = num(o.endSeconds);
+    if (s == null || e == null) return null;
+    if (s < 0 || e <= s + 0.1) return null;
+    const sid =
+      typeof o.sourceId === "string" && o.sourceId.trim()
+        ? o.sourceId.trim().slice(0, 64)
+        : undefined;
+    return { kind: "range", sourceId: sid, startSeconds: s, endSeconds: e };
+  }
+
+  // Older / sloppier LLM output — accept "clipId" or "startSeconds" at
+  // the top level without an explicit kind, infer from shape.
+  if (typeof o.clipId === "string" && o.clipId.trim()) {
+    return { kind: "clip", clipId: o.clipId.trim().slice(0, 64) };
+  }
+  const s = num(o.startSeconds);
+  const e = num(o.endSeconds);
+  if (s != null && e != null && s >= 0 && e > s + 0.1) {
+    const sid =
+      typeof o.sourceId === "string" && o.sourceId.trim()
+        ? o.sourceId.trim().slice(0, 64)
+        : undefined;
+    return { kind: "range", sourceId: sid, startSeconds: s, endSeconds: e };
+  }
+  return null;
 }
 
 function normalizeInferred(raw: unknown): InferredField[] {

@@ -378,6 +378,18 @@ export default function Home() {
           activeSourceId: storeNow.activeSourceId ?? undefined,
           highlightsCount: storeNow.highlights.length,
           selectedClipId: storeNow.selectedClipId,
+          // v1.6.4 — compact clip list so the planner can resolve
+          // phrases like "clip 2" / "this clip" to a clipId for the
+          // new describe mode (and improves edit-mode targeting too).
+          timelineClips: storeNow.highlights.length > 0
+            ? storeNow.highlights.map((h) => ({
+                id: h.id,
+                start: h.start,
+                end: h.end,
+                sourceId: h.sourceId,
+                label: h.label
+              }))
+            : undefined,
           memory,
           recentActivity: recentActivity || undefined
         };
@@ -586,6 +598,195 @@ export default function Home() {
             `Applied ${ops.length} edit op${ops.length === 1 ? "" : "s"} (${totalChanged} clip change${totalChanged === 1 ? "" : "s"})`,
             plannerMs
           );
+          return;
+        }
+
+        // ---- DESCRIBE mode (v1.6.4) ---------------------------------------
+        // Clip-level Q&A. The LLM identified the user as asking about
+        // an existing clip. We resolve the target into a (sourceBlob,
+        // start, end) tuple, sample ~6 frames in that range, base64 them,
+        // and POST to /api/vision/clip. The vision model's answer is
+        // rendered as a follow-up assistant message. Plan + clip state
+        // stay untouched.
+        if (data.mode === "describe") {
+          const target = data.target;
+          const question = data.question;
+          // Show the WHILE-RUNNING message immediately so the user
+          // doesn't stare at a blank chat.
+          pushMessage({
+            role: "assistant",
+            content: data.message || "Looking at that clip\u2026"
+          });
+          if (data.inferred && data.inferred.length > 0) {
+            setInferred(data.inferred);
+          }
+
+          // Resolve target → { source, start, end }.
+          const storeState = useEditorStore.getState();
+          let resolvedSource: typeof storeState.sources[number] | undefined;
+          let rangeStart = 0;
+          let rangeEnd = 0;
+          let resolvedClipLabel: string | undefined;
+
+          if (target.kind === "clip") {
+            const clip = storeState.highlights.find(
+              (h) => h.id === target.clipId
+            );
+            if (!clip) {
+              pushMessage({
+                role: "assistant",
+                content:
+                  "I couldn't find that clip on the timeline anymore \u2014 it may have been removed."
+              });
+              return;
+            }
+            const sid =
+              clip.sourceId ?? storeState.activeSourceId ?? undefined;
+            resolvedSource = storeState.sources.find((s) => s.id === sid);
+            if (!resolvedSource) {
+              pushMessage({
+                role: "assistant",
+                content:
+                  "The video this clip belongs to isn't loaded \u2014 re-upload it and try again."
+              });
+              return;
+            }
+            rangeStart = clip.start;
+            rangeEnd = clip.end;
+            resolvedClipLabel = clip.label;
+          } else {
+            // range mode
+            const sid = target.sourceId ?? storeState.activeSourceId;
+            resolvedSource = storeState.sources.find((s) => s.id === sid);
+            if (!resolvedSource) {
+              pushMessage({
+                role: "assistant",
+                content:
+                  "Upload a video first, then ask about a clip in it."
+              });
+              return;
+            }
+            rangeStart = Math.max(
+              0,
+              Math.min(resolvedSource.meta.duration, target.startSeconds)
+            );
+            rangeEnd = Math.max(
+              rangeStart + 0.5,
+              Math.min(resolvedSource.meta.duration, target.endSeconds)
+            );
+          }
+
+          // Extract frames + describe via cloud vision.
+          try {
+            setStatus("scoring", "Reading frames\u2026");
+            setProgress(0.3);
+            const frames = await sampleClipForDescribe({
+              blob: resolvedSource.blob,
+              startSeconds: rangeStart,
+              endSeconds: rangeEnd,
+              targetCount: 6
+            });
+            setProgress(0.6);
+            const resp = await fetch("/api/vision/clip", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                question,
+                clipStart: rangeStart,
+                clipEnd: rangeEnd,
+                sourceName: resolvedSource.meta.name,
+                frames: frames.map((f) => ({
+                  t: f.t,
+                  imageBase64: f.base64
+                }))
+              })
+            });
+            const json = (await resp.json().catch(() => ({}))) as {
+              description?: string;
+              enterTime?: number;
+              exitTime?: number;
+              keyMoments?: Array<{ t: number; what: string }>;
+              error?: string;
+              transient?: boolean;
+            };
+            if (!resp.ok || json.error) {
+              pushMessage({
+                role: "assistant",
+                content:
+                  json.error ||
+                  "Couldn't analyze that clip right now \u2014 try again in a sec."
+              });
+              setStatus(
+                storeState.highlights.length > 0 ? "ready" : "idle",
+                undefined
+              );
+              setProgress(0);
+              return;
+            }
+
+            // Build a friendly answer message. We append optional
+            // structured fields as inline cues at the end so the user
+            // sees the timestamps without the LLM having to embed them
+            // in prose.
+            const parts: string[] = [json.description?.trim() || "Here's what I see."];
+            const cues: string[] = [];
+            if (typeof json.enterTime === "number") {
+              cues.push(`enters at ${formatT(json.enterTime)}`);
+            }
+            if (typeof json.exitTime === "number") {
+              cues.push(`exits at ${formatT(json.exitTime)}`);
+            }
+            if (cues.length > 0) parts.push(`(${cues.join(", ")})`);
+            if (json.keyMoments && json.keyMoments.length > 0) {
+              parts.push(
+                "Key beats: " +
+                  json.keyMoments
+                    .slice(0, 4)
+                    .map((m) => `${formatT(m.t)} ${m.what}`)
+                    .join("; ")
+              );
+            }
+            pushMessage({
+              role: "assistant",
+              content: parts.join(" ")
+            });
+
+            setStatus(
+              storeState.highlights.length > 0 ? "ready" : "idle",
+              undefined
+            );
+            setProgress(1);
+            logSession.ai(
+              "describe.answered",
+              {
+                target,
+                question: question.slice(0, 120),
+                rangeSeconds: round1(rangeEnd - rangeStart),
+                framesSent: frames.length,
+                hasEnter: typeof json.enterTime === "number",
+                hasExit: typeof json.exitTime === "number",
+                keyMoments: json.keyMoments?.length ?? 0,
+                clipLabel: resolvedClipLabel
+              },
+              `Described clip ${rangeStart.toFixed(1)}s\u2013${rangeEnd.toFixed(1)}s`,
+              plannerMs
+            );
+          } catch (err) {
+            pushMessage({
+              role: "assistant",
+              content: `Couldn't analyze that clip: ${(err as Error).message}`
+            });
+            setStatus(
+              storeState.highlights.length > 0 ? "ready" : "idle",
+              undefined
+            );
+            setProgress(0);
+            logSession.system(
+              "error.unhandled",
+              { phase: "describe", message: (err as Error).message },
+              `Describe failed: ${(err as Error).message.slice(0, 80)}`
+            );
+          }
           return;
         }
 
@@ -947,4 +1148,51 @@ function formatChipValue(
 ): string {
   if (Array.isArray(v)) return v.slice(0, 4).join(", ").slice(0, 80);
   return String(v).slice(0, 80);
+}
+
+
+
+/**
+ * v1.6.4 — Sample a small set of evenly-spaced frames from a clip
+ * range for the describe-clip vision call. We reuse the existing
+ * mediabunny-based sampleFrames helper (the same one that drives the
+ * scoring pipeline) and base64-encode each thumbnail for transport.
+ *
+ * targetCount=6 is a balance between the model getting enough temporal
+ * context to answer "when does she enter the frame" and keeping the
+ * payload small (six 256-wide JPEGs round-trip in ~200 KB). The
+ * server endpoint caps at 8 either way.
+ */
+async function sampleClipForDescribe(args: {
+  blob: Blob;
+  startSeconds: number;
+  endSeconds: number;
+  targetCount: number;
+}): Promise<Array<{ t: number; base64: string }>> {
+  const { blob, startSeconds, endSeconds, targetCount } = args;
+  const dur = Math.max(0.5, endSeconds - startSeconds);
+  // Spread `targetCount` samples evenly across the range. The
+  // sampleFrames util takes an `every` interval; we derive it.
+  const every = Math.max(0.25, dur / Math.max(1, targetCount - 1));
+  const { sampleFrames, blobToBase64 } = await import("@/lib/pipeline/sample");
+  const frames = await sampleFrames(blob, {
+    every,
+    width: 384,
+    range: { startSeconds, endSeconds },
+    maxFrames: targetCount + 2
+  });
+  const sliced = frames.slice(0, targetCount);
+  const out: Array<{ t: number; base64: string }> = [];
+  for (const f of sliced) {
+    out.push({ t: f.t, base64: await blobToBase64(f.blob) });
+  }
+  return out;
+}
+
+/** v1.6.4 — Render seconds as mm:ss for chat output. */
+function formatT(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
