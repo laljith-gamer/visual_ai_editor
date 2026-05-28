@@ -10,7 +10,8 @@ import {
   RotateCcw,
   Sparkles,
   ThumbsDown,
-  ThumbsUp
+  ThumbsUp,
+  Zap
 } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { useShare } from "@/hooks/useShare";
@@ -232,6 +233,7 @@ export function AssistantPanel({
                     onCopy={() => handleCopy(m)}
                     onRegenerate={handleRegenerate}
                     onFeedback={(k) => handleFeedback(m, k)}
+                    shortcut={readShortcutAttachment(m.attachment)}
                   />
                 )}
               </div>
@@ -376,13 +378,29 @@ function readBriefingAttachment(
   return { bestParts: bp, followUps: fu };
 }
 
+/** v1.7.5 — Read the optional `shortcut` attachment a message carries
+ *  when it was produced by the client-side intent shortcut path. The
+ *  ⚡ pill renders next to the message actions for transparency. */
+function readShortcutAttachment(
+  raw: ChatMessage["attachment"]
+): { patternId: string; confidence: number } | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (raw.mode !== "shortcut") return null;
+  const patternId = typeof raw.patternId === "string" ? raw.patternId : null;
+  const confidence =
+    typeof raw.confidence === "number" ? raw.confidence : null;
+  if (!patternId || confidence == null) return null;
+  return { patternId, confidence };
+}
+
 function MessageActions({
   copied,
   canRegenerate,
   feedback,
   onCopy,
   onRegenerate,
-  onFeedback
+  onFeedback,
+  shortcut
 }: {
   copied: boolean;
   canRegenerate: boolean;
@@ -390,9 +408,22 @@ function MessageActions({
   onCopy: () => void;
   onRegenerate: () => void;
   onFeedback: (k: "up" | "down") => void;
+  /** When set, render a small ⚡ pill indicating the message came
+   *  from the client-side intent shortcut path. */
+  shortcut?: { patternId: string; confidence: number } | null;
 }) {
   return (
     <div className={styles.actionRow} aria-label="Message actions">
+      {shortcut && (
+        <span
+          className={styles.shortcutPill}
+          title={`Local shortcut: ${shortcut.patternId} (${(shortcut.confidence * 100).toFixed(0)}% confidence)`}
+          aria-label="Resolved locally without an AI call"
+        >
+          <Zap size={10} strokeWidth={2.5} />
+          Local
+        </span>
+      )}
       <button
         type="button"
         className={styles.actionBtn}
