@@ -343,6 +343,48 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // ---- MERGE (v1.7.4) ------------------------------------------------
+  // The user wants the whole videos concatenated as-is — no scoring,
+  // no clipping, no editing. We forward the (sourceIds, transition,
+  // format, op) envelope to the client; the client converts each
+  // requested source into a full-duration Highlight and renders.
+  // No vision / SigLIP / planner-pipeline work happens here.
+  if (mode === "merge") {
+    const sourceIds = Array.isArray(parsed.sourceIds)
+      ? parsed.sourceIds
+          .filter(
+            (x): x is string => typeof x === "string" && x.trim().length > 0
+          )
+          .map((s) => s.trim().slice(0, 64))
+          .slice(0, 16)
+      : undefined;
+    const transition: "none" | "fade" | "crossfade" =
+      parsed.transition === "fade"
+        ? "fade"
+        : parsed.transition === "crossfade"
+          ? "crossfade"
+          : "none";
+    const format =
+      parsed.format === "vertical" ||
+      parsed.format === "horizontal" ||
+      parsed.format === "square"
+        ? parsed.format
+        : undefined;
+    const op = parsed.op === "append" ? "append" : ("replace" as const);
+    const inferred = normalizeInferred(parsed.inferred);
+    return NextResponse.json<AgentResponse>({
+      mode: "merge",
+      ...(sourceIds && sourceIds.length > 0 ? { sourceIds } : {}),
+      transition,
+      ...(format ? { format } : {}),
+      op,
+      message: stringOr(parsed.message, "Merging the videos as-is."),
+      inferred,
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
+    });
+  }
+
   // ---- PROMOTE (v1.7.2) ----------------------------------------------
   // The user wants the briefing's already-curated best parts to become
   // actual clips on the timeline. The briefing's vision call has
@@ -667,6 +709,7 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
     raw === "describe" ||
     raw === "briefing" ||
     raw === "promote" ||
+    raw === "merge" ||
     raw === "acknowledge" ||
     raw === "clarify"
   ) {
