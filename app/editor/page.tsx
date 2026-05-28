@@ -497,6 +497,12 @@ export default function Home() {
           // The shortcut handled the turn end-to-end. Skip the cloud
           // call entirely. Activity log already recorded by the
           // shortcut path.
+          //
+          // v1.7.8 — IMPORTANT: clear the busy flag here. The cloud
+          // path's `finally` block does not run on this early return,
+          // so without this call the chat stayed stuck on "Working…"
+          // indefinitely after every successful quick-shortcut.
+          setBusy(false);
           return;
         }
       } catch (err) {

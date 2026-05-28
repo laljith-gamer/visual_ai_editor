@@ -254,7 +254,7 @@ export function AssistantPanel({
                 <span className={styles.dot} />
                 <span className={styles.dot} />
                 <span className={styles.dot} />
-                <span className={styles.typingLabel}>Working\u2026</span>
+                <span className={styles.typingLabel}>{"Working\u2026"}</span>
               </div>
             </div>
           </div>
