@@ -18,6 +18,7 @@ import type {
   VideoSourceMeta,
   VideoSourceSummary
 } from "@/lib/types";
+import type { Transcript } from "@/lib/audio/types";
 import { newId } from "@/lib/util/id";
 import { GREETINGS, LIBRARY_LIMITS } from "@/lib/config";
 import { mergePlan } from "@/lib/plan/merge";
@@ -82,6 +83,13 @@ interface EditorState {
     bestParts: BestPart[];
     ts: number;
   } | null;
+
+  /** v1.7.3 — Local-ASR transcripts keyed by sha256(source bytes).
+   *  Populated by the background transcription kicked off on /launch
+   *  and any explicit Re-transcribe action. Empty on first mount; the
+   *  IDB cache is loaded lazily by useTranscription when a consumer
+   *  asks for a specific hash. */
+  transcripts: Record<string, Transcript>;
 
   /** Plan exists but the analysis pipeline has NOT yet been executed.
    *  Set after a fresh plan or scenarios-changed refinement so the UI can
@@ -187,6 +195,12 @@ interface EditorState {
    *  promote its bestParts to the timeline. Pass `null` to clear. */
   setLastBriefing: (b: EditorState["lastBriefing"]) => void;
 
+  /** v1.7.3 — Save a freshly-produced transcript for a source. Keyed
+   *  by sourceHash so re-uploads of the same file find it. */
+  setTranscript: (sourceHash: string, transcript: Transcript) => void;
+  /** v1.7.3 — Clear a transcript (used by the Re-transcribe affordance). */
+  clearTranscript: (sourceHash: string) => void;
+
   /** v1.7.2 — Convert briefing best parts into timeline highlights.
    *
    *  Reads the lastBriefing slot, optionally filters by partIds,
@@ -243,6 +257,7 @@ function freshState() {
     pendingExecution: false,
     userTier: "novice" as UserTier,
     lastBriefing: null as EditorState["lastBriefing"],
+    transcripts: {} as Record<string, Transcript>,
     messages: [
       {
         id: newId("m"),
@@ -802,6 +817,21 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setUserTier: (tier) => set({ userTier: tier }),
 
   setLastBriefing: (b) => set({ lastBriefing: b, updatedAt: Date.now() }),
+
+  setTranscript: (sourceHash, transcript) =>
+    set((s) => ({
+      transcripts: { ...s.transcripts, [sourceHash]: transcript },
+      updatedAt: Date.now()
+    })),
+
+  clearTranscript: (sourceHash) =>
+    set((s) => {
+      // Object-spread copy + delete keeps the slot reactive in
+      // zustand subscribers that key on the whole transcripts dict.
+      const next = { ...s.transcripts };
+      delete next[sourceHash];
+      return { transcripts: next, updatedAt: Date.now() };
+    }),
 
   /** v1.7.2 — see EditorState.promoteBriefingParts docblock. */
   promoteBriefingParts: ({ partIds, targetSeconds, op }) => {

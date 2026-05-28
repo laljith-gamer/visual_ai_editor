@@ -303,7 +303,14 @@ export interface Capability {
   deviceMemoryGB: number;
   hardwareConcurrency: number;
   isMobile: boolean;
+  /** v1.7.3 — Local-ASR (Whisper) tier. "off" means transcription is
+   *  unavailable on this device (missing Worker / Web Audio / etc).
+   *  "low" / "mid" / "high" pick smaller / larger Whisper variants. */
+  audioTier: AudioTier;
 }
+
+/** v1.7.3 — local audio model tier. */
+export type AudioTier = "high" | "mid" | "low" | "off";
 
 // ---------------------------------------------------------------------
 // Predictions cache

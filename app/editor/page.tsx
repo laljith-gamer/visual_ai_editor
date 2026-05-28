@@ -7,6 +7,7 @@ import { EditorStage } from "@/components/EditorStage";
 import { AssistantPanel } from "@/components/AssistantPanel";
 import { ClipsDrawer } from "@/components/ClipsDrawer";
 import { ActivityDrawer } from "@/components/ActivityDrawer";
+import { TranscriptDrawer } from "@/components/TranscriptDrawer";
 import { QuotaBanner } from "@/components/QuotaBanner";
 import { useEditorStore, scenariosChanged } from "@/hooks/useEditorStore";
 import { useFFmpeg } from "@/hooks/useFFmpeg";
@@ -51,6 +52,7 @@ interface QuotaWarning {
 export default function Home() {
   const [clipsDrawerOpen, setClipsDrawerOpen] = useState(false);
   const [activityDrawerOpen, setActivityDrawerOpen] = useState(false);
+  const [transcriptDrawerOpen, setTranscriptDrawerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [quota, setQuota] = useState<QuotaWarning | null>(null);
   const [unreadActivity, setUnreadActivity] = useState(0);
@@ -1559,6 +1561,8 @@ export default function Home() {
       <Topbar
         onOpenActivity={() => setActivityDrawerOpen(true)}
         newActivityCount={unreadActivity}
+        onOpenTranscript={() => setTranscriptDrawerOpen(true)}
+        transcriptEnabled={cap.audioTier !== "off"}
       />
       <div className="studio">
         <ProjectRail />
@@ -1581,6 +1585,10 @@ export default function Home() {
       <ActivityDrawer
         open={activityDrawerOpen}
         onClose={() => setActivityDrawerOpen(false)}
+      />
+      <TranscriptDrawer
+        open={transcriptDrawerOpen}
+        onClose={() => setTranscriptDrawerOpen(false)}
       />
     </div>
   );

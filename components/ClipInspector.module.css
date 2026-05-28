@@ -49,3 +49,17 @@
   font-size: 12px;
   margin: var(--space-2) 0 0 0;
 }
+
+
+
+/* v1.7.3 — In-clip transcript snippet styling. Italic + slightly muted
+   so it's visually subordinate to the "Why:" reason line above it. */
+.transcriptSnippet {
+  font-style: italic;
+  color: var(--text-muted);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
