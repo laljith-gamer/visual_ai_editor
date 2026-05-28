@@ -29,7 +29,8 @@ import {
   SPLIT_VERBS,
   TRIM_VERBS
 } from "../dictionary";
-import { hasNegation, hasVerbLemma, type ParsedText } from "../grammar";
+import { hasNegation, hasVerbLemma, parse, type ParsedText } from "../grammar";
+import { splitIntoClauses } from "../clauses";
 import {
   resolveClipReference,
   resolveSourceReference
@@ -47,15 +48,83 @@ export function matchEdit(
   if (hasNegation(p)) return null;
   if (ctx.highlights.length === 0) return null;
 
-  // Each sub-pattern returns an EditOperation or null. We pick the
-  // FIRST that matches; if multiple match (e.g. "trim first 30 and
-  // drop 0:30 to 0:45"), we conservatively skip — composite edits
-  // route to the cloud planner where intent is verified.
+  // v1.7.7 — Multi-clause path. Compound utterances like
+  // "trim first 10 from V1 and 5 from V2" each carry their own
+  // (verb, duration, source-ref) and we want one EditOperation per
+  // clause stamped with the right sourceId. Falls back to single-
+  // clause when the splitter doesn't find a boundary.
+  const clauses = splitIntoClauses(p.raw);
+  if (clauses.length >= 2) {
+    const ops: EditOperation[] = [];
+    for (const clauseRaw of clauses) {
+      const subP = parse(clauseRaw);
+      const single = matchSingleEdit(subP, ctx);
+      if (single) ops.push(single.op);
+    }
+    if (ops.length >= 2) {
+      return {
+        kind: "edit",
+        confidence: 0.9,
+        patternId: "edit.sequence",
+        matchedText: p.raw,
+        operations: ops
+      };
+    }
+    if (ops.length === 1) {
+      // Only one clause produced an op — degrade gracefully to a
+      // single-op response. Better than dropping the whole turn.
+      return {
+        kind: "edit",
+        confidence: 0.88,
+        patternId: "edit.sequence_partial",
+        matchedText: p.raw,
+        operations: ops
+      };
+    }
+    // No clauses matched — fall through to the single-clause matcher
+    // below. The whole-utterance read might still produce a hit
+    // (verb stretches a long way past clause boundaries).
+  }
+
+  // ---- Single-clause path -------------------------------------------
+  const single = matchSingleEdit(p, ctx);
+  if (!single) return null;
+  return {
+    kind: "edit",
+    confidence: single.confidence,
+    patternId: single.pattern,
+    matchedText: p.raw,
+    operations: [single.op]
+  };
+}
+
+/** Single-clause sub-matcher. Returns the first valid op found. When
+ *  multiple op kinds match in one clause, we return null — composite
+ *  edits in a single clause are too risky and route to cloud.
+ *
+ *  Pulled out so the multi-clause path above can call it per-clause. */
+function matchSingleEdit(
+  p: ParsedText,
+  ctx: QuickMatchContext
+): { op: EditOperation; pattern: string; confidence: number } | null {
+  if (ctx.highlights.length === 0) return null;
+
+  // Candidates collected across sub-patterns. Each carries an op plus
+  // confidence + a pattern id for the activity log.
   const candidates: Array<{
     op: EditOperation;
     pattern: string;
     confidence: number;
   }> = [];
+
+  // v1.7.7 — Single-clause source reference. When the user says
+  // "trim first 10s in first video", we want the resulting op stamped
+  // with sourceId so the dispatcher applies it to the right source
+  // instead of the active one. Resolved once here and threaded into
+  // each sub-pattern below.
+  const sourceRef = resolveSourceReference(p.lower, ctx);
+  const clauseSourceId =
+    sourceRef.sourceIds.length === 1 ? sourceRef.sourceIds[0] : undefined;
 
   // ---- trim_first / trim_last ---------------------------------------
   if (hasVerbLemma(p, TRIM_VERBS)) {
@@ -66,7 +135,7 @@ export function matchEdit(
       const seconds = parseDuration(firstMatch[1]);
       if (seconds != null && seconds > 0) {
         candidates.push({
-          op: { kind: "trim_first", seconds },
+          op: { kind: "trim_first", seconds, sourceId: clauseSourceId },
           pattern: "edit.trim_first",
           confidence: 0.92
         });
@@ -79,7 +148,7 @@ export function matchEdit(
       const seconds = parseDuration(lastMatch[1]);
       if (seconds != null && seconds > 0) {
         candidates.push({
-          op: { kind: "trim_last", seconds },
+          op: { kind: "trim_last", seconds, sourceId: clauseSourceId },
           pattern: "edit.trim_last",
           confidence: 0.92
         });
@@ -95,7 +164,8 @@ export function matchEdit(
         op: {
           kind: "drop_range",
           startSeconds: range.startSeconds,
-          endSeconds: range.endSeconds
+          endSeconds: range.endSeconds,
+          sourceId: clauseSourceId
         },
         pattern: "edit.drop_range",
         confidence: 0.9
@@ -111,7 +181,8 @@ export function matchEdit(
         op: {
           kind: "keep_range",
           startSeconds: range.startSeconds,
-          endSeconds: range.endSeconds
+          endSeconds: range.endSeconds,
+          sourceId: clauseSourceId
         },
         pattern: "edit.keep_range",
         confidence: 0.9
@@ -129,7 +200,7 @@ export function matchEdit(
       const ts = parseTimestamp(atMatch[1].trim()) ?? parseDuration(atMatch[1]);
       if (ts != null && ts > 0) {
         candidates.push({
-          op: { kind: "split_at", timeSeconds: ts },
+          op: { kind: "split_at", timeSeconds: ts, sourceId: clauseSourceId },
           pattern: "edit.split_at",
           confidence: 0.9
         });
@@ -155,12 +226,12 @@ export function matchEdit(
 
   // ---- reset_source -------------------------------------------------
   if (hasVerbLemma(p, RESET_VERBS)) {
-    const sourceRef = resolveSourceReference(p.lower, ctx);
-    if (sourceRef.resolved && sourceRef.sourceIds.length === 1) {
+    const sr = resolveSourceReference(p.lower, ctx);
+    if (sr.resolved && sr.sourceIds.length === 1) {
       candidates.push({
         op: {
           kind: "reset_source",
-          sourceId: sourceRef.sourceIds[0]
+          sourceId: sr.sourceIds[0]
         },
         pattern: "edit.reset_source",
         confidence: 0.88
@@ -170,16 +241,9 @@ export function matchEdit(
 
   if (candidates.length === 0) return null;
 
-  // Multiple matches in one turn → too risky to short-circuit.
-  // Cloud planner handles composite edit chains.
+  // Multiple matches in one CLAUSE → too risky to short-circuit.
+  // The cloud planner handles composite single-clause edit chains.
   if (candidates.length > 1) return null;
 
-  const winner = candidates[0];
-  return {
-    kind: "edit",
-    confidence: winner.confidence,
-    patternId: winner.pattern,
-    matchedText: p.raw,
-    operations: [winner.op]
-  };
+  return candidates[0];
 }

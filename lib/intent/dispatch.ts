@@ -196,6 +196,68 @@ async function runMerge(
     return true;
   }
 
+  // v1.7.7 — Per-source range path. The trimMerge pattern produces a
+  // sourceRanges array when the user gave one duration per source
+  // ("trim first 10 in V1, 5 in V2"). We build one highlight per
+  // entry directly — no full-duration assumption.
+  if (m.sourceRanges && m.sourceRanges.length > 0) {
+    const built = m.sourceRanges
+      .map((r, i) => {
+        const src = allSources.find((s) => s.id === r.sourceId);
+        if (!src) return null;
+        const start = roundTwo(Math.max(0, r.startSeconds));
+        const end = roundTwo(Math.min(src.meta.duration, r.endSeconds));
+        if (end <= start + 0.1) return null;
+        return {
+          id: newId("clip"),
+          start,
+          end,
+          score: 1,
+          reason: m.patternId.includes("trim")
+            ? "Trimmed and merged"
+            : "Range merged",
+          label: src.meta.name,
+          transition: i === 0 ? ("none" as const) : m.transition,
+          confidence: "high" as const,
+          sourceId: src.id
+        };
+      })
+      .filter((h): h is NonNullable<typeof h> => h !== null);
+
+    if (built.length === 0) {
+      deps.pushMessage({
+        role: "assistant",
+        content:
+          "Couldn't resolve those source references. Try naming the videos by position (e.g. 'first video', 'video 2').",
+        attachment: SHORTCUT_ATTACHMENT(m.patternId, m.confidence)
+      });
+      return true;
+    }
+
+    if (m.op === "append") {
+      useEditorStore.getState().mergeHighlights(built);
+    } else {
+      deps.setHighlights(built);
+    }
+
+    const firstId = built[0]?.sourceId;
+    if (firstId && firstId !== store.activeSourceId) {
+      useEditorStore.getState().setActiveSource(firstId);
+    }
+
+    const total = built.reduce((acc, h) => acc + (h.end - h.start), 0);
+    const verb = m.patternId.includes("trim") ? "Trimmed" : "Pulled";
+    deps.pushMessage({
+      role: "assistant",
+      content: `${verb} ${built.length} clip${built.length === 1 ? "" : "s"} \u2014 ${total.toFixed(1)}s total. Tap "Render" to assemble.`,
+      attachment: SHORTCUT_ATTACHMENT(m.patternId, m.confidence)
+    });
+    deps.setStatus("ready", "Ready to render");
+    deps.setProgress(1);
+    return true;
+  }
+
+  // ---- Existing full-duration merge path ----------------------------
   // Resolve sources: planner-named order → selected → all in library order.
   let chosen: typeof allSources;
   if (m.sourceIds && m.sourceIds.length > 0) {
