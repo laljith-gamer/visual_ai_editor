@@ -1,0 +1,104 @@
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background 240ms ease, border-color 240ms ease, transform 240ms ease;
+}
+
+.iconWrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-faint);
+  flex-shrink: 0;
+  transition: background 240ms ease, border-color 240ms ease, color 240ms ease;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.detail {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+
+.pending .label { color: var(--text-muted); }
+
+.active {
+  background: rgba(99, 216, 149, 0.06);
+  border-color: rgba(99, 216, 149, 0.25);
+  transform: translateX(2px);
+}
+.active .iconWrap {
+  background: rgba(99, 216, 149, 0.14);
+  border-color: rgba(99, 216, 149, 0.4);
+  color: var(--accent);
+}
+.active .label { color: var(--text); }
+
+.done .iconWrap {
+  background: var(--accent);
+  border-color: var(--accent-strong);
+  color: #07120c;
+  animation: tick 320ms cubic-bezier(0.2, 0.7, 0.1, 1);
+}
+.done .label { color: var(--text-muted); }
+
+.error {
+  background: rgba(255, 115, 115, 0.06);
+  border-color: rgba(255, 115, 115, 0.3);
+}
+.error .iconWrap {
+  background: rgba(255, 115, 115, 0.14);
+  border-color: rgba(255, 115, 115, 0.4);
+  color: var(--danger);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes tick {
+  0%   { transform: scale(0.4); }
+  60%  { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin, .done .iconWrap, .row { animation: none; transition: none; }
+}
