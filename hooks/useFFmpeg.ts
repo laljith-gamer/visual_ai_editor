@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { renderWithMediabunny } from "@/lib/pipeline/mediabunny-render";
 import type { Highlight, EditPlan, VideoSource } from "@/lib/types";
 
 interface RenderArgs {
@@ -24,8 +25,8 @@ interface UseFFmpegResult {
 }
 
 /**
- * Lazily spins up the ffmpeg.wasm worker on first call to render(). Until
- * then, no wasm is downloaded — this keeps initial page load tiny.
+ * Prefers Mediabunny/WebCodecs for hardware-accelerated export, then
+ * lazily spins up ffmpeg.wasm only when fallback is needed.
  *
  * v1.6.0: render() now accepts either a single videoBlob (legacy) or a
  * `sources` library + highlights tagged with `sourceId`. We resolve the
@@ -72,6 +73,16 @@ export function useFFmpeg(): UseFFmpegResult {
 
   const render = useCallback(
     async (args: RenderArgs): Promise<Blob> => {
+      try {
+        return await renderWithMediabunny(args);
+      } catch (mediabunnyErr) {
+        console.warn(
+          "Mediabunny render unavailable; falling back to ffmpeg.wasm.",
+          mediabunnyErr
+        );
+        args.onProgress?.(0);
+      }
+
       const worker = await ensureWorker();
 
       // v1.6.0: resolve the minimal set of inputs. If we only have
