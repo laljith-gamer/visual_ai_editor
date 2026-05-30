@@ -66,9 +66,6 @@ export function resolveSourceReference(
   //    least 4 chars to avoid false positives on common short tokens
   //    ("the" / "and" / "video" itself).
   if (hits.length === 0) {
-    // Don't try if all videos have generic "AIImageToVideo_*" style names;
-    // we'd just match arbitrary substrings. The 4-char minimum + the fact
-    // that we only look for words AFTER "the" filters most noise.
     const namedRefs = lower.match(/\bthe\s+([a-z]{4,})\b/g);
     if (namedRefs) {
       for (const ref of namedRefs) {
@@ -189,9 +186,16 @@ export function resolveBriefingPartsReference(
     return { partIds: ids, scope: "subset" };
   }
 
-  // 4. Bulk references: "those" / "them" / "all" / "the briefing"
+  // 4. Bulk references after a briefing. These phrases mean the curated
+  //    briefing moments, not the full source video.
   if (
     /(?:those|them|these|all\s+of\s+them|the\s+briefing|the\s+(?:best\s+)?parts|the\s+moments|the\s+suggestions)/.test(
+      lower
+    ) ||
+    /(?:all|these|those|the|suggested|best)\s+(?:best\s+)?(?:clips?|parts?|moments?)/.test(
+      lower
+    ) ||
+    /(?:clips?|parts?|moments?)\s+(?:to|into|onto)\s+(?:the\s+)?timeline/.test(
       lower
     )
   ) {
