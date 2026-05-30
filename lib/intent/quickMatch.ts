@@ -16,6 +16,7 @@
  */
 
 import { parse } from "./grammar";
+import { matchProjectGrammar } from "./projectGrammar";
 import { matchAffirm } from "./patterns/affirm";
 import { matchCancel } from "./patterns/cancel";
 import { matchEdit } from "./patterns/edit";
@@ -76,6 +77,12 @@ export function quickMatch(
   const tryAdd = (m: QuickMatch | null) => {
     if (m) candidates.push(m);
   };
+
+  // Dynamic project grammar: compact synonym sets + slot parsers cover
+  // hundreds of practical editor commands without 1000 hardcoded regexes.
+  // It is still strict/high-confidence and falls through on ambiguity.
+  tryAdd(matchProjectGrammar(parsed, ctx));
+
   tryAdd(matchAffirm(parsed, ctx));
   tryAdd(matchCancel(parsed, ctx));
   tryAdd(matchPromote(parsed, ctx));
