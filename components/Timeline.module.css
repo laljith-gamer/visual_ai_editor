@@ -8,57 +8,122 @@
 .header {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: 12px;
-  letter-spacing: 0.02em;
+  gap: 8px;
   min-width: 0;
   flex-wrap: wrap;
+  padding: 0 1px;
+  font-size: 12px;
+  letter-spacing: 0.015em;
+  color: var(--text-muted);
+}
+
+.header :global(.spacer) {
+  min-width: 12px;
 }
 
 .track {
   position: relative;
-  height: 76px;
-  border-radius: 12px;
-  background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
-  border: 1px solid var(--line);
+  height: 106px;
+  border-radius: 16px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--line) 36%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--line) 18%, transparent) 1px, transparent 1px),
+    radial-gradient(circle at 50% -60%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 54%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-1) 88%, #ffffff 6%), color-mix(in srgb, var(--bg-2) 94%, #000 6%));
+  background-size: 25% 100%, 6.25% 100%, 100% 100%, 100% 100%;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, #ffffff 8%);
   user-select: none;
   touch-action: none;
   overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #ffffff 9%, transparent),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.28),
+    0 13px 32px rgba(0, 0, 0, 0.24);
+}
+
+.track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 30px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 36%, transparent) 1px, transparent 1px),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 74%, #ffffff 6%), transparent);
+  background-size: 12.5% 100%, 100% 100%;
+  opacity: 0.72;
+}
+
+.track::after {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 34px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 42%, transparent), transparent);
+  opacity: 0.8;
 }
 
 .empty {
   position: absolute;
-  inset: 0;
+  inset: 30px 16px 28px;
+  z-index: 1;
   display: grid;
   place-items: center;
   text-align: center;
   padding: 0 var(--space-4);
   margin: 0;
+  border: 1px dashed color-mix(in srgb, var(--line-2) 58%, transparent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--bg-1) 42%, transparent);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
 }
 
 .clip {
   position: absolute;
-  top: 10px;
-  bottom: 26px;
-  min-width: 34px;
-  background: linear-gradient(180deg, rgba(99, 216, 149, 0.4), rgba(99, 216, 149, 0.18));
-  border: 1px solid rgba(99, 216, 149, 0.6);
-  border-radius: 8px;
+  top: 34px;
+  bottom: 32px;
+  z-index: 2;
+  min-width: 44px;
+  background: linear-gradient(180deg, rgba(99, 216, 149, 0.56), rgba(99, 216, 149, 0.25));
+  border: 1px solid rgba(99, 216, 149, 0.7);
+  border-radius: 11px;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   cursor: grab;
   overflow: hidden;
-  transition: border-color 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+  color: #07120c;
+  box-shadow:
+    0 12px 24px color-mix(in srgb, var(--accent) 20%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease, filter 120ms ease;
 }
 .clip:hover {
-  filter: brightness(1.08);
+  transform: translateY(-1px);
+  filter: brightness(1.07) saturate(1.04);
+  box-shadow:
+    0 16px 30px color-mix(in srgb, var(--accent) 26%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
 }
 .clip:active {
   cursor: grabbing;
+  transform: translateY(0) scale(0.996);
 }
 .clip.selected {
-  border-color: var(--info);
-  box-shadow: 0 0 0 2px rgba(117, 167, 255, 0.4) inset;
+  border-color: color-mix(in srgb, var(--info) 82%, #ffffff 18%);
+  box-shadow:
+    0 16px 34px color-mix(in srgb, var(--info) 30%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--info) 44%, transparent) inset,
+    inset 0 1px 0 rgba(255, 255, 255, 0.36);
 }
 
 .clipBody {
@@ -66,8 +131,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 0 8px;
+  gap: 8px;
+  padding: 0 10px;
   min-width: 0;
   overflow: hidden;
 }
@@ -75,28 +140,53 @@
 .clipName {
   min-width: 0;
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
   overflow: hidden;
+  color: #07120c;
 }
 
 .clipDuration {
   flex: 0 0 auto;
   font-size: 11px;
-  color: rgba(11, 26, 18, 0.78);
+  font-weight: 700;
+  color: rgba(7, 18, 12, 0.75);
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .handle {
-  width: 8px;
+  position: relative;
+  width: 10px;
   height: 100%;
-  background: rgba(11, 26, 18, 0.4);
+  background:
+    linear-gradient(90deg, rgba(7, 18, 12, 0.28), rgba(7, 18, 12, 0.08));
   cursor: ew-resize;
-  border-radius: 8px 0 0 8px;
+  border-radius: 11px 0 0 11px;
   flex: 0 0 auto;
 }
+.handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(7, 18, 12, 0.38);
+  box-shadow: 3px 0 0 rgba(7, 18, 12, 0.22);
+}
 .handle.right {
-  border-radius: 0 8px 8px 0;
+  border-radius: 0 11px 11px 0;
+  background:
+    linear-gradient(90deg, rgba(7, 18, 12, 0.08), rgba(7, 18, 12, 0.28));
+}
+.handle.right::after {
+  box-shadow: -3px 0 0 rgba(7, 18, 12, 0.22);
 }
 
 .tickRow {
@@ -104,36 +194,76 @@
   left: 0;
   right: 0;
   bottom: 0;
-  height: 24px;
+  height: 30px;
   pointer-events: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-0) 10%, transparent), color-mix(in srgb, var(--bg-0) 30%, transparent));
 }
 .tick {
   position: absolute;
-  bottom: 5px;
+  bottom: 7px;
   transform: translateX(-50%);
+  font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--text-faint);
+  line-height: 1;
+  color: var(--text-muted);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+.tick::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 17px;
+  width: 1px;
+  height: 9px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--accent) 40%, var(--line) 60%);
+  border-radius: 999px;
+  opacity: 0.85;
+}
+.tick:first-child {
+  transform: translateX(0);
+}
+.tick:first-child::before {
+  left: 0;
+}
+.tick:last-child {
+  transform: translateX(-100%);
+}
+.tick:last-child::before {
+  left: 100%;
 }
 .tick em {
+  display: inline-block;
+  min-width: 26px;
+  padding: 2px 4px;
   font-style: normal;
+  text-align: center;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bg-1) 74%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 58%, transparent);
 }
 
 .sourceBadge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
   font-size: 10px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 4px;
+  font-weight: 800;
+  padding: 0 6px;
+  border-radius: 999px;
   margin-right: 6px;
   letter-spacing: 0.04em;
-  color: rgba(11, 26, 18, 0.85);
+  color: rgba(7, 18, 12, 0.86);
   flex: 0 0 auto;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 .tabs {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   flex-wrap: wrap;
   margin-bottom: 2px;
   min-width: 0;
@@ -142,43 +272,56 @@
 .tab {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
+  gap: 6px;
+  min-height: 26px;
+  padding: 4px 10px;
   font-size: 11px;
-  font-weight: 500;
-  background: var(--bg-1);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--bg-1) 82%, transparent);
   color: var(--text-faint);
   border: 1px solid var(--line);
   border-radius: 999px;
   cursor: pointer;
-  transition: color 120ms, border-color 120ms, background 120ms;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 6%, transparent);
+  transition: color 120ms, border-color 120ms, background 120ms, transform 120ms, box-shadow 120ms;
 }
 .tab:hover {
   color: var(--text);
   border-color: var(--line-2);
+  transform: translateY(-1px);
 }
 .tab.active {
-  color: var(--text);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-1));
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line) 42%);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-1));
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 12%, transparent), inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent);
 }
 .tabDot {
   width: 8px;
   height: 8px;
   border-radius: 999px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg-1) 92%, transparent);
 }
 
 @media (max-width: 560px) {
   .track {
-    height: 88px;
+    height: 112px;
+    border-radius: 14px;
   }
 
   .clip {
-    top: 12px;
-    bottom: 30px;
+    top: 36px;
+    bottom: 34px;
+    min-width: 48px;
   }
 
   .header {
     gap: 6px;
+    font-size: 11px;
+  }
+
+  .tick em {
+    min-width: 24px;
+    padding-inline: 3px;
   }
 }
