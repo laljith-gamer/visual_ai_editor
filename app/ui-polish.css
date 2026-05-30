@@ -1,0 +1,288 @@
+/* =====================================================================
+   UI Polish Layer — professional elevated surfaces + 3D controls.
+   This file intentionally overrides visual styling only. No editor logic.
+   ===================================================================== */
+
+:root {
+  --surface-glass: rgba(17, 21, 26, 0.78);
+  --surface-raised: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018));
+  --surface-raised-solid: linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 90%, #ffffff 10%), var(--bg-1));
+  --highlight-edge: rgba(255, 255, 255, 0.105);
+  --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.28);
+  --shadow-elevated: 0 18px 50px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.22);
+  --shadow-control: 0 8px 18px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  --shadow-control-hover: 0 12px 28px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  --shadow-accent: 0 14px 34px color-mix(in srgb, var(--accent) 34%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  --shadow-accent-hover: 0 18px 42px color-mix(in srgb, var(--accent) 42%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+:root[data-theme="light"] {
+  --surface-glass: rgba(255, 255, 255, 0.78);
+  --surface-raised: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 252, 0.82));
+  --surface-raised-solid: linear-gradient(180deg, #ffffff, #f7fafc);
+  --highlight-edge: rgba(255, 255, 255, 0.95);
+  --shadow-soft: 0 10px 26px rgba(15, 23, 42, 0.09), 0 2px 8px rgba(15, 23, 42, 0.05);
+  --shadow-elevated: 0 22px 56px rgba(15, 23, 42, 0.13), 0 5px 16px rgba(15, 23, 42, 0.08);
+  --shadow-control: 0 9px 18px rgba(15, 23, 42, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  --shadow-control-hover: 0 14px 28px rgba(15, 23, 42, 0.15), inset 0 1px 0 rgba(255, 255, 255, 1);
+  --shadow-accent: 0 14px 34px color-mix(in srgb, var(--accent) 28%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  --shadow-accent-hover: 0 18px 42px color-mix(in srgb, var(--accent) 34%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+body {
+  background:
+    radial-gradient(circle at 16% -12%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 36%),
+    radial-gradient(circle at 110% 0%, color-mix(in srgb, var(--info) 12%, transparent), transparent 34%),
+    linear-gradient(180deg, var(--bg-0), color-mix(in srgb, var(--bg-0) 92%, #000 8%));
+}
+
+.editor-shell {
+  background:
+    radial-gradient(circle at 12% -14%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%),
+    radial-gradient(circle at 110% 0%, color-mix(in srgb, var(--info) 11%, transparent), transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-0) 96%, var(--accent) 4%), var(--bg-0));
+}
+
+/* Global elevated surfaces ------------------------------------------------ */
+.card,
+[class*="AssistantPanel_panel"],
+[class*="Timeline_track"],
+[class*="EditorStage_videoFrame"] {
+  border-color: color-mix(in srgb, var(--line) 78%, var(--highlight-edge) 22%);
+  box-shadow: var(--shadow-elevated);
+}
+
+.card {
+  background: var(--surface-raised-solid);
+  position: relative;
+}
+
+.card::before,
+[class*="AssistantPanel_panel"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 var(--highlight-edge);
+}
+
+.card-header {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 88%, #ffffff 12%), color-mix(in srgb, var(--bg-2) 98%, #000 2%));
+  border-bottom-color: color-mix(in srgb, var(--line) 82%, transparent);
+}
+
+/* Topbar ------------------------------------------------------------------ */
+[class*="Topbar_topbar"] {
+  background: var(--surface-glass) !important;
+  border-bottom-color: color-mix(in srgb, var(--line) 70%, transparent) !important;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.18), inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(18px) saturate(1.15) !important;
+}
+
+:root[data-theme="light"] [class*="Topbar_topbar"] {
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08), inset 0 -1px 0 rgba(255, 255, 255, 0.92);
+}
+
+[class*="Topbar_brandMark"] {
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--accent) 34%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.35) !important;
+  transform: translateZ(0);
+}
+
+/* Buttons ----------------------------------------------------------------- */
+.btn,
+[class*="Topbar_iconBtn"],
+[class*="Topbar_newChatBtn"],
+[class*="AssistantPanel_footerBtn"],
+[class*="AssistantPanel_starterChip"],
+[class*="ProjectRail_libraryActionBtn"],
+[class*="ProjectRail_libraryAddBtn"],
+[class*="ProjectRail_historyButton"],
+[class*="Timeline_tab"] {
+  box-shadow: var(--shadow-control);
+  transform: translateY(0);
+  transition:
+    transform 140ms cubic-bezier(0.2, 0.7, 0.2, 1),
+    box-shadow 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    filter 160ms ease !important;
+}
+
+.btn:hover:not(:disabled),
+[class*="Topbar_iconBtn"]:hover,
+[class*="AssistantPanel_footerBtn"]:hover,
+[class*="AssistantPanel_starterChip"]:hover:not(:disabled),
+[class*="ProjectRail_libraryActionBtn"]:hover,
+[class*="ProjectRail_libraryAddBtn"]:hover:not(:disabled),
+[class*="ProjectRail_historyButton"]:hover,
+[class*="Timeline_tab"]:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-control-hover);
+}
+
+.btn:active:not(:disabled),
+[class*="Topbar_iconBtn"]:active,
+[class*="AssistantPanel_footerBtn"]:active,
+[class*="AssistantPanel_starterChip"]:active:not(:disabled),
+[class*="ProjectRail_libraryActionBtn"]:active,
+[class*="ProjectRail_libraryAddBtn"]:active:not(:disabled),
+[class*="ProjectRail_historyButton"]:active,
+[class*="Timeline_tab"]:active {
+  transform: translateY(1px) scale(0.985);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18), inset 0 2px 5px rgba(0, 0, 0, 0.12);
+}
+
+.btn.primary,
+[class*="Topbar_newChatBtn"],
+[class*="AssistantPanel_sendBtn"] {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #ffffff 12%), var(--accent-strong)) !important;
+  box-shadow: var(--shadow-accent) !important;
+  border-color: color-mix(in srgb, var(--accent-strong) 72%, #ffffff 28%) !important;
+  color: #06130b !important;
+}
+
+.btn.primary:hover:not(:disabled),
+[class*="Topbar_newChatBtn"]:hover,
+[class*="AssistantPanel_sendBtn"]:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-accent-hover) !important;
+  filter: saturate(1.05) brightness(1.03);
+}
+
+.btn.danger,
+[class*="ProjectRail_removeIconBtn"],
+[class*="ClipInspector_removeBtn"] {
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--danger) 13%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Left rail/library ------------------------------------------------------- */
+[class*="ProjectRail_libraryItem"],
+[class*="ProjectRail_historyButton"] {
+  background: var(--surface-raised) !important;
+  border-color: color-mix(in srgb, var(--line) 82%, var(--highlight-edge) 18%) !important;
+}
+
+[class*="ProjectRail_libraryItem"] {
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.14), inset 0 1px 0 var(--highlight-edge);
+}
+
+:root[data-theme="light"] [class*="ProjectRail_libraryItem"],
+:root[data-theme="light"] [class*="ProjectRail_historyButton"] {
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 1);
+}
+
+[class*="ProjectRail_libraryItem"][class*="active"] {
+  border-color: color-mix(in srgb, var(--accent) 84%, #ffffff 16%) !important;
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--accent) 18%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+
+[class*="ProjectRail_libraryControls"] {
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--bg-1) 88%, transparent) 24%, var(--bg-1) 70%) !important;
+}
+
+:root[data-theme="light"] [class*="ProjectRail_libraryControls"] {
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.92) 24%, #ffffff 70%) !important;
+}
+
+/* Preview/stage ----------------------------------------------------------- */
+[class*="EditorStage_videoFrame"] {
+  border-radius: 16px !important;
+  background: radial-gradient(circle at 50% 0%, #171717, #000 70%) !important;
+  box-shadow:
+    0 20px 46px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.025);
+}
+
+[class*="EditorStage_videoFrame"] video,
+[class*="EditorStage_video"] {
+  border-radius: inherit;
+}
+
+[class*="EditorStage_paneHeader"] {
+  color: var(--text-muted);
+  font-weight: 650;
+}
+
+/* Timeline ---------------------------------------------------------------- */
+[class*="Timeline_track"] {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-1) 94%, #ffffff 6%), color-mix(in srgb, var(--bg-2) 96%, #000 4%)) !important;
+  box-shadow: inset 0 1px 0 var(--highlight-edge), var(--shadow-soft);
+}
+
+[class*="Timeline_clip"] {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 62%, #ffffff 18%), color-mix(in srgb, var(--accent-strong) 58%, var(--bg-1) 42%)) !important;
+  border-color: color-mix(in srgb, var(--accent) 75%, #ffffff 25%) !important;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 22%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.26);
+}
+
+[class*="Timeline_clip"][class*="selected"] {
+  box-shadow:
+    0 13px 30px color-mix(in srgb, var(--info) 30%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--info) 55%, transparent) inset,
+    inset 0 1px 0 rgba(255, 255, 255, 0.32) !important;
+}
+
+[class*="Timeline_handle"] {
+  background: rgba(6, 19, 11, 0.34) !important;
+}
+
+/* Assistant/chat ---------------------------------------------------------- */
+[class*="AssistantPanel_panel"] {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 92%, #ffffff 8%), var(--bg-1)) !important;
+}
+
+[class*="AssistantPanel_bubble"] {
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.16), inset 0 1px 0 var(--highlight-edge) !important;
+  border-color: color-mix(in srgb, var(--line) 80%, var(--highlight-edge) 20%) !important;
+}
+
+[class*="AssistantPanel_rowUser"] [class*="AssistantPanel_bubble"] {
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--accent) 24%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.24) !important;
+}
+
+[class*="AssistantPanel_composer"] {
+  background: var(--surface-raised) !important;
+  border-color: color-mix(in srgb, var(--line) 76%, var(--highlight-edge) 24%) !important;
+  box-shadow: var(--shadow-control);
+}
+
+[class*="AssistantPanel_composer"]:focus-within {
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent),
+    var(--shadow-control-hover) !important;
+}
+
+/* Inputs ------------------------------------------------------------------ */
+.input,
+.textarea,
+[class*="ClipInspector_field"],
+input,
+textarea {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+input:focus,
+textarea:focus,
+.input:focus,
+.textarea:focus {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--info) 13%, transparent), inset 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* Motion safety ----------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  [class*="Topbar_iconBtn"],
+  [class*="Topbar_newChatBtn"],
+  [class*="AssistantPanel_footerBtn"],
+  [class*="AssistantPanel_starterChip"],
+  [class*="ProjectRail_libraryActionBtn"],
+  [class*="ProjectRail_libraryAddBtn"],
+  [class*="ProjectRail_historyButton"],
+  [class*="Timeline_tab"] {
+    transition: none !important;
+  }
+}
