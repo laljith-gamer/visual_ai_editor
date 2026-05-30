@@ -8,6 +8,19 @@
   padding-right: 2px;
 }
 
+.stage > :global(.card) {
+  flex: 0 0 auto;
+}
+
+.stage > :global(.card):last-child {
+  min-height: 220px;
+}
+
+.stage > :global(.card):last-child :global(.card-body) {
+  overflow: auto;
+  min-height: 148px;
+}
+
 /* Two-pane preview surface.
  * Side-by-side only when the centre column has enough room; otherwise
  * stacked keeps both videos readable instead of squeezing them. */
@@ -49,7 +62,8 @@
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  min-height: 220px;
+  max-height: 42dvh;
+  min-height: 180px;
   background: #000;
   border-radius: 12px;
   overflow: hidden;
@@ -77,6 +91,17 @@
   text-align: center;
 }
 
+@media (max-height: 820px) and (min-width: 900px) {
+  .videoFrame {
+    min-height: 150px;
+    max-height: 34dvh;
+  }
+
+  .stage > :global(.card):last-child {
+    min-height: 240px;
+  }
+}
+
 @media (max-width: 560px) {
   .stage {
     padding-right: 0;
@@ -84,6 +109,7 @@
 
   .videoFrame {
     min-height: 180px;
+    max-height: none;
     border-radius: 10px;
   }
 }
