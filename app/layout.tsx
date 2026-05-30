@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./ui-polish.css";
 import "./ui-fixes.css";
+import "./ui-final-fixes.css";
 
 export const metadata: Metadata = {
   title: "Shorts Studio — Universal Video Shorts Editor",
