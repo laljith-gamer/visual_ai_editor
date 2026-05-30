@@ -342,17 +342,18 @@ export const ADAPT = {
  * v1.6.0 — video-library limits.
  *
  * Local files are selected through the browser File API and are not uploaded
- * to Vercel. We therefore do not hard-reject by byte size here. Very large
- * sources can still exceed browser or ffmpeg.wasm memory during heavy render
- * work; that is a runtime capability limit, not an upload-selection limit.
+ * to Vercel. We avoid a hard practical upload cap here while keeping finite
+ * numbers for build tools and UI calculations.
  */
+const PRACTICALLY_UNLIMITED_BYTES = Number.MAX_SAFE_INTEGER;
+
 export const LIBRARY_LIMITS = {
   /** Max number of videos a single session can hold at once. */
   maxCount: 8,
-  /** Max combined byte size across the whole library. Infinity = no hard local-pick cap. */
-  maxTotalBytes: Number.POSITIVE_INFINITY,
-  /** Per-source upper bound. Infinity = allow any local file size to be selected. */
-  maxSingleBytes: Number.POSITIVE_INFINITY
+  /** Max combined byte size across the whole library. Effectively no local-pick cap. */
+  maxTotalBytes: PRACTICALLY_UNLIMITED_BYTES,
+  /** Per-source upper bound. Effectively no local-pick cap. */
+  maxSingleBytes: PRACTICALLY_UNLIMITED_BYTES
 } as const;
 
 /**
