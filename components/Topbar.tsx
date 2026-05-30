@@ -1,6 +1,14 @@
 "use client";
 
-import { Sparkles, Plus, Activity as ActivityIcon, FileText } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  Sparkles,
+  Plus,
+  Activity as ActivityIcon,
+  FileText,
+  Moon,
+  Sun
+} from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { useActivityLog } from "@/hooks/useActivityLog";
 import { logUser } from "@/lib/log/recorders";
@@ -22,6 +30,10 @@ interface Props {
   transcriptEnabled?: boolean;
 }
 
+type ThemeMode = "dark" | "light";
+
+const THEME_STORAGE_KEY = "shorts-studio.theme";
+
 export function Topbar({
   onOpenActivity,
   newActivityCount = 0,
@@ -35,10 +47,28 @@ export function Topbar({
   const inferred = useEditorStore((s) => s.inferred);
   const newSession = useEditorStore((s) => s.newSession);
   const sessionId = useEditorStore((s) => s.sessionId);
+  const [theme, setTheme] = useState<ThemeMode>("dark");
 
   // Make sure the activity log stays bound even on this lightweight component;
   // the read is cheap and ensures the singleton is initialized for the active session.
   useActivityLog(sessionId);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === "dark" || saved === "light") {
+      setTheme(saved);
+      return;
+    }
+    const prefersLight = window.matchMedia?.("(prefers-color-scheme: light)").matches;
+    setTheme(prefersLight ? "light" : "dark");
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    root.style.colorScheme = theme;
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
 
   const totalDuration = highlights.reduce(
     (acc, h) => acc + (h.end - h.start),
@@ -47,6 +77,7 @@ export function Topbar({
   const sampleCount = plan
     ? Math.floor((plan.targetShortSeconds * 4) / plan.sampleEverySeconds)
     : 0;
+  const nextTheme = theme === "dark" ? "light" : "dark";
 
   return (
     <header className={styles.topbar}>
@@ -76,6 +107,18 @@ export function Topbar({
         >
           <Plus size={14} strokeWidth={2.5} />
           <span>New chat</span>
+        </button>
+
+        <button
+          className={styles.iconBtn}
+          onClick={() => setTheme(nextTheme)}
+          aria-label={`Switch to ${nextTheme} mode`}
+          title={`Switch to ${nextTheme} mode`}
+        >
+          {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+          <span className={styles.iconBtnLabel}>
+            {theme === "dark" ? "Light" : "Dark"}
+          </span>
         </button>
 
         <button
