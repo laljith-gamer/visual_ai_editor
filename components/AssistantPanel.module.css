@@ -46,6 +46,8 @@
   gap: 10px;
   padding: 14px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .title {
@@ -53,6 +55,7 @@
   align-items: center;
   gap: 8px;
   margin-right: auto;
+  min-width: 0;
 }
 
 .titleIcon {
@@ -61,6 +64,7 @@
   justify-content: center;
   width: 24px;
   height: 24px;
+  flex: 0 0 24px;
   border-radius: 8px;
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));
   color: #07120c;
@@ -71,19 +75,16 @@
   font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
-/* Mode switch — replaced by .autoTag in v1.7.0 (Auto mode is implicit;
-   the server decides per-turn whether to think hard, with persistent
-   memory carrying user intent across turns). The legacy class names
-   below are no longer used by AssistantPanel.tsx. */
+/* Mode switch — replaced by .autoTag in v1.7.0. */
 .modeSwitch,
 .modeBtn,
 .modeBtnActive {
   /* deprecated */
 }
 
-/* The "Auto" tag in the chat header. Static — there is no toggle. */
 .autoTag {
   display: inline-flex;
   align-items: center;
@@ -98,6 +99,7 @@
   border: 1px solid rgba(99, 216, 149, 0.35);
   border-radius: 999px;
   margin-left: 8px;
+  white-space: nowrap;
 }
 
 /* ── Messages ──────────────────────────────────────────────── */
@@ -109,14 +111,14 @@
   flex-direction: column;
   gap: 18px;
   padding: 18px 16px;
-  min-height: 280px;
-  max-height: 60vh;
+  min-height: 0;
 }
 
 .row {
   display: flex;
   gap: 8px;
   align-items: flex-start;
+  min-width: 0;
   animation: rowIn 320ms cubic-bezier(0.2, 0.7, 0.1, 1) backwards;
 }
 
@@ -145,7 +147,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 86%;
+  max-width: min(86%, 680px);
   min-width: 0;
 }
 
@@ -154,19 +156,20 @@
 }
 
 .bubble {
+  max-width: 100%;
   padding: 10px 14px;
   border-radius: 14px;
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
-  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   border: 1px solid rgba(255, 255, 255, 0.05);
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
-/* User bubble: filled green with a gentle gradient and strong contrast. */
 .rowUser .bubble {
   background: linear-gradient(
     180deg,
@@ -186,9 +189,6 @@
   border-bottom-left-radius: 4px;
 }
 
-/* Action bar under each assistant message — stays at low opacity until
-   the user hovers the row OR uses keyboard focus, matching the modern
-   ChatGPT/Claude pattern. */
 .actionRow {
   display: flex;
   align-items: center;
@@ -230,8 +230,6 @@
   border-color: rgba(99, 216, 149, 0.45);
 }
 
-/* Always show actions on the most recent assistant message so the
-   primary affordance (Regenerate) is discoverable without hover. */
 .row:last-child .actionRow {
   opacity: 0.7;
   transform: translateY(0);
@@ -308,12 +306,14 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  max-width: 100%;
   padding: 4px 10px;
   border-radius: 999px;
   background: rgba(99, 216, 149, 0.08);
   border: 1px solid rgba(99, 216, 149, 0.3);
   color: var(--text);
   font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .inferredEq {
@@ -375,6 +375,7 @@
 
 .composerWrap {
   padding: 14px 16px 6px;
+  flex: 0 0 auto;
 }
 
 .composer {
@@ -399,6 +400,7 @@
 
 .input {
   flex: 1 1 auto;
+  min-width: 0;
   border: 0;
   outline: 0;
   resize: none;
@@ -470,11 +472,13 @@
   gap: 8px;
   padding: 8px 16px 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.04);
+  flex: 0 0 auto;
 }
 
 .footerBtn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 7px 12px;
   font-size: 12px;
@@ -484,6 +488,7 @@
   color: var(--text-muted);
   border: 1px solid rgba(255, 255, 255, 0.06);
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  white-space: nowrap;
 }
 .footerBtn:hover {
   background: rgba(255, 255, 255, 0.06);
@@ -502,15 +507,8 @@
   border-color: var(--accent);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .row, .dot, .actionRow, .sendBtn { animation: none; transition: none; }
-}
-
-
-
 /* v1.7.5 — "Local" pill on assistant messages produced by the
-   client-side intent shortcut path. Subtle accent — visible but
-   doesn't compete with the message content. */
+   client-side intent shortcut path. */
 .shortcutPill {
   display: inline-flex;
   align-items: center;
@@ -530,4 +528,36 @@
 }
 .shortcutPill svg {
   filter: drop-shadow(0 0 2px rgba(99, 216, 149, 0.6));
+}
+
+@media (max-width: 899px) {
+  .messages {
+    min-height: 360px;
+  }
+}
+
+@media (max-width: 560px) {
+  .header,
+  .messages,
+  .composerWrap,
+  .footer {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .bubbleWrap {
+    max-width: 92%;
+  }
+
+  .autoTag {
+    display: none;
+  }
+
+  .hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row, .dot, .actionRow, .sendBtn { animation: none; transition: none; }
 }
