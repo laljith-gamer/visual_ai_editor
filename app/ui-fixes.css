@@ -62,6 +62,48 @@
   opacity: 0.55;
 }
 
+/* Reduce neon-style halo on green buttons. Keep the raised feel, but make it
+   professional and controlled. */
+.btn.primary,
+[class*="Topbar_newChatBtn"],
+[class*="ProjectRail_libraryAddBtn"],
+[class*="AssistantPanel_sendBtn"] {
+  box-shadow:
+    0 8px 16px rgba(0, 0, 0, 0.18),
+    0 2px 8px color-mix(in srgb, var(--accent) 12%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24) !important;
+}
+
+.btn.primary:hover:not(:disabled),
+[class*="Topbar_newChatBtn"]:hover,
+[class*="ProjectRail_libraryAddBtn"]:hover:not(:disabled),
+[class*="AssistantPanel_sendBtn"]:hover:not(:disabled) {
+  box-shadow:
+    0 10px 20px rgba(0, 0, 0, 0.2),
+    0 3px 10px color-mix(in srgb, var(--accent) 16%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28) !important;
+  filter: brightness(1.02) saturate(1.02) !important;
+}
+
+:root[data-theme="light"] .btn.primary,
+:root[data-theme="light"] [class*="Topbar_newChatBtn"],
+:root[data-theme="light"] [class*="ProjectRail_libraryAddBtn"],
+:root[data-theme="light"] [class*="AssistantPanel_sendBtn"] {
+  box-shadow:
+    0 8px 16px rgba(15, 23, 42, 0.11),
+    0 2px 8px color-mix(in srgb, var(--accent) 11%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.48) !important;
+}
+
+[class*="Topbar_brandMark"],
+[class*="AssistantPanel_titleIcon"],
+[class*="AssistantPanel_avatar"] {
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.18),
+    0 2px 8px color-mix(in srgb, var(--accent) 14%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+}
+
 /* The composer input should not draw its own rectangular focus box inside
    the rounded composer shell. */
 [class*="AssistantPanel_input"],
