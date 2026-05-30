@@ -1,0 +1,94 @@
+/* =====================================================================
+   UI Fixes — narrow overrides after the polish layer.
+   Fixes visual selector bleed without changing editor logic.
+   ===================================================================== */
+
+/* The polish layer intentionally targets CSS-module names. These nested
+   ProjectRail classes also contain "libraryItem" in their names, so reset
+   them back to layout-only children. */
+[class*="ProjectRail_libraryItemBody"],
+[class*="ProjectRail_libraryItemMeta"],
+[class*="ProjectRail_libraryItemName"],
+[class*="ProjectRail_libraryItemActions"] {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  transform: none !important;
+  filter: none !important;
+}
+
+[class*="ProjectRail_libraryItemBody"]:hover,
+[class*="ProjectRail_libraryItemMeta"]:hover,
+[class*="ProjectRail_libraryItemName"]:hover,
+[class*="ProjectRail_libraryItemActions"]:hover {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* Keep the item shell elevated, but let the internal controls breathe. */
+[class*="ProjectRail_libraryItem"] [class*="ProjectRail_libraryItemBody"] {
+  width: 100%;
+  min-width: 0;
+}
+
+[class*="ProjectRail_libraryItem"] [class*="ProjectRail_libraryItemActions"] {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: max-content;
+}
+
+/* Add button should be a clear green action, not a dashed/drop-zone style. */
+[class*="ProjectRail_libraryAddBtn"] {
+  border-style: solid !important;
+  border-color: color-mix(in srgb, var(--accent-strong) 76%, #ffffff 24%) !important;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #ffffff 12%), var(--accent-strong)) !important;
+  color: #06130b !important;
+  font-weight: 650;
+  box-shadow: var(--shadow-accent) !important;
+}
+
+[class*="ProjectRail_libraryAddBtn"]:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 88%, #ffffff 12%) !important;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, #ffffff 8%), var(--accent-strong)) !important;
+  color: #06130b !important;
+  box-shadow: var(--shadow-accent-hover) !important;
+}
+
+[class*="ProjectRail_libraryAddBtn"]:disabled {
+  filter: grayscale(0.25);
+  opacity: 0.55;
+}
+
+/* The composer input should not draw its own rectangular focus box inside
+   the rounded composer shell. The shell already owns the focus glow. */
+[class*="AssistantPanel_input"],
+[class*="AssistantPanel_input"]:focus,
+[class*="AssistantPanel_input"]:focus-visible {
+  outline: 0 !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+[class*="AssistantPanel_composer"] textarea,
+[class*="AssistantPanel_composer"] textarea:focus,
+[class*="AssistantPanel_composer"] textarea:focus-visible {
+  outline: 0 !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+/* Timeline nested children have similar names such as clipBody/clipName.
+   Keep the 3D style only on the outer clip. */
+[class*="Timeline_clipBody"],
+[class*="Timeline_clipName"],
+[class*="Timeline_clipDuration"] {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
