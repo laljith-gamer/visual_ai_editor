@@ -56,6 +56,10 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+html {
+  min-height: 100%;
+}
+
 body {
   min-height: 100dvh;
 }
@@ -89,7 +93,9 @@ a:hover {
 .editor-shell {
   display: flex;
   flex-direction: column;
+  height: 100dvh;
   min-height: 100dvh;
+  overflow: hidden;
   background: var(--bg-0);
   background-image: radial-gradient(
       circle at 20% -10%,
@@ -101,16 +107,18 @@ a:hover {
 
 .studio {
   display: grid;
-  grid-template-columns: 240px 1fr 340px;
+  grid-template-columns: minmax(220px, 240px) minmax(0, 1fr) minmax(320px, 360px);
+  align-items: stretch;
   gap: var(--space-4);
   padding: var(--space-4);
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
 }
 
 @media (max-width: 1239px) {
   .studio {
-    grid-template-columns: 1fr 320px;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
   }
   .studio .rail {
     display: none;
@@ -118,22 +126,40 @@ a:hover {
 }
 
 @media (max-width: 899px) {
-  .studio {
-    grid-template-columns: 1fr;
-    padding: var(--space-3);
+  .editor-shell {
+    height: auto;
+    min-height: 100dvh;
+    overflow: auto;
   }
+
+  .studio {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--space-3);
+    overflow: visible;
+  }
+
   .studio .assistant {
-    display: none;
+    display: flex;
+    min-height: 72dvh;
+  }
+}
+
+@media (max-width: 560px) {
+  .studio {
+    gap: var(--space-3);
+    padding: var(--space-2);
   }
 }
 
 /* Card primitive ---------------------------------------------------- */
 
 .card {
+  min-width: 0;
   background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
+  overflow: hidden;
 }
 
 .card-header {
@@ -144,6 +170,7 @@ a:hover {
 }
 
 .card-body {
+  min-width: 0;
   padding: var(--space-4);
 }
 
@@ -152,9 +179,12 @@ a:hover {
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 8px 14px;
   height: 34px;
+  line-height: 1;
+  white-space: nowrap;
   border-radius: var(--radius-pill);
   border: 1px solid var(--line);
   background: var(--bg-2);
@@ -196,7 +226,7 @@ a:hover {
 .btn.icon {
   padding: 0;
   width: 34px;
-  justify-content: center;
+  flex: 0 0 34px;
 }
 
 /* Pills ------------------------------------------------------------- */
@@ -206,6 +236,8 @@ a:hover {
   align-items: center;
   gap: 6px;
   padding: 4px 12px;
+  min-height: 24px;
+  white-space: nowrap;
   border-radius: var(--radius-pill);
   background: var(--bg-2);
   border: 1px solid var(--line);
@@ -285,6 +317,7 @@ h2 {
 .row {
   display: flex;
   align-items: center;
+  min-width: 0;
 }
 .row.gap {
   gap: var(--space-3);
@@ -305,6 +338,7 @@ h2 {
 .scroll-y {
   overflow-y: auto;
   scrollbar-width: thin;
+  scrollbar-gutter: stable;
 }
 .scroll-y::-webkit-scrollbar {
   width: 6px;
