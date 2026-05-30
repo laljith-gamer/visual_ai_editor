@@ -62,6 +62,25 @@
   opacity: 0.55;
 }
 
+/* Topbar selector bleed: iconBtnLabel contains iconBtn in its class name, so
+   it was receiving the button surface/shadow. Keep styling on the real button
+   only and make labels plain inline text. */
+[class*="Topbar_iconBtnLabel"],
+[class*="Topbar_iconBtnLabel"]:hover,
+[class*="Topbar_iconBtnLabel"]:active,
+[class*="Topbar_iconBtnLabel"]:focus {
+  display: inline !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  transform: none !important;
+  filter: none !important;
+  color: inherit !important;
+}
+
 /* Reduce neon-style halo on green buttons. Keep the raised feel, but make it
    professional and controlled. */
 .btn.primary,
@@ -104,11 +123,13 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
 }
 
-/* Chat bubbles: remove selector bleed from bubbleWrap. Only the actual
-   message bubble should have a surface. */
+/* Chat bubbles: remove selector bleed from wrappers. Only the actual message
+   bubble should have a visible surface, border, and shadow. */
 [class*="AssistantPanel_bubbleWrap"],
 [class*="AssistantPanel_bubbleWrap"]:hover,
-[class*="AssistantPanel_bubbleWrap"]:focus-within {
+[class*="AssistantPanel_bubbleWrap"]:focus,
+[class*="AssistantPanel_bubbleWrap"]:focus-within,
+[class*="AssistantPanel_actionRow"] {
   background: transparent !important;
   border: 0 !important;
   box-shadow: none !important;
@@ -119,17 +140,24 @@
 }
 
 [class*="AssistantPanel_bubbleWrap"]::before,
-[class*="AssistantPanel_bubbleWrap"]::after {
+[class*="AssistantPanel_bubbleWrap"]::after,
+[class*="AssistantPanel_actionRow"]::before,
+[class*="AssistantPanel_actionRow"]::after {
   content: none !important;
   display: none !important;
 }
 
 [class*="AssistantPanel_bubble"]:not([class*="AssistantPanel_bubbleWrap"]) {
-  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.14), inset 0 1px 0 var(--highlight-edge) !important;
+  background: color-mix(in srgb, var(--bg-2) 82%, #ffffff 4%) !important;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent) !important;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.24) !important;
 }
 
 [class*="AssistantPanel_rowUser"] [class*="AssistantPanel_bubble"]:not([class*="AssistantPanel_bubbleWrap"]) {
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 14%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #ffffff 12%), var(--accent-strong)) !important;
+  border-color: color-mix(in srgb, var(--accent-strong) 82%, #ffffff 18%) !important;
+  color: #06130b !important;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.2) !important;
 }
 
 /* The composer input should not draw its own rectangular focus box inside
@@ -161,12 +189,12 @@
   border-radius: 999px !important;
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg-1) 94%, #ffffff 6%), var(--bg-1)) !important;
   border: 1px solid color-mix(in srgb, var(--line) 82%, var(--accent) 18%) !important;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18), inset 0 1px 0 var(--highlight-edge) !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18) !important;
 }
 
 [class*="AssistantPanel_composer"]:focus-within {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--line) 52%) !important;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18), inset 0 1px 0 var(--highlight-edge) !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18) !important;
 }
 
 [class*="AssistantPanel_input"] {
