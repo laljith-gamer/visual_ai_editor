@@ -2,7 +2,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  min-width: 0;
+  min-width: 640px;
+  padding-bottom: 4px;
 }
 
 .header {
@@ -17,7 +18,7 @@
 
 .track {
   position: relative;
-  height: 76px;
+  height: 112px;
   border-radius: 12px;
   background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
   border: 1px solid var(--line);
@@ -28,7 +29,7 @@
 
 .empty {
   position: absolute;
-  inset: 0;
+  inset: 0 0 28px 0;
   display: grid;
   place-items: center;
   text-align: center;
@@ -38,8 +39,8 @@
 
 .clip {
   position: absolute;
-  top: 10px;
-  bottom: 26px;
+  top: 14px;
+  bottom: 34px;
   min-width: 34px;
   background: linear-gradient(180deg, rgba(99, 216, 149, 0.4), rgba(99, 216, 149, 0.18));
   border: 1px solid rgba(99, 216, 149, 0.6);
@@ -104,13 +105,13 @@
   left: 0;
   right: 0;
   bottom: 0;
-  height: 24px;
+  height: 30px;
   pointer-events: none;
   border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 .tick {
   position: absolute;
-  bottom: 5px;
+  bottom: 7px;
   transform: translateX(-50%);
   font-size: 10px;
   color: var(--text-faint);
@@ -172,17 +173,8 @@
   border-radius: 999px;
 }
 
-@media (max-width: 560px) {
-  .track {
-    height: 88px;
-  }
-
-  .clip {
-    top: 12px;
-    bottom: 30px;
-  }
-
-  .header {
-    gap: 6px;
+@media (max-width: 760px) {
+  .timeline {
+    min-width: 720px;
   }
 }
