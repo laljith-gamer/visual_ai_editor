@@ -70,7 +70,7 @@
 }
 
 /* Composer: one visible layer only. The wrapper is invisible; the composer is
-   a single pill with one border and one shadow. */
+   a single pill with one green border and one clean shadow. */
 [class*="AssistantPanel_composerWrap"] {
   background: transparent !important;
   background-image: none !important;
@@ -90,16 +90,20 @@
 [class*="AssistantPanel_composer"] {
   background: var(--bg-1) !important;
   background-image: none !important;
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line) 66%) !important;
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16) !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line) 58%) !important;
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, 0.28),
+    0 3px 12px color-mix(in srgb, var(--accent) 10%, transparent) !important;
   outline: 0 !important;
 }
 
 [class*="AssistantPanel_composer"]:focus,
 [class*="AssistantPanel_composer"]:focus-within,
 [class*="AssistantPanel_composer"]:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--line) 54%) !important;
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16) !important;
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--line) 48%) !important;
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.3),
+    0 4px 14px color-mix(in srgb, var(--accent) 12%, transparent) !important;
   outline: 0 !important;
 }
 
@@ -110,4 +114,25 @@
   border: 0 !important;
   box-shadow: none !important;
   outline: 0 !important;
+}
+
+/* Must be last: composerWrap contains the substring "composer", so broad
+   [class*="AssistantPanel_composer"] rules also hit the wrapper. Re-reset it
+   after the composer rules so only the inner pill has the green line/shadow. */
+[class*="AssistantPanel_composerWrap"],
+[class*="AssistantPanel_composerWrap"]:hover,
+[class*="AssistantPanel_composerWrap"]:focus,
+[class*="AssistantPanel_composerWrap"]:focus-within,
+[class*="AssistantPanel_composerWrap"]:focus-visible {
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+}
+
+[class*="AssistantPanel_composerWrap"]::before,
+[class*="AssistantPanel_composerWrap"]::after {
+  content: none !important;
+  display: none !important;
 }
