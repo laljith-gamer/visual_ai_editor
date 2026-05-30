@@ -82,6 +82,95 @@
   background: transparent !important;
 }
 
+/* Tighten the chat composer. The previous 3D focus glow made it look like a
+   broken input box, especially in dark mode. */
+[class*="AssistantPanel_composerWrap"] {
+  padding: 12px 16px 6px !important;
+}
+
+[class*="AssistantPanel_composer"] {
+  min-height: 52px !important;
+  align-items: center !important;
+  padding: 7px 8px 7px 16px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-1) 94%, #ffffff 6%), var(--bg-1)) !important;
+  border-color: color-mix(in srgb, var(--line) 84%, var(--accent) 16%) !important;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18), inset 0 1px 0 var(--highlight-edge) !important;
+}
+
+[class*="AssistantPanel_composer"]:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line) 45%) !important;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent),
+    0 12px 28px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 var(--highlight-edge) !important;
+}
+
+[class*="AssistantPanel_input"] {
+  min-height: 24px !important;
+  max-height: 96px !important;
+  padding: 4px 0 !important;
+  line-height: 1.45 !important;
+}
+
+[class*="AssistantPanel_sendBtn"] {
+  width: 38px !important;
+  height: 38px !important;
+  flex: 0 0 38px !important;
+}
+
+/* Clips drawer: open as a proper right-side floating panel, not a cropped
+   bottom-left card. Keep the editor readable behind it. */
+.drawer-scrim {
+  background: color-mix(in srgb, var(--bg-0) 48%, transparent) !important;
+  backdrop-filter: blur(2px) saturate(0.9) !important;
+  z-index: 70 !important;
+}
+
+.drawer-panel[class*="ClipsDrawer_drawer"] {
+  top: 84px !important;
+  right: 20px !important;
+  bottom: 20px !important;
+  left: auto !important;
+  width: min(460px, calc(100vw - 40px)) !important;
+  max-height: calc(100dvh - 104px) !important;
+  border-radius: 20px !important;
+  z-index: 80 !important;
+  overflow: hidden !important;
+  box-shadow:
+    0 28px 70px rgba(0, 0, 0, 0.46),
+    0 6px 20px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 var(--highlight-edge) !important;
+}
+
+:root[data-theme="light"] .drawer-panel[class*="ClipsDrawer_drawer"] {
+  box-shadow:
+    0 28px 70px rgba(15, 23, 42, 0.2),
+    0 6px 20px rgba(15, 23, 42, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95) !important;
+}
+
+.drawer-panel[class*="ClipsDrawer_drawer"] .card-header {
+  min-height: 58px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 92%, #ffffff 8%), var(--bg-2)) !important;
+}
+
+[class*="ClipsDrawer_list"] {
+  min-height: 0 !important;
+  padding: 14px !important;
+}
+
+[class*="ClipsDrawer_item"] {
+  background: var(--surface-raised) !important;
+  border-color: color-mix(in srgb, var(--line) 82%, var(--highlight-edge) 18%) !important;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.14), inset 0 1px 0 var(--highlight-edge) !important;
+}
+
+[class*="ClipsDrawer_item"]:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line) 50%) !important;
+  transform: translateY(-1px);
+}
+
 /* Timeline nested children have similar names such as clipBody/clipName.
    Keep the 3D style only on the outer clip. */
 [class*="Timeline_clipBody"],
@@ -91,4 +180,21 @@
   border: 0 !important;
   box-shadow: none !important;
   transform: none !important;
+}
+
+@media (max-width: 720px) {
+  .drawer-panel[class*="ClipsDrawer_drawer"] {
+    top: auto !important;
+    right: 10px !important;
+    bottom: 10px !important;
+    left: 10px !important;
+    width: auto !important;
+    max-height: min(72dvh, 620px) !important;
+    border-radius: 18px !important;
+  }
+
+  [class*="AssistantPanel_composerWrap"] {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
 }
