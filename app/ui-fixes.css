@@ -104,6 +104,34 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
 }
 
+/* Chat bubbles: remove selector bleed from bubbleWrap. Only the actual
+   message bubble should have a surface. */
+[class*="AssistantPanel_bubbleWrap"],
+[class*="AssistantPanel_bubbleWrap"]:hover,
+[class*="AssistantPanel_bubbleWrap"]:focus-within {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  padding: 0 !important;
+  transform: none !important;
+  filter: none !important;
+}
+
+[class*="AssistantPanel_bubbleWrap"]::before,
+[class*="AssistantPanel_bubbleWrap"]::after {
+  content: none !important;
+  display: none !important;
+}
+
+[class*="AssistantPanel_bubble"]:not([class*="AssistantPanel_bubbleWrap"]) {
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.14), inset 0 1px 0 var(--highlight-edge) !important;
+}
+
+[class*="AssistantPanel_rowUser"] [class*="AssistantPanel_bubble"]:not([class*="AssistantPanel_bubbleWrap"]) {
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 14%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+}
+
 /* The composer input should not draw its own rectangular focus box inside
    the rounded composer shell. */
 [class*="AssistantPanel_input"],
