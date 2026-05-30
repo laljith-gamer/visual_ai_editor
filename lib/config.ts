@@ -339,20 +339,20 @@ export const ADAPT = {
 
 
 /**
- * v1.6.0 — video-library limits. Stops a single tab from chewing memory
- * by uploading 50 huge files. Both caps are independent: hitting either
- * one blocks further uploads (the rail surfaces a clear message).
+ * v1.6.0 — video-library limits.
  *
- * Tunable per deployment without touching call sites.
+ * Local files are selected through the browser File API and are not uploaded
+ * to Vercel. We therefore do not hard-reject by byte size here. Very large
+ * sources can still exceed browser or ffmpeg.wasm memory during heavy render
+ * work; that is a runtime capability limit, not an upload-selection limit.
  */
 export const LIBRARY_LIMITS = {
   /** Max number of videos a single session can hold at once. */
   maxCount: 8,
-  /** Max combined byte size across the whole library. 1.5 GB. */
-  maxTotalBytes: 1.5 * 1024 * 1024 * 1024,
-  /** Per-source upper bound. Sources larger than this are rejected
-   *  outright with a friendly error. 800 MB. */
-  maxSingleBytes: 800 * 1024 * 1024
+  /** Max combined byte size across the whole library. Infinity = no hard local-pick cap. */
+  maxTotalBytes: Number.POSITIVE_INFINITY,
+  /** Per-source upper bound. Infinity = allow any local file size to be selected. */
+  maxSingleBytes: Number.POSITIVE_INFINITY
 } as const;
 
 /**
@@ -377,35 +377,23 @@ export const SOURCE_COLORS: readonly string[] = [
 
 // =====================================================================
 // v1.7.3 — Local audio (Whisper / ASR) configuration.
-//
-// Phase 1 ships English-only Whisper variants via @huggingface/transformers
-// (already a dep). Capability-tier-driven model selection mirrors the
-// existing SigLIP gating pattern in useCapability.ts. All values can be
-// changed without touching call sites; the only consumers are
-// lib/audio/transcribe.ts and lib/audio/whisper.worker.ts.
 // =====================================================================
 
-export const AUDIO = {
-  /** Whisper "base.en" — best accuracy still small enough for desktops
-   *  with WebGPU. ~74 MB quantized. */
-  modelHigh: "Xenova/whisper-base.en",
-  /** Whisper "tiny.en" — solid baseline accuracy, 39 MB. The default
-   *  for typical browsers. */
-  modelMid: "Xenova/whisper-tiny.en",
-  /** Same tiny.en — we don't have a smaller English-only model that's
-   *  reliably faster on WASM. We keep mid and low identical until a
-   *  better lower-tier option lands (Moonshine onnx is the candidate). */
-  modelLow: "Xenova/whisper-tiny.en",
-  /** Whisper's canonical 30-second window. The model itself was
-   *  trained with this length; deviating costs accuracy. */
+export const TRANSCRIPTION = {
+  /** Default language passed to Transformers.js Whisper. "en" keeps the
+   *  model fast and avoids language-id mistakes on short noisy clips. */
+  language: "en",
+  /** Chunk size forwarded to the ASR pipeline, in seconds. */
   chunkLengthSeconds: 30,
-  /** 5-second stride between chunks so word boundaries don't get cut. */
+  /** Overlap between chunks, in seconds. */
   strideLengthSeconds: 5,
-  /** Expected real-time-factor on WebGPU. Used only to drive the
-   *  smoothed progress bar; set conservatively so the bar never
-   *  overshoots. ~3x means a 60-second clip transcribes in ~20s. */
-  expectedRtfWebGPU: 3,
-  /** Same on WASM. Closer to 1x realtime — the bar will look slow on
-   *  long videos in this tier, which is honest. */
-  expectedRtfWasm: 1
+  /** Max number of transcript segments retained per source. */
+  maxSegmentsPerSource: 800,
+  /** Model choice by detected device tier. These are intentionally small
+   *  enough for in-browser use; high tier gets better accuracy. */
+  models: {
+    low: "Xenova/whisper-tiny.en",
+    mid: "Xenova/whisper-tiny.en",
+    high: "Xenova/whisper-base.en"
+  }
 } as const;
