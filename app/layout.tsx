@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { TimelineProgressGuard } from "@/components/TimelineProgressGuard";
 import "./globals.css";
 import "./ui-polish.css";
 import "./ui-fixes.css";
@@ -39,6 +40,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
+        <TimelineProgressGuard />
         {children}
         <script
           // Register the service worker. Failing silently is fine.
