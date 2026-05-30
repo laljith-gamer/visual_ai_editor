@@ -4,7 +4,7 @@
   gap: var(--space-3);
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   padding-right: 2px;
 }
 
@@ -103,12 +103,9 @@
   overflow: hidden;
 }
 
-/* ──────────────────────────────────────────────────────────────────
- * v1.6.0 — Video library card
- * ────────────────────────────────────────────────────────────────── */
-
 .libraryHeader {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -116,15 +113,18 @@
 
 .libraryActions {
   display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 4px;
   margin-left: auto;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .libraryActionBtn {
-  padding: 3px 8px;
+  padding: 3px 7px;
   font-size: 11px;
+  line-height: 1.2;
   border-radius: 999px;
   background: transparent;
   color: var(--text-faint);
@@ -145,8 +145,8 @@
   padding: 0 4px 0 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: clamp(180px, 34dvh, 300px);
+  gap: 8px;
+  max-height: clamp(190px, 34dvh, 300px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -160,10 +160,11 @@
 }
 
 .libraryItem {
-  display: flex;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  column-gap: 8px;
+  padding: 10px 10px;
   border-radius: var(--radius-input);
   background: var(--bg-1);
   border: 1px solid var(--line);
@@ -180,7 +181,6 @@
 }
 
 .colorDot {
-  flex: 0 0 auto;
   width: 10px;
   height: 10px;
   border-radius: 999px;
@@ -188,11 +188,10 @@
 }
 
 .libraryItemBody {
-  flex: 1 1 auto;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+  display: grid;
+  grid-template-rows: auto auto;
+  row-gap: 4px;
   cursor: pointer;
   background: transparent;
   border: 0;
@@ -208,8 +207,9 @@
 
 .libraryItemName {
   width: 100%;
+  min-width: 0;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -218,28 +218,32 @@
 
 .libraryItemMeta {
   width: 100%;
+  min-width: 0;
   font-size: 11px;
   color: var(--text-faint);
   display: flex;
   gap: 6px;
   align-items: center;
   flex-wrap: wrap;
+  line-height: 1.35;
 }
 
-.libraryItemMeta .badge {
-  display: inline-block;
+.libraryItemMeta :global(.badge) {
+  display: inline-flex;
+  align-items: center;
   padding: 1px 6px;
   border-radius: 999px;
   font-size: 10px;
   font-weight: 600;
   background: var(--bg-2);
   color: var(--text-faint);
+  border: 1px solid var(--line);
 }
 
 .libraryItemActions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex: 0 0 auto;
 }
 
