@@ -9,7 +9,7 @@ import {
   Film
 } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
-import { sha256Blob } from "@/lib/util/hash";
+import { safeVideoFingerprint } from "@/lib/util/hash";
 import { probeVideo } from "@/lib/pipeline/sample";
 import { formatTime } from "@/lib/util/time";
 import { logUser } from "@/lib/log/recorders";
@@ -51,7 +51,7 @@ export function ProjectRail() {
     for (const file of files) {
       try {
         const probe = await probeVideo(file);
-        const hash = await sha256Blob(file);
+        const hash = await safeVideoFingerprint(file);
         const added = addSource(
           file,
           {
