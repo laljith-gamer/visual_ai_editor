@@ -54,7 +54,7 @@ export function ProjectRail() {
       // Per-source size guard. Friendly error rather than "Failed to fetch".
       if (file.size > LIBRARY_LIMITS.maxSingleBytes) {
         alert(
-          `"${file.name}" is ${(file.size / 1024 / 1024).toFixed(0)} MB \u2014 ` +
+          `"${file.name}" is ${(file.size / 1024 / 1024).toFixed(0)} MB — ` +
             `larger than the per-file limit of ${Math.round(
               LIBRARY_LIMITS.maxSingleBytes / 1024 / 1024
             )} MB. Try a shorter clip or a lower-resolution export.`
@@ -77,7 +77,7 @@ export function ProjectRail() {
         );
         if (!added) {
           alert(
-            "Library is full \u2014 remove a video before adding another, " +
+            "Library is full — remove a video before adding another, " +
               "or open a new session."
           );
           break;
@@ -93,7 +93,7 @@ export function ProjectRail() {
             width: probe.width,
             height: probe.height
           },
-          summary: `Added "${file.name}" (${Math.round(probe.duration)}s, ${probe.width}\u00d7${probe.height})`
+          summary: `Added "${file.name}" (${Math.round(probe.duration)}s, ${probe.width}×${probe.height})`
         });
       } catch (err) {
         console.error("Failed to load video", err);
@@ -115,7 +115,7 @@ export function ProjectRail() {
   return (
     <aside className={`rail ${styles.rail}`}>
       {/* ─── Library card ──────────────────────────────────────────── */}
-      <div className="card">
+      <div className={`card ${styles.libraryCard}`}>
         <div className="card-header">
           <div className={styles.libraryHeader}>
             <Film size={14} />
@@ -143,7 +143,7 @@ export function ProjectRail() {
             )}
           </div>
         </div>
-        <div className="card-body">
+        <div className={`card-body ${styles.libraryBody}`}>
           {sources.length === 0 ? (
             <button
               className={`btn primary ${styles.uploadBtn}`}
@@ -152,7 +152,7 @@ export function ProjectRail() {
               <Upload size={14} /> Upload videos
             </button>
           ) : (
-            <>
+            <div className={styles.libraryLoaded}>
               <ul className={styles.libraryList}>
                 {sources.map((s, i) => {
                   const color = SOURCE_COLORS[i % SOURCE_COLORS.length];
@@ -185,7 +185,7 @@ export function ProjectRail() {
                             {formatTime(s.meta.duration)}
                           </span>
                           <span>
-                            {`${s.meta.width}\u00d7${s.meta.height}`}
+                            {`${s.meta.width}×${s.meta.height}`}
                           </span>
                           {s.meta.aspect && (
                             <span className="badge">{s.meta.aspect}</span>
@@ -203,8 +203,8 @@ export function ProjectRail() {
                           onChange={() => toggleSourceSelection(s.id)}
                           title={
                             isSelected
-                              ? "Eligible for AI \u2014 click to exclude"
-                              : "Excluded from AI \u2014 click to include"
+                              ? "Eligible for AI — click to exclude"
+                              : "Excluded from AI — click to include"
                           }
                           aria-label={`Include ${s.meta.name} in AI runs`}
                         />
@@ -222,33 +222,35 @@ export function ProjectRail() {
                 })}
               </ul>
 
-              <button
-                className={styles.libraryAddBtn}
-                onClick={() => fileRef.current?.click()}
-                disabled={atCountCap || atByteCap}
-                title={
-                  atCountCap
-                    ? `Library cap is ${LIBRARY_LIMITS.maxCount} videos`
-                    : atByteCap
-                      ? "Library size cap reached \u2014 remove one to add more"
-                      : "Upload more videos"
-                }
-              >
-                <Plus size={13} />
-                {atCountCap || atByteCap
-                  ? "Library full"
-                  : "Add another video"}
-              </button>
+              <div className={styles.libraryControls}>
+                <button
+                  className={styles.libraryAddBtn}
+                  onClick={() => fileRef.current?.click()}
+                  disabled={atCountCap || atByteCap}
+                  title={
+                    atCountCap
+                      ? `Library cap is ${LIBRARY_LIMITS.maxCount} videos`
+                      : atByteCap
+                        ? "Library size cap reached — remove one to add more"
+                        : "Upload more videos"
+                  }
+                >
+                  <Plus size={13} />
+                  {atCountCap || atByteCap
+                    ? "Library full"
+                    : "Add another video"}
+                </button>
 
-              <div className={styles.libraryFooter}>
-                <span>
-                  {selectedSourceIds.length} of {sources.length} selected for AI
-                </span>
-                <span className="mono">
-                  {(totalBytes / 1024 / 1024).toFixed(0)} MB
-                </span>
+                <div className={styles.libraryFooter}>
+                  <span>
+                    {selectedSourceIds.length} of {sources.length} selected for AI
+                  </span>
+                  <span className="mono">
+                    {(totalBytes / 1024 / 1024).toFixed(0)} MB
+                  </span>
+                </div>
               </div>
-            </>
+            </div>
           )}
           <input
             ref={fileRef}
@@ -326,7 +328,7 @@ export function ProjectRail() {
                     <span className="faint">
                       {new Date(h.updatedAt).toLocaleString()}
                       {h.sources && h.sources.length > 1
-                        ? ` \u00b7 ${h.sources.length} videos`
+                        ? ` · ${h.sources.length} videos`
                         : ""}
                     </span>
                   </button>
