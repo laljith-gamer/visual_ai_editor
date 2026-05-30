@@ -41,6 +41,27 @@
 *::before,
 *::after {
   box-sizing: border-box;
+  scrollbar-color: var(--line-2) var(--bg-1);
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: var(--bg-1);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border: 2px solid var(--bg-1);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+*::-webkit-scrollbar-corner {
+  background: var(--bg-1);
 }
 
 html,
@@ -58,6 +79,7 @@ body {
 
 html {
   min-height: 100%;
+  color-scheme: dark;
 }
 
 body {
@@ -338,14 +360,19 @@ h2 {
 .scroll-y {
   overflow-y: auto;
   scrollbar-width: thin;
+  scrollbar-color: var(--line-2) var(--bg-1);
   scrollbar-gutter: stable;
 }
 .scroll-y::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+}
+.scroll-y::-webkit-scrollbar-track {
+  background: var(--bg-1);
 }
 .scroll-y::-webkit-scrollbar-thumb {
-  background: var(--line);
-  border-radius: 4px;
+  background: var(--line-2);
+  border: 2px solid var(--bg-1);
+  border-radius: 999px;
 }
 
 /* Focus ------------------------------------------------------------ */
