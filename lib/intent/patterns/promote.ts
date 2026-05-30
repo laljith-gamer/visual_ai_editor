@@ -1,16 +1,17 @@
 /**
  * v1.7.5 — Promote intent matcher (briefing → timeline clips).
  *
- * Triggers: "clip those", "use the briefing", "lift the second one",
- * "make a 30s reel of these".
+ * Triggers: "clip those", "use the briefing", "add all clips",
+ * "add all best parts", "lift the second one", "make a 30s reel of these".
  *
  * Hard preconditions:
  *   - state.lastBriefing exists and has at least one bestPart.
- *   - The user message references those parts (verb + target).
+ *   - The user message references those briefing parts.
  *
  * Confidence model:
  *   - 0.90 when (PROMOTE_VERBS verb) AND (PROMOTE_TARGETS target)
  *   - 0.92 when ordinal-based subset is resolved unambiguously
+ *   - 0.94 when additive all-clip phrasing appears after a briefing
  *   - threshold 0.85 at the orchestrator
  */
 
@@ -25,6 +26,9 @@ import { resolveBriefingPartsReference, resolveOp } from "../slots";
 import { parseDuration } from "../time";
 import type { QuickMatchContext, QuickMatchPromote } from "../types";
 
+const ADD_ALL_BRIEFING_CLIPS_RE =
+  /\b(?:add|include|use|put|clip|make)\b.*\b(?:all|these|those|the|suggested|best)\b.*\b(?:clips?|parts?|moments?)\b|\b(?:add|include|use|put|clip)\s+all\s+clips?\b/;
+
 export function matchPromote(
   p: ParsedText,
   ctx: QuickMatchContext
@@ -34,7 +38,8 @@ export function matchPromote(
 
   const verbMatch = hasVerbLemma(p, PROMOTE_VERBS);
   const targetMatch = hasPhrase(p, PROMOTE_TARGETS);
-  if (!verbMatch || !targetMatch) return null;
+  const addAllBriefingClips = ADD_ALL_BRIEFING_CLIPS_RE.test(p.lower);
+  if (!addAllBriefingClips && (!verbMatch || !targetMatch)) return null;
 
   const partsRef = resolveBriefingPartsReference(p.lower, ctx);
   if (partsRef.scope === "none") return null;
@@ -53,6 +58,7 @@ export function matchPromote(
 
   let confidence = 0.9;
   if (partsRef.scope === "subset") confidence = 0.92;
+  if (addAllBriefingClips && partsRef.scope === "all") confidence = 0.94;
 
   return {
     kind: "promote",
