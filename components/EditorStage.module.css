@@ -8,22 +8,9 @@
   padding-right: 2px;
 }
 
-.stage > :global(.card) {
-  flex: 0 0 auto;
-}
-
-.stage > :global(.card):last-child {
-  min-height: 220px;
-}
-
-.stage > :global(.card):last-child :global(.card-body) {
-  overflow: auto;
-  min-height: 148px;
-}
-
 /* Two-pane preview surface.
- * Side-by-side only when the centre column has enough room; otherwise
- * stacked keeps both videos readable instead of squeezing them. */
+ * Restored the wider side-by-side behaviour. The stage itself scrolls;
+ * the timeline is not given its own forced horizontal scroll here. */
 .previewSplit {
   display: grid;
   grid-template-columns: 1fr;
@@ -31,7 +18,7 @@
   min-width: 0;
 }
 
-@media (min-width: 1560px) {
+@media (min-width: 1400px) {
   .previewSplit {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
@@ -62,8 +49,7 @@
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  max-height: 42dvh;
-  min-height: 180px;
+  min-height: 220px;
   background: #000;
   border-radius: 12px;
   overflow: hidden;
@@ -91,17 +77,6 @@
   text-align: center;
 }
 
-@media (max-height: 820px) and (min-width: 900px) {
-  .videoFrame {
-    min-height: 150px;
-    max-height: 34dvh;
-  }
-
-  .stage > :global(.card):last-child {
-    min-height: 240px;
-  }
-}
-
 @media (max-width: 560px) {
   .stage {
     padding-right: 0;
@@ -109,7 +84,6 @@
 
   .videoFrame {
     min-height: 180px;
-    max-height: none;
     border-radius: 10px;
   }
 }
