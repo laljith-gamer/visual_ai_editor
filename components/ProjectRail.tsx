@@ -46,21 +46,10 @@ export function ProjectRail() {
     [sources]
   );
   const atCountCap = sources.length >= LIBRARY_LIMITS.maxCount;
-  const atByteCap = totalBytes >= LIBRARY_LIMITS.maxTotalBytes;
 
   async function handleFiles(fileList: FileList) {
     const files = Array.from(fileList);
     for (const file of files) {
-      // Per-source size guard. Friendly error rather than "Failed to fetch".
-      if (file.size > LIBRARY_LIMITS.maxSingleBytes) {
-        alert(
-          `"${file.name}" is ${(file.size / 1024 / 1024).toFixed(0)} MB — ` +
-            `larger than the per-file limit of ${Math.round(
-              LIBRARY_LIMITS.maxSingleBytes / 1024 / 1024
-            )} MB. Try a shorter clip or a lower-resolution export.`
-        );
-        continue;
-      }
       try {
         const probe = await probeVideo(file);
         const hash = await sha256Blob(file);
@@ -226,19 +215,15 @@ export function ProjectRail() {
                 <button
                   className={styles.libraryAddBtn}
                   onClick={() => fileRef.current?.click()}
-                  disabled={atCountCap || atByteCap}
+                  disabled={atCountCap}
                   title={
                     atCountCap
                       ? `Library cap is ${LIBRARY_LIMITS.maxCount} videos`
-                      : atByteCap
-                        ? "Library size cap reached — remove one to add more"
-                        : "Upload more videos"
+                      : "Upload more videos"
                   }
                 >
                   <Plus size={13} />
-                  {atCountCap || atByteCap
-                    ? "Library full"
-                    : "Add another video"}
+                  {atCountCap ? "Library full" : "Add another video"}
                 </button>
 
                 <div className={styles.libraryFooter}>
