@@ -21,6 +21,11 @@
   --danger: #ff7373;
   --violet: #a993ff;
   --shadow-card: 0 18px 44px rgba(0, 0, 0, 0.36);
+  --topbar-bg: rgba(17, 21, 26, 0.72);
+  --soft-button-bg: rgba(255, 255, 255, 0.03);
+  --soft-button-bg-hover: rgba(255, 255, 255, 0.06);
+  --soft-button-border: rgba(255, 255, 255, 0.06);
+  --soft-button-border-hover: rgba(255, 255, 255, 0.12);
   --radius-card: 14px;
   --radius-pill: 999px;
   --radius-input: 10px;
@@ -35,6 +40,30 @@
   --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+  --bg-0: #f4f7fb;
+  --bg-1: #ffffff;
+  --bg-2: #f7f9fc;
+  --bg-3: #edf2f7;
+  --line: #d8e0ea;
+  --line-2: #b8c4d3;
+  --text: #111827;
+  --text-muted: #4b5563;
+  --text-faint: #6b7280;
+  --accent: #16a34a;
+  --accent-strong: #15803d;
+  --warn: #b7791f;
+  --info: #2563eb;
+  --danger: #dc2626;
+  --violet: #7c3aed;
+  --shadow-card: 0 18px 40px rgba(15, 23, 42, 0.1);
+  --topbar-bg: rgba(255, 255, 255, 0.78);
+  --soft-button-bg: rgba(15, 23, 42, 0.03);
+  --soft-button-bg-hover: rgba(15, 23, 42, 0.06);
+  --soft-button-border: rgba(15, 23, 42, 0.08);
+  --soft-button-border-hover: rgba(15, 23, 42, 0.16);
 }
 
 *,
@@ -82,6 +111,10 @@ html {
   color-scheme: dark;
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
 body {
   min-height: 100dvh;
 }
@@ -121,10 +154,10 @@ a:hover {
   background: var(--bg-0);
   background-image: radial-gradient(
       circle at 20% -10%,
-      rgba(99, 216, 149, 0.08),
+      color-mix(in srgb, var(--accent) 12%, transparent),
       transparent 40%
     ),
-    radial-gradient(circle at 110% 5%, rgba(117, 167, 255, 0.06), transparent 40%);
+    radial-gradient(circle at 110% 5%, color-mix(in srgb, var(--info) 10%, transparent), transparent 40%);
 }
 
 .studio {
@@ -239,10 +272,10 @@ a:hover {
 
 .btn.danger {
   color: var(--danger);
-  border-color: rgba(255, 115, 115, 0.4);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 .btn.danger:hover {
-  background: rgba(255, 115, 115, 0.08);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 .btn.icon {
@@ -269,21 +302,21 @@ a:hover {
 }
 
 .pill.accent {
-  border-color: rgba(99, 216, 149, 0.4);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
   color: var(--accent);
-  background: rgba(99, 216, 149, 0.08);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .pill.warn {
-  border-color: rgba(240, 193, 92, 0.4);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
   color: var(--warn);
-  background: rgba(240, 193, 92, 0.08);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
 }
 
 .pill.info {
-  border-color: rgba(117, 167, 255, 0.4);
+  border-color: color-mix(in srgb, var(--info) 40%, transparent);
   color: var(--info);
-  background: rgba(117, 167, 255, 0.08);
+  background: color-mix(in srgb, var(--info) 8%, transparent);
 }
 
 /* Inputs ------------------------------------------------------------ */
@@ -397,7 +430,7 @@ h2 {
 .drawer-scrim {
   position: fixed;
   inset: 0;
-  background: rgba(11, 13, 16, 0.7);
+  background: color-mix(in srgb, var(--bg-0) 70%, transparent);
   backdrop-filter: blur(6px);
   z-index: 50;
 }
