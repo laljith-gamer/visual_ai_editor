@@ -102,7 +102,6 @@ export function ProjectRail() {
 
   return (
     <aside className={`rail ${styles.rail}`}>
-      {/* ─── Library card ──────────────────────────────────────────── */}
       <div className={`card ${styles.libraryCard}`}>
         <div className="card-header">
           <div className={styles.libraryHeader}>
@@ -165,25 +164,14 @@ export function ProjectRail() {
                             : "Click to make this the active source"
                         }
                       >
-                        <span className={styles.libraryItemTopLine}>
-                          <span className={styles.libraryItemName}>
-                            {s.meta.name}
-                          </span>
-                          {isActive && <span className={styles.activeBadge}>Active</span>}
-                        </span>
+                        <span className={styles.libraryItemName}>{s.meta.name}</span>
                         <span className={styles.libraryItemMeta}>
                           <span className="mono">
                             {formatTime(s.meta.duration)}
                           </span>
-                          <span>
-                            {`${s.meta.width}×${s.meta.height}`}
-                          </span>
-                          {s.meta.aspect && (
-                            <span className="badge">{s.meta.aspect}</span>
-                          )}
-                          <span>
-                            {(s.meta.size / 1024 / 1024).toFixed(1)} MB
-                          </span>
+                          <span>{`${s.meta.width}×${s.meta.height}`}</span>
+                          {s.meta.aspect && <span className="badge">{s.meta.aspect}</span>}
+                          <span>{(s.meta.size / 1024 / 1024).toFixed(1)} MB</span>
                         </span>
                       </button>
                       <div className={styles.libraryItemActions}>
@@ -253,7 +241,6 @@ export function ProjectRail() {
         </div>
       </div>
 
-      {/* ─── Progress ──────────────────────────────────────────────── */}
       <div className="card">
         <div className="card-header">Progress</div>
         <div className="card-body">
@@ -271,7 +258,6 @@ export function ProjectRail() {
         </div>
       </div>
 
-      {/* ─── Memory ────────────────────────────────────────────────── */}
       <div className="card">
         <div className="card-header">Memory</div>
         <div className="card-body">
@@ -294,7 +280,6 @@ export function ProjectRail() {
         </div>
       </div>
 
-      {/* ─── History ───────────────────────────────────────────────── */}
       <div className="card">
         <div className="card-header">
           <HistoryIcon size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
