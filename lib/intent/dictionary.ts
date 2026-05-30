@@ -85,7 +85,17 @@ export const RESET_VERBS = ["reset", "clear", "wipe"];
 
 // ---- Promote intent (briefing → clips) -------------------------------
 
-export const PROMOTE_VERBS = ["clip", "use", "take", "lift", "pull", "promote"];
+export const PROMOTE_VERBS = [
+  "clip",
+  "use",
+  "take",
+  "lift",
+  "pull",
+  "promote",
+  "add",
+  "include",
+  "put"
+];
 export const PROMOTE_TARGETS = [
   "those",
   "them",
@@ -94,7 +104,18 @@ export const PROMOTE_TARGETS = [
   "the parts",
   "the moments",
   "the best parts",
-  "the suggestions"
+  "the suggestions",
+  "all clip",
+  "all clips",
+  "all best clips",
+  "all best parts",
+  "best clips",
+  "best parts",
+  "suggested clips",
+  "these clips",
+  "those clips",
+  "the clips",
+  "the suggested clips"
 ];
 
 // ---- Affirm intent ---------------------------------------------------
