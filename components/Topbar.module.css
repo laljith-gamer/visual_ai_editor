@@ -5,7 +5,7 @@
   padding: var(--space-3) var(--space-4);
   min-height: 64px;
   border-bottom: 1px solid var(--line);
-  background: rgba(17, 21, 26, 0.72);
+  background: var(--topbar-bg);
   backdrop-filter: blur(10px);
   flex: 0 0 auto;
 }
@@ -27,7 +27,7 @@
   color: #0b1a12;
   display: grid;
   place-items: center;
-  box-shadow: 0 6px 20px rgba(99, 216, 149, 0.25);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .actions {
@@ -87,7 +87,7 @@
   color: #07120c;
   background: linear-gradient(180deg, var(--accent), var(--accent-strong));
   border: 1px solid var(--accent-strong);
-  box-shadow: 0 6px 16px rgba(99, 216, 149, 0.25);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 25%, transparent);
   transition: transform 100ms ease, box-shadow 160ms ease, filter 120ms ease;
   cursor: pointer;
   white-space: nowrap;
@@ -95,7 +95,7 @@
 
 .newChatBtn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(99, 216, 149, 0.32);
+  box-shadow: 0 10px 22px color-mix(in srgb, var(--accent) 32%, transparent);
   filter: brightness(1.04);
 }
 
@@ -115,17 +115,17 @@
   font-size: 13px;
   font-weight: 500;
   color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--soft-button-bg);
+  border: 1px solid var(--soft-button-border);
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .iconBtn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--soft-button-bg-hover);
   color: var(--text);
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: var(--soft-button-border-hover);
 }
 
 @media (max-width: 720px) {
@@ -141,7 +141,7 @@
   height: 8px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 2px var(--bg-2), 0 0 8px rgba(99, 216, 149, 0.6);
+  box-shadow: 0 0 0 2px var(--bg-2), 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
   animation: activityPulse 1.6s ease-in-out infinite;
 }
 
