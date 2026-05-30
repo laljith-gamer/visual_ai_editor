@@ -340,16 +340,15 @@ export const ADAPT = {
 
 /**
  * v1.6.0 — video-library limits. Count cap remains to avoid a huge source list.
- * Byte caps stay defined for compatibility, but the upload/store paths no longer
- * hard-block local files by byte size.
+ * Byte caps stay high enough to avoid blocking normal local-file selection.
  */
 export const LIBRARY_LIMITS = {
   /** Max number of videos a single session can hold at once. */
   maxCount: 8,
-  /** Legacy byte cap; upload/store bypasses this for local-file selection. */
-  maxTotalBytes: 1.5 * 1024 * 1024 * 1024,
-  /** Legacy byte cap; upload/store bypasses this for local-file selection. */
-  maxSingleBytes: 800 * 1024 * 1024
+  /** Practical local-file cap; far above browser-feasible video sizes. */
+  maxTotalBytes: Number.MAX_SAFE_INTEGER,
+  /** Practical local-file cap; far above browser-feasible video sizes. */
+  maxSingleBytes: Number.MAX_SAFE_INTEGER
 } as const;
 
 /**
