@@ -24,7 +24,6 @@ export function ProjectRail() {
   const addSource = useEditorStore((s) => s.addSource);
   const removeSource = useEditorStore((s) => s.removeSource);
   const setActiveSource = useEditorStore((s) => s.setActiveSource);
-  const toggleSourceSelection = useEditorStore((s) => s.toggleSourceSelection);
   const selectAllSources = useEditorStore((s) => s.selectAllSources);
   const selectActiveOnlySource = useEditorStore((s) => s.selectActiveOnlySource);
   const status = useEditorStore((s) => s.status);
@@ -166,8 +165,11 @@ export function ProjectRail() {
                             : "Click to make this the active source"
                         }
                       >
-                        <span className={styles.libraryItemName}>
-                          {s.meta.name}
+                        <span className={styles.libraryItemTopLine}>
+                          <span className={styles.libraryItemName}>
+                            {s.meta.name}
+                          </span>
+                          {isActive && <span className={styles.activeBadge}>Active</span>}
                         </span>
                         <span className={styles.libraryItemMeta}>
                           <span className="mono">
@@ -185,18 +187,18 @@ export function ProjectRail() {
                         </span>
                       </button>
                       <div className={styles.libraryItemActions}>
-                        <input
-                          type="checkbox"
-                          className={styles.libraryCheckbox}
-                          checked={isSelected}
-                          onChange={() => toggleSourceSelection(s.id)}
+                        <span
+                          className={`${styles.sourceState} ${
+                            isSelected ? styles.sourceStateOn : styles.sourceStateOff
+                          }`}
                           title={
                             isSelected
-                              ? "Eligible for AI — click to exclude"
-                              : "Excluded from AI — click to include"
+                              ? "This video is eligible for AI picks"
+                              : "This video is excluded from AI picks"
                           }
-                          aria-label={`Include ${s.meta.name} in AI runs`}
-                        />
+                        >
+                          {isSelected ? "AI" : "Skip"}
+                        </span>
                         <button
                           className={styles.removeIconBtn}
                           onClick={() => handleRemoveSource(s.id, s.meta.name)}
