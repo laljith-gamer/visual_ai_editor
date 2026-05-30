@@ -60,27 +60,43 @@
 .historyList {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 4px 0 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 8px;
+  min-width: 0;
+  max-height: clamp(210px, 34dvh, 360px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.historyList::-webkit-scrollbar {
+  width: 6px;
+}
+.historyList::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
 }
 
 .historyItem {
-  display: flex;
-  align-items: stretch;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
+  width: 100%;
 }
 
 .historyButton {
-  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
-  padding: 8px 10px;
+  gap: 3px;
+  padding: 10px 12px;
   border-radius: var(--radius-input);
   background: var(--bg-1);
   border: 1px solid var(--line);
@@ -94,13 +110,38 @@
 }
 
 .historyTitle {
+  width: 100%;
+  min-width: 0;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text);
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.historyButton :global(.faint) {
+  width: 100%;
+  min-width: 0;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.35;
+}
+
+.historyItem :global(.btn.icon.danger) {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  flex: 0 0 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  margin: 0;
+  padding: 0;
+  border-radius: 999px;
 }
 
 .libraryCard {
@@ -345,6 +386,10 @@
   .libraryList {
     max-height: 172px;
   }
+
+  .historyList {
+    max-height: 260px;
+  }
 }
 
 @media (max-height: 660px) {
@@ -354,5 +399,9 @@
 
   .libraryList {
     max-height: 128px;
+  }
+
+  .historyList {
+    max-height: 210px;
   }
 }
