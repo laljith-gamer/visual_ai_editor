@@ -103,6 +103,31 @@
   overflow: hidden;
 }
 
+.libraryCard {
+  flex: 0 0 auto;
+  max-height: min(380px, 48dvh);
+  display: flex;
+  flex-direction: column;
+}
+
+.libraryCard :global(.card-header) {
+  flex: 0 0 auto;
+}
+
+.libraryBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.libraryLoaded {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+
 .libraryHeader {
   display: grid;
   grid-template-columns: auto auto auto minmax(0, 1fr);
@@ -141,12 +166,13 @@
 
 .libraryList {
   list-style: none;
-  margin: 0 0 var(--space-2) 0;
+  margin: 0;
   padding: 0 4px 0 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: clamp(190px, 34dvh, 300px);
+  min-height: 0;
+  max-height: clamp(120px, 24dvh, 220px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -157,6 +183,15 @@
 .libraryList::-webkit-scrollbar-thumb {
   background: var(--line);
   border-radius: 999px;
+}
+
+.libraryControls {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 2px;
+  background: linear-gradient(180deg, transparent, rgba(17, 21, 26, 0.88) 18%);
 }
 
 .libraryItem {
@@ -258,7 +293,7 @@
   width: 100%;
   justify-content: center;
   border: 1px dashed var(--line-2);
-  background: transparent;
+  background: var(--bg-1);
   color: var(--text-faint);
   padding: 10px;
   border-radius: var(--radius-input);
@@ -271,7 +306,7 @@
 .libraryAddBtn:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-1));
 }
 .libraryAddBtn:disabled {
   opacity: 0.5;
@@ -285,7 +320,6 @@
   gap: var(--space-2);
   font-size: 11px;
   color: var(--text-faint);
-  margin-top: 6px;
 }
 
 .removeIconBtn {
@@ -304,13 +338,21 @@
 }
 
 @media (max-height: 760px) {
+  .libraryCard {
+    max-height: 330px;
+  }
+
   .libraryList {
-    max-height: 216px;
+    max-height: 172px;
   }
 }
 
 @media (max-height: 660px) {
+  .libraryCard {
+    max-height: 292px;
+  }
+
   .libraryList {
-    max-height: 168px;
+    max-height: 128px;
   }
 }
