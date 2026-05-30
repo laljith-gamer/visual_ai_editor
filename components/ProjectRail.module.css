@@ -142,10 +142,21 @@
 .libraryList {
   list-style: none;
   margin: 0 0 var(--space-2) 0;
-  padding: 0;
+  padding: 0 4px 0 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: clamp(180px, 34dvh, 300px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.libraryList::-webkit-scrollbar {
+  width: 6px;
+}
+.libraryList::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
 }
 
 .libraryItem {
@@ -286,4 +297,16 @@
 .removeIconBtn:hover {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+@media (max-height: 760px) {
+  .libraryList {
+    max-height: 216px;
+  }
+}
+
+@media (max-height: 660px) {
+  .libraryList {
+    max-height: 168px;
+  }
 }
