@@ -1,0 +1,113 @@
+/* =====================================================================
+   Final visual cleanup overrides.
+   Loaded last to beat earlier broad CSS-module substring selectors.
+   ===================================================================== */
+
+/* Topbar: label spans were caught by [class*="Topbar_iconBtn"]. */
+[class*="Topbar_iconBtn"] > [class*="Topbar_iconBtnLabel"],
+[class*="Topbar_iconBtn"] > [class*="Topbar_iconBtnLabel"]:hover,
+[class*="Topbar_iconBtn"] > [class*="Topbar_iconBtnLabel"]:active {
+  display: inline !important;
+  width: auto !important;
+  height: auto !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  transform: none !important;
+  filter: none !important;
+  color: inherit !important;
+}
+
+/* Chat: bubbleWrap matched the broad [class*="AssistantPanel_bubble"] rule.
+   Reset it with higher specificity inside both assistant and user rows. */
+[class*="AssistantPanel_row"] > [class*="AssistantPanel_bubbleWrap"],
+[class*="AssistantPanel_rowAssistant"] > [class*="AssistantPanel_bubbleWrap"],
+[class*="AssistantPanel_rowUser"] > [class*="AssistantPanel_bubbleWrap"],
+[class*="AssistantPanel_row"] [class*="AssistantPanel_bubbleWrap"] {
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  transform: none !important;
+  filter: none !important;
+}
+
+[class*="AssistantPanel_row"] > [class*="AssistantPanel_bubbleWrap"]::before,
+[class*="AssistantPanel_row"] > [class*="AssistantPanel_bubbleWrap"]::after,
+[class*="AssistantPanel_row"] [class*="AssistantPanel_bubbleWrap"]::before,
+[class*="AssistantPanel_row"] [class*="AssistantPanel_bubbleWrap"]::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* Real bubble only: enough shadow for depth, no phantom rectangle behind it. */
+[class*="AssistantPanel_rowAssistant"] [class*="AssistantPanel_bubbleWrap"] > [class*="AssistantPanel_bubble"] {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 90%, #ffffff 5%), var(--bg-2)) !important;
+  border: 1px solid color-mix(in srgb, var(--line) 86%, #ffffff 4%) !important;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.22) !important;
+}
+
+[class*="AssistantPanel_rowUser"] [class*="AssistantPanel_bubbleWrap"] > [class*="AssistantPanel_bubble"] {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 86%, #ffffff 14%), var(--accent-strong)) !important;
+  color: #06130b !important;
+  border: 1px solid color-mix(in srgb, var(--accent-strong) 82%, #ffffff 18%) !important;
+  box-shadow: 0 9px 18px rgba(0, 0, 0, 0.2) !important;
+}
+
+/* Chat action row/buttons: keep tiny icon buttons, no large wrapper plate. */
+[class*="AssistantPanel_bubbleWrap"] > [class*="AssistantPanel_actionRow"] {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin-left: 4px !important;
+}
+
+/* Composer: one visible layer only. The wrapper is invisible; the composer is
+   a single pill with one border and one shadow. */
+[class*="AssistantPanel_composerWrap"] {
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+}
+
+[class*="AssistantPanel_composerWrap"]::before,
+[class*="AssistantPanel_composerWrap"]::after,
+[class*="AssistantPanel_composer"]::before,
+[class*="AssistantPanel_composer"]::after {
+  content: none !important;
+  display: none !important;
+}
+
+[class*="AssistantPanel_composer"] {
+  background: var(--bg-1) !important;
+  background-image: none !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line) 66%) !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16) !important;
+  outline: 0 !important;
+}
+
+[class*="AssistantPanel_composer"]:focus,
+[class*="AssistantPanel_composer"]:focus-within,
+[class*="AssistantPanel_composer"]:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line) 54%) !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16) !important;
+  outline: 0 !important;
+}
+
+[class*="AssistantPanel_composer"] textarea,
+[class*="AssistantPanel_composer"] textarea:focus,
+[class*="AssistantPanel_composer"] textarea:focus-visible {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+}
