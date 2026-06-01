@@ -4,6 +4,44 @@ All notable changes to Shorts Studio are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to semantic versioning.
 
+## [1.7.9] — 2026-06-01
+
+### Fixed — A new prompt no longer wipes your existing clips
+
+Previously, after the AI picked clips for one request, a follow-up
+request (a new topic, another moment, or a verbatim time-slice) would
+**replace** the whole timeline instead of adding to it — silently
+erasing the earlier curation. Asking to "add this clip" over a region
+that was already clipped could also drop the new clip or reset the
+source. Both behaviours are gone.
+
+Timeline mutations are now **additive by default**; replacement only
+happens when the user clearly asks for a fresh start.
+
+#### What changed
+
+- **Append-by-default across every clip-producing mode.** `plan`,
+  `moment`, and `extract` responses now carry an optional top-level
+  `op: "append" | "replace"`. When omitted, the client appends if the
+  timeline already has clips and replaces only when it's empty. The
+  planner sets `op: "replace"` exclusively on explicit reset language
+  ("start over", "scrap that", "instead make it…").
+- **Explicit, user-pinned adds never get deduped away.** `extract`
+  (and any range the user named) is folded in with `allowOverlap`, so
+  "clip 0:30–1:00" then "clip 2:00–2:30" keeps **both**, even if they
+  overlap an existing clip.
+- **`keep_range` vs `extract` disambiguation.** Additive phrasing
+  ("add 1:00–1:30", "also grab…", "include… too") now routes to
+  `extract`-append instead of `keep_range`, which used to throw away
+  every other clip on the source.
+- **One-step undo.** Every timeline mutation snapshots the previous
+  state first. Say "undo" / "undo that" / "bring those back" to restore
+  it. Exposed as a new `undo` edit operation that works even on an empty
+  timeline (so you can recover from a wipe).
+- Deferred "Run analysis" runs remember the append/replace decision via
+  a new `pendingTimelineOp` store field, so confirming a plan behaves
+  the same as an auto-run.
+
 ## [1.6.4] — 2026-05-28
 
 ### Added — Chat about any clip on the timeline

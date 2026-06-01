@@ -447,6 +447,15 @@ export type EditOperation =
       /** Clear every clip from one source. Other sources are untouched. */
       kind: "reset_source";
       sourceId?: string;
+    }
+  | {
+      /** v1.7.9 — Restore the timeline to its state before the most
+       *  recent timeline mutation. One-step undo. Global (not scoped to
+       *  a source); sourceId is ignored if present. The client maps
+       *  "undo" / "undo that" / "bring those back" / "put it back" to
+       *  this op so a destructive turn is always recoverable. */
+      kind: "undo";
+      sourceId?: string;
     };
 
 /** What POST /api/agent expects in the request body. */
@@ -521,6 +530,16 @@ export type AgentResponse =
       plan: EditPlan;
       /** Patch the planner emitted, if this was a refinement turn. */
       planPatch?: PlanPatch;
+      /** v1.7.9 — how the run's results join the timeline.
+       *    "append"  → keep existing clips, fold the new ones in (default)
+       *    "replace" → wipe the timeline first
+       *  Omitted means "let the client decide": it appends when the
+       *  timeline already has clips and replaces when it's empty. The
+       *  planner only sets "replace" on explicit reset language
+       *  ("start over", "scrap that", "instead make it…"). This is what
+       *  stops a second prompt from silently erasing the first run's
+       *  clips. */
+      op?: "append" | "replace";
       /** Conversational message to render in chat. */
       message: string;
       /** v1.4.0 — user tier classified by the LLM from tone/vocabulary.
@@ -539,6 +558,10 @@ export type AgentResponse =
       /** Single-target plan with exactly one scenario. */
       plan: EditPlan;
       planPatch?: PlanPatch;
+      /** v1.7.9 — see the plan variant. Default behaviour appends the
+       *  located moment to existing clips ("also find the save")
+       *  instead of replacing the timeline. */
+      op?: "append" | "replace";
       /** Verbatim moment description from the user. */
       momentDescription: string;
       message: string;
@@ -554,6 +577,11 @@ export type AgentResponse =
        *  for this range without sampling, scoring, or hitting the
        *  cloud at all. v1.5.0. */
       extractRange: ExtractRange;
+      /** v1.7.9 — how the extracted slice joins the timeline. Default
+       *  (omitted) appends to existing clips so "clip 0:30–1:00" then
+       *  "clip 2:00–2:30" stacks both instead of the second wiping the
+       *  first. "replace" only on explicit reset language. */
+      op?: "append" | "replace";
       message: string;
       inferred: InferredField[];
       warnings: string[];

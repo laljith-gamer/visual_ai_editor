@@ -161,11 +161,29 @@ export default function Home() {
       // (existing + new scenarios) result. The pipeline just runs
       // against a transient *subset* so it doesn't re-score
       // previously-evaluated scenarios.
-      const isAppend =
+      // v1.7.9 — Two distinct flags:
+      //   subsetAppend     — the caller passed scenario ids to re-score
+      //                      a SUBSET (the "add the celebration too"
+      //                      refinement). Guards the subset-plan block
+      //                      below. Must read opts safely because a
+      //                      deferred "Run analysis" tap calls us with
+      //                      no opts at all.
+      //   appendToTimeline — whether the FINAL results should be folded
+      //                      into the existing timeline (merge) rather
+      //                      than replacing it. True when this is a
+      //                      subset append OR the editor parked an
+      //                      "append" decision in pendingTimelineOp,
+      //                      AND there's actually something to append to.
+      const subsetAppend =
         Array.isArray(opts?.appendScenarioIds) &&
-        opts!.appendScenarioIds.length > 0;
+        (opts?.appendScenarioIds?.length ?? 0) > 0;
+      const existingClipCount = state.highlights.length;
+      const appendToTimeline =
+        existingClipCount > 0 &&
+        (subsetAppend ||
+          useEditorStore.getState().pendingTimelineOp === "append");
       let activePlan = fullPlan;
-      if (isAppend) {
+      if (subsetAppend) {
         const wanted = new Set(opts!.appendScenarioIds);
         const subsetScenarios = fullPlan.scenarios.filter((s) => wanted.has(s.id));
         if (subsetScenarios.length === 0) {
@@ -279,7 +297,7 @@ export default function Home() {
           // user already has clips on the timeline; we don't want to
           // shout "nothing matched" and erase the success of the
           // earlier turn. Just log it and move on.
-          if (isAppend) {
+          if (appendToTimeline) {
             pushMessage({
               role: "assistant",
               content:
@@ -301,10 +319,12 @@ export default function Home() {
           return;
         }
 
-        // v1.7.1 — append vs replace. On append we preserve every
+        // v1.7.9 — append vs replace. On append we preserve every
         // existing clip and only fold in the new ones; on a fresh run
-        // we replace the whole timeline as before.
-        if (isAppend) {
+        // we replace the whole timeline as before. The append decision
+        // now also covers fresh full-plan runs (a new topic on top of
+        // an existing reel), not just subset refinements.
+        if (appendToTimeline) {
           const { added, skipped } = useEditorStore
             .getState()
             .mergeHighlights(merged.highlights);
@@ -344,14 +364,14 @@ export default function Home() {
           (acc, h) => acc + (h.end - h.start),
           0
         );
-        const newClipCount = isAppend
+        const newClipCount = appendToTimeline
           ? merged.highlights.length
           : finalTimeline.length;
 
         // Build a friendly summary that mentions the source breakdown
         // when the run was multi-source.
         let summary: string;
-        if (isAppend) {
+        if (appendToTimeline) {
           summary =
             eligible.length === 1
               ? `Added ${newClipCount} new clip${newClipCount === 1 ? "" : "s"} from "${eligible[0].meta.name}". Timeline is now ${finalTimeline.length} clip${finalTimeline.length === 1 ? "" : "s"}, ${total.toFixed(1)}s total.`
@@ -720,7 +740,11 @@ export default function Home() {
             setStatus("idle", undefined);
             return;
           }
-          if (highlights.length === 0) {
+          // v1.7.9 — "undo" must work even with an empty timeline (the
+          // user may be recovering from a wipe), so let it past the
+          // empty-timeline guard below.
+          const hasUndoOp = ops.some((o) => o.kind === "undo");
+          if (highlights.length === 0 && !hasUndoOp) {
             pushMessage({
               role: "assistant",
               content:
@@ -774,6 +798,14 @@ export default function Home() {
               case "reset_source":
                 result = s.resetActiveSourceClips();
                 break;
+              case "undo": {
+                const r = s.undoTimeline();
+                // Report a clip-change count so the summary message
+                // reads naturally ("1 clip change") when something was
+                // actually restored.
+                result = { changed: r.restored ? 1 : 0 };
+                break;
+              }
             }
             totalChanged += result.changed;
             opLog.push({
@@ -1220,7 +1252,33 @@ export default function Home() {
             setProgress(0);
             return;
           }
-          setHighlights(built);
+          // v1.7.9 — Extract joins the timeline ADDITIVELY by default,
+          // so a second "clip 2:00 to 2:30" stacks on the first slice
+          // instead of erasing it. The planner emits op:"replace" only
+          // on explicit reset language. We tag the slice with the active
+          // source id and allow overlap — the user pinned this exact
+          // range, so it must never be deduped away.
+          const extractActiveId =
+            useEditorStore.getState().activeSourceId ?? undefined;
+          const taggedExtract = built.map((h) => ({
+            ...h,
+            sourceId: h.sourceId ?? extractActiveId
+          }));
+          const extractAppend =
+            data.op !== "replace" &&
+            useEditorStore.getState().highlights.length > 0;
+          if (extractAppend) {
+            useEditorStore
+              .getState()
+              .mergeHighlights(taggedExtract, { allowOverlap: true });
+            const finalCount = useEditorStore.getState().highlights.length;
+            pushMessage({
+              role: "assistant",
+              content: `Added that slice \u2014 ${finalCount} clip${finalCount === 1 ? "" : "s"} on the timeline now.`
+            });
+          } else {
+            setHighlights(taggedExtract);
+          }
           setStatus("ready", "Ready to render");
           setProgress(1);
           logSession.ai(
@@ -1563,6 +1621,27 @@ export default function Home() {
           Array.isArray(data.planPatch.scenarios) &&
           data.planPatch.scenarios.length > 0 &&
           useEditorStore.getState().highlights.length > 0;
+
+        // v1.7.9 — Decide how THIS run joins the timeline, and remember
+        // it in the store so a deferred "Run analysis" tap (which calls
+        // runPipeline with no opts) still appends/replaces correctly.
+        //   - append refinement ("add the celebration") → append
+        //   - cache-reusable refinement (same scenarios, e.g. "60s",
+        //     "punchier") → replace, since we're re-selecting the SAME
+        //     scenarios over cached scores, not adding a new topic
+        //   - explicit planner op wins next
+        //   - otherwise: append when the timeline already has clips
+        //     (a new topic on top of an existing reel), replace when
+        //     it's empty (the first plan of the session)
+        const hasExistingClips =
+          useEditorStore.getState().highlights.length > 0;
+        let timelineOp: "append" | "replace";
+        if (isAppendRefinement) timelineOp = "append";
+        else if (cacheReusable) timelineOp = "replace";
+        else if (data.op === "replace") timelineOp = "replace";
+        else if (data.op === "append") timelineOp = "append";
+        else timelineOp = hasExistingClips ? "append" : "replace";
+        useEditorStore.getState().setPendingTimelineOp(timelineOp);
 
         if (isAppendRefinement) {
           setPendingExecution(false);
