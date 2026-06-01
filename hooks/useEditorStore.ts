@@ -59,6 +59,21 @@ interface EditorState {
   highlights: Highlight[];
   selectedClipId: string | null;
 
+  /** v1.7.9 — One-step undo snapshot of the timeline. Captured by every
+   *  destructive/append timeline mutation BEFORE it changes anything, so
+   *  the user can always recover from a wipe or an unwanted add. `null`
+   *  means "nothing to undo". */
+  previousHighlights: Highlight[] | null;
+  previousSelectedClipId: string | null;
+
+  /** v1.7.9 — How the NEXT pipeline run should join its results to the
+   *  timeline. Set by the editor when a plan/moment turn is resolved (or
+   *  deferred behind the "Run analysis" card) and read by runPipeline —
+   *  this is what lets a deferred run remember whether it should append
+   *  or replace. Defaults to "replace" (the historical behaviour for a
+   *  first plan on an empty timeline). */
+  pendingTimelineOp: "append" | "replace";
+
   // Conversation state (NEW in v1.1.0)
   mode: IntentMode | null;
   inferred: InferredField[];
@@ -151,10 +166,23 @@ interface EditorState {
    *  replacing them. Used by append-style refinements ("add the
    *  celebration too") so previously-curated clips are preserved.
    *  Returns the number of clips that were actually added (some may
-   *  be skipped due to overlap dedupe or hard caps). */
+   *  be skipped due to overlap dedupe or hard caps).
+   *
+   *  v1.7.9 — `opts.allowOverlap` bypasses the same-source overlap
+   *  dedupe. Set it for EXPLICIT, user-pinned adds (extract / merge /
+   *  promote of an exact range) where the user asked for that precise
+   *  clip and we must never silently drop it. Automatic plan/moment
+   *  runs leave it false so near-duplicate auto-picks are still merged
+   *  away. */
   mergeHighlights: (
-    incoming: Highlight[]
+    incoming: Highlight[],
+    opts?: { allowOverlap?: boolean }
   ) => { added: number; skipped: number };
+  /** v1.7.9 — Restore the timeline to the snapshot captured before the
+   *  most recent mutation. Returns whether anything was restored. */
+  undoTimeline: () => { restored: boolean };
+  /** v1.7.9 — Set how the next pipeline run joins its results. */
+  setPendingTimelineOp: (op: "append" | "replace") => void;
   updateHighlight: (id: string, patch: Partial<Highlight>) => void;
   removeHighlight: (id: string) => void;
   selectClip: (id: string | null) => void;
@@ -251,6 +279,9 @@ function freshState() {
     plan: null as EditPlan | null,
     highlights: [] as Highlight[],
     selectedClipId: null as string | null,
+    previousHighlights: null as Highlight[] | null,
+    previousSelectedClipId: null as string | null,
+    pendingTimelineOp: "replace" as "append" | "replace",
     mode: null as IntentMode | null,
     inferred: [] as InferredField[],
     pendingClarify: null as EditorState["pendingClarify"],
@@ -302,6 +333,19 @@ function aspectLabel(width: number, height: number): string | undefined {
 /** Round a clip endpoint to 2 dp for stability across reads + render. */
 function r2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** v1.7.9 — Capture the current timeline as a one-step undo snapshot.
+ *  Spread into the `set(...)` of any timeline mutation so the previous
+ *  state is always recoverable via undoTimeline(). */
+function snapshot(s: {
+  highlights: Highlight[];
+  selectedClipId: string | null;
+}): { previousHighlights: Highlight[]; previousSelectedClipId: string | null } {
+  return {
+    previousHighlights: s.highlights,
+    previousSelectedClipId: s.selectedClipId
+  };
 }
 
 export const useEditorStore = create<EditorState>()((set, get) => ({
@@ -460,6 +504,9 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       videoMeta: undefined,
       videoHash: undefined,
       highlights: [],
+      previousHighlights: null,
+      previousSelectedClipId: null,
+      pendingTimelineOp: "replace",
       plan: null,
       mode: null,
       inferred: [],
@@ -495,11 +542,12 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   },
 
   setHighlights: (highlights) =>
-    set({
+    set((s) => ({
+      ...snapshot(s),
       highlights,
       selectedClipId: highlights[0]?.id ?? null,
       updatedAt: Date.now()
-    }),
+    })),
 
   /** v1.7.1 — Merge new highlights into the existing timeline.
    *
@@ -517,10 +565,11 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
    *    - Selection: existing selection survives the merge unless it
    *      gets evicted; in that case we fall back to the first clip.
    */
-  mergeHighlights: (incoming) => {
+  mergeHighlights: (incoming, opts) => {
     if (!Array.isArray(incoming) || incoming.length === 0) {
       return { added: 0, skipped: 0 };
     }
+    const allowOverlap = opts?.allowOverlap === true;
     const cur = get();
     const existing = cur.highlights;
 
@@ -538,15 +587,21 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
         continue;
       }
       // Overlap dedupe vs same-source clips already in the timeline.
-      const dur = Math.max(0.001, h.end - h.start);
-      const conflict = merged.find((x) => {
-        if ((x.sourceId ?? null) !== (h.sourceId ?? null)) return false;
-        const o = Math.max(0, Math.min(x.end, h.end) - Math.max(x.start, h.start));
-        return o / dur > 0.5;
-      });
-      if (conflict) {
-        skipped += 1;
-        continue;
+      // v1.7.9 — skipped entirely when allowOverlap is set, which is the
+      // case for explicit user-pinned adds (extract / merge / promote of
+      // a named range). The user asked for that exact clip, so we must
+      // never silently drop it just because it sits over an existing one.
+      if (!allowOverlap) {
+        const dur = Math.max(0.001, h.end - h.start);
+        const conflict = merged.find((x) => {
+          if ((x.sourceId ?? null) !== (h.sourceId ?? null)) return false;
+          const o = Math.max(0, Math.min(x.end, h.end) - Math.max(x.start, h.start));
+          return o / dur > 0.5;
+        });
+        if (conflict) {
+          skipped += 1;
+          continue;
+        }
       }
       merged.push(h);
       added += 1;
@@ -567,12 +622,36 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       cur.selectedClipId &&
       merged.some((x) => x.id === cur.selectedClipId);
     set({
+      ...snapshot(cur),
       highlights: merged,
       selectedClipId: selectedStillThere ? cur.selectedClipId : merged[0]?.id ?? null,
       updatedAt: Date.now()
     });
     return { added, skipped };
   },
+
+  undoTimeline: () => {
+    const s = get();
+    if (s.previousHighlights === null) return { restored: false };
+    const restored = s.previousHighlights;
+    const selId =
+      s.previousSelectedClipId &&
+      restored.some((h) => h.id === s.previousSelectedClipId)
+        ? s.previousSelectedClipId
+        : restored[0]?.id ?? null;
+    set({
+      highlights: restored,
+      selectedClipId: selId,
+      // One-step undo: clear the snapshot so a second "undo" is a no-op
+      // rather than toggling back and forth unpredictably.
+      previousHighlights: null,
+      previousSelectedClipId: null,
+      updatedAt: Date.now()
+    });
+    return { restored: true };
+  },
+
+  setPendingTimelineOp: (op) => set({ pendingTimelineOp: op }),
 
   updateHighlight: (id, patch) =>
     set((s) => ({
@@ -582,6 +661,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
   removeHighlight: (id) =>
     set((s) => ({
+      ...snapshot(s),
       highlights: s.highlights.filter((h) => h.id !== id),
       selectedClipId: s.selectedClipId === id ? null : s.selectedClipId,
       updatedAt: Date.now()
@@ -616,7 +696,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       }
       out.push(h);
     }
-    set({ highlights: out, updatedAt: Date.now() });
+    set({ ...snapshot(s), highlights: out, updatedAt: Date.now() });
     return { changed };
   },
 
@@ -648,7 +728,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       }
       out.push(h);
     }
-    set({ highlights: out, updatedAt: Date.now() });
+    set({ ...snapshot(s), highlights: out, updatedAt: Date.now() });
     return { changed };
   },
 
@@ -679,6 +759,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     };
     const next = [...otherSources, newClip].sort((x, y) => x.start - y.start);
     set({
+      ...snapshot(s),
       highlights: next,
       selectedClipId: newClip.id,
       updatedAt: Date.now()
@@ -734,6 +815,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     // Filter out any clips that became too short after the split.
     const filtered = out.filter((h) => h.end - h.start >= 0.2);
     set({
+      ...snapshot(s),
       highlights: filtered.sort((x, y) => x.start - y.start),
       updatedAt: Date.now()
     });
@@ -761,6 +843,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       }
     }
     set({
+      ...snapshot(s),
       highlights: out.sort((x, y) => x.start - y.start),
       updatedAt: Date.now()
     });
@@ -776,6 +859,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       (h) => h.sourceId && h.sourceId !== sid
     );
     set({
+      ...snapshot(s),
       highlights: next,
       selectedClipId: next[0]?.id ?? null,
       updatedAt: Date.now()

@@ -464,6 +464,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json<AgentResponse>({
       mode: "extract",
       extractRange: range,
+      ...(normalizeTimelineOp(parsed.op) ? { op: normalizeTimelineOp(parsed.op) } : {}),
       message: stringOr(parsed.message, "Grabbing that exact slice."),
       inferred,
       warnings,
@@ -544,6 +545,7 @@ export async function POST(req: NextRequest) {
       });
     }
     const inferred = normalizeInferred(parsed.inferred);
+    const timelineOp = normalizeTimelineOp(parsed.op);
 
     if (mode === "moment") {
       if (buildResult.plan.scenarios.length > 1) {
@@ -556,6 +558,7 @@ export async function POST(req: NextRequest) {
         mode: "moment",
         plan: buildResult.plan,
         planPatch: buildResult.planPatch,
+        ...(timelineOp ? { op: timelineOp } : {}),
         momentDescription:
           typeof parsed.momentDescription === "string"
             ? parsed.momentDescription.slice(0, 400)
@@ -572,6 +575,7 @@ export async function POST(req: NextRequest) {
       mode: "plan",
       plan: buildResult.plan,
       planPatch: buildResult.planPatch,
+      ...(timelineOp ? { op: timelineOp } : {}),
       message: stringOr(parsed.message, "Plan ready."),
       userTier,
       inferred,
@@ -861,6 +865,16 @@ function normalizeUserTier(raw: unknown): UserTier {
   return raw === "advanced" ? "advanced" : "novice";
 }
 
+/** v1.7.9 — Normalize the optional top-level `op` field the planner
+ *  emits on plan / moment / extract turns. Returns undefined when the
+ *  planner didn't express a preference, in which case the CLIENT
+ *  decides (append when the timeline already has clips, replace when
+ *  it's empty). We only ever honour an explicit "append" / "replace"
+ *  — never guess from anything else. */
+function normalizeTimelineOp(raw: unknown): "append" | "replace" | undefined {
+  return raw === "append" || raw === "replace" ? raw : undefined;
+}
+
 /** v1.5.0 — validate an extractRange returned at the top level of the
  *  agent response (mode="extract" path). Mirrors the validation in
  *  lib/plan/normalize.ts but lives here because it's used outside the
@@ -960,6 +974,7 @@ function buildOp(
     }
     case "split_selected":
     case "reset_source":
+    case "undo":
       return { kind, sourceId };
     default:
       return null;

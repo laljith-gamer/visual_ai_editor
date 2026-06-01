@@ -1,6 +1,6 @@
 {
   "name": "shorts-studio",
-  "version": "1.6.4",
+  "version": "1.7.9",
   "private": true,
   "description": "Universal Video Shorts Editor — turn long videos into platform-ready shorts via conversation. Browser-first, free-tier friendly.",
   "scripts": {
