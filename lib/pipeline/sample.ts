@@ -168,10 +168,17 @@ export async function sampleFrames(
     try {
       pixels = readCanvasPixels(result.canvas);
       if (pixels) {
-        if (prevPixels && prevPixels.length === pixels.length) {
-          motion = computeMotion(prevPixels, pixels, stride, motionGain);
-        }
-        saliency = computeSaliency(pixels, stride);
+        // Single pass computes both signals; motion only when the previous
+        // frame buffer is present and matches dimensions.
+        const hasPrev = !!prevPixels && prevPixels.length === pixels.length;
+        const signals = computeFrameSignals(
+          hasPrev ? prevPixels : null,
+          pixels,
+          stride,
+          motionGain
+        );
+        motion = signals.motion;
+        saliency = signals.saliency;
       }
     } catch {
       // Pixel readback can fail (taint, missing 2d ctx). Stay at 0.
@@ -213,50 +220,59 @@ function readCanvasPixels(
   return ctx.getImageData(0, 0, w, h).data;
 }
 
-/** Mean absolute brightness difference between two RGBA frame buffers. */
-function computeMotion(
-  prev: Uint8ClampedArray,
+/**
+ * Single-pass computation of both per-frame visual signals.
+ *
+ * Combines the motion diff (vs `prev`) and the saliency histogram into one
+ * loop so the current frame's luminance is derived exactly once instead of
+ * twice. The output is identical to the previous two-pass implementation:
+ *
+ *   - motion:   mean absolute brightness diff vs `prev`, in [0, 255], boosted
+ *               by `gain` and clamped to 0..1. Returns 0 when `prev` is null
+ *               (e.g. the first frame or a dimension mismatch).
+ *   - saliency: Shannon entropy of a 16-bin brightness histogram, normalized
+ *               by the max entropy log2(16) = 4, clamped to 0..1.
+ *
+ * Both signals stride over the same RGBA buffer (4 bytes/pixel).
+ */
+function computeFrameSignals(
+  prev: Uint8ClampedArray | null,
   curr: Uint8ClampedArray,
   stride: number,
   gain: number
-): number {
+): { motion: number; saliency: number } {
+  const histo = new Uint32Array(16);
   let totalDiff = 0;
   let n = 0;
   // Each pixel = 4 bytes (RGBA). Stride 4 = 1 of every 4 pixels = 16-byte step.
   const step = 4 * stride;
+  const doMotion = prev !== null;
   for (let i = 0; i < curr.length; i += step) {
-    const y1 = 0.299 * curr[i] + 0.587 * curr[i + 1] + 0.114 * curr[i + 2];
-    const y2 = 0.299 * prev[i] + 0.587 * prev[i + 1] + 0.114 * prev[i + 2];
-    totalDiff += Math.abs(y1 - y2);
+    const y = 0.299 * curr[i] + 0.587 * curr[i + 1] + 0.114 * curr[i + 2];
+    // Saliency bin: truncate to int (y | 0) then bucket into 16 bins (>> 4).
+    histo[(y | 0) >> 4]++;
+    if (doMotion) {
+      const yp = 0.299 * prev![i] + 0.587 * prev![i + 1] + 0.114 * prev![i + 2];
+      totalDiff += Math.abs(y - yp);
+    }
     n++;
   }
-  if (n === 0) return 0;
-  // Raw mean diff is in [0, 255]. Typical motion ~5-30. Boost by `gain`
-  // to use the full 0..1 range, then clamp.
-  const raw = totalDiff / n / 255;
-  return Math.min(1, raw * gain);
-}
+  if (n === 0) return { motion: 0, saliency: 0 };
 
-/** Shannon entropy of a 16-bin brightness histogram, normalized 0..1. */
-function computeSaliency(pixels: Uint8ClampedArray, stride: number): number {
-  const histo = new Uint32Array(16);
-  let n = 0;
-  const step = 4 * stride;
-  for (let i = 0; i < pixels.length; i += step) {
-    const y =
-      (0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]) | 0;
-    histo[y >> 4]++;
-    n++;
-  }
-  if (n === 0) return 0;
+  // Motion: raw mean diff is in [0, 255]. Typical motion ~5-30. Boost by
+  // `gain` to use the full 0..1 range, then clamp.
+  const motion = doMotion ? Math.min(1, (totalDiff / n / 255) * gain) : 0;
+
+  // Saliency: Shannon entropy of the 16-bin histogram, max entropy log2(16)=4.
   let entropy = 0;
   for (let i = 0; i < 16; i++) {
     if (histo[i] === 0) continue;
     const p = histo[i] / n;
     entropy -= p * Math.log2(p);
   }
-  // Max entropy for 16 bins is log2(16) = 4.
-  return Math.min(1, entropy / 4);
+  const saliency = Math.min(1, entropy / 4);
+
+  return { motion, saliency };
 }
 
 async function canvasToJpeg(
@@ -282,9 +298,17 @@ async function canvasToJpeg(
 export async function blobToBase64(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
   const bytes = new Uint8Array(buf);
+  // Build the binary string in chunks. String.fromCharCode.apply over a
+  // sub-array avoids the O(n) re-allocation of per-character `+=` concat
+  // (which is costly for full-frame JPEGs) while producing identical output.
+  // The chunk size stays well under the argument-count limit of `apply`.
+  const CHUNK = 0x8000;
   let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(
+      null,
+      bytes.subarray(i, i + CHUNK) as unknown as number[]
+    );
   }
   return btoa(binary);
 }
