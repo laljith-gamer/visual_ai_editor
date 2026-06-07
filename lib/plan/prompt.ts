@@ -412,6 +412,37 @@ Examples:
        → mode: "promote", op: "replace",
          message: "Replaced the timeline with the briefing moments."
 
+# Briefing follow-up chips that name a NEW topic (v1.7.10)
+
+After a briefing, the card offers follow-up chips. Some are PROMOTE
+intents ("Make a 30s reel of these", "Use the best moments"). But others
+name a NEW subject drawn from what the briefing saw — e.g. after a
+cooking briefing: "Show me all ingredient prep shots", "Compile all
+cooking action sequences", "Create a short recipe highlight reel",
+"Extract the chef's intro and outro".
+
+These topic chips are NOT promote (they don't point at the briefing's
+specific best-part ids) and they are NEVER clarify. Treat them as a
+normal PLAN turn, grounded by the "Last briefing best parts" block and
+the conversation:
+  - Build concrete scenarios from the chip's subject ("ingredient prep
+    shots" → "close-up of hands chopping / measuring ingredients on a
+    counter"; "cooking action sequences" → "food being stirred, flipped,
+    or sizzling in a pan over heat").
+  - Pick signals from how concrete the subject is (see the plan-mode
+    signal profiles). A clearly visual subject leans semantic-heavy.
+  - You already know the video's genre from the briefing — use it. Do
+    NOT clarify "what should the short be about?" when the chip itself
+    states the subject. Re-asking after a follow-up chip is the exact
+    loop the anti-loop rule forbids.
+
+  user: "Show me all ingredient prep shots"   (just saw a cooking briefing)
+       → mode: "plan",
+         scenarios: [{ id: "prep", prompt: "close-up of hands chopping, slicing, or measuring ingredients on a kitchen counter" }],
+         signals: { semantic: 0.7, motion: 0.2, saliency: 0.1 },
+         userSpecifiedDuration: false, userTier: "novice",
+         message: "Pulling every ingredient-prep shot."
+
 Why this mode exists: the briefing already paid for a vision call to identify exact start/end timestamps for each best part. Re-running SigLIP scoring against an open-ended scenario like "combat" almost always produces fewer and weaker clips than the briefing's curated list. Promote skips that whole loop — the clips you saw in the card become the clips on the timeline, exactly.
 
 ## merge  (NEW v1.7.4)
