@@ -181,7 +181,7 @@ export { isTransientError };
 export async function geminiMultiImageJson(
   prompt: string,
   images: Array<{ base64: string; mimeType?: string }>,
-  options: { temperature?: number } = {}
+  options: { temperature?: number; maxOutputTokens?: number } = {}
 ): Promise<string> {
   if (images.length === 0) {
     throw new Error("geminiMultiImageJson called with zero images");
@@ -205,7 +205,13 @@ export async function geminiMultiImageJson(
       ],
       generationConfig: {
         temperature: options.temperature ?? 0.3,
-        responseMimeType: "application/json"
+        responseMimeType: "application/json",
+        // Only cap output when the caller asks. A generous cap on
+        // structured calls (e.g. the briefing) keeps thinking-heavy
+        // models from truncating the JSON mid-structure.
+        ...(typeof options.maxOutputTokens === "number"
+          ? { maxOutputTokens: options.maxOutputTokens }
+          : {})
       }
     });
     return result.response.text();
