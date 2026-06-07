@@ -38,6 +38,9 @@ let classifier: ((
 ) => Promise<Array<{ label: string; score: number }>>) | null = null;
 let scenarioLabels: string[] = [];
 let scenarioIds: string[] = [];
+/** Precomputed label -> id lookup, built once per init. Keeps first-match
+ *  semantics identical to the previous `scenarioLabels.indexOf(label)`. */
+let labelToId = new Map<string, string>();
 
 async function ensureClassifier() {
   if (classifier) return;
@@ -59,6 +62,13 @@ self.onmessage = async (e: MessageEvent<Incoming>) => {
     if (msg.type === "init") {
       scenarioLabels = msg.labels;
       scenarioIds = msg.ids;
+      labelToId = new Map<string, string>();
+      for (let i = 0; i < scenarioLabels.length; i++) {
+        // Only set on first occurrence to mirror indexOf's first-match.
+        if (!labelToId.has(scenarioLabels[i])) {
+          labelToId.set(scenarioLabels[i], scenarioIds[i]);
+        }
+      }
       await ensureClassifier();
       (self as unknown as Worker).postMessage({ id: msg.id, payload: true });
       return;
@@ -68,8 +78,8 @@ self.onmessage = async (e: MessageEvent<Incoming>) => {
       const results = await classifier!(msg.blob, scenarioLabels);
       const labels: Record<string, number> = {};
       for (const r of results) {
-        const idx = scenarioLabels.indexOf(r.label);
-        if (idx >= 0) labels[scenarioIds[idx]] = r.score;
+        const id = labelToId.get(r.label);
+        if (id !== undefined) labels[id] = r.score;
       }
       (self as unknown as Worker).postMessage({ id: msg.id, payload: labels });
       return;
