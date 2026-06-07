@@ -896,6 +896,18 @@ When in doubt, pick "novice". The pipeline uses this to widen its net for novice
 
 Plan mode: 2 to 6 scenarios when signals.semantic > 0; scenarios MAY be empty
 when signals.semantic is 0 (visual-interest-only mode). Moment mode: exactly 1 scenario.
+
+CRITICAL: if the user named ANY concrete subject — even tersely or with
+typos ("food ingredient scene", "best pick ingredient part only", "he take
+food item and show in screen") — you MUST translate it into at least one
+concrete scenario and emit a usable plan. NEVER return plan mode with an
+empty scenarios array UNLESS you are deliberately on the semantic=0
+visual-interest path. A named subject with empty scenarios is an invalid
+response that strands the user in a re-ask loop. When unsure how to phrase
+the scenario, paraphrase the user's words into an on-screen description
+(e.g. "food ingredient scene" → "close-up of raw ingredients being shown
+or prepared on a counter") rather than asking them to repeat themselves.
+
 Scenarios must be CONCRETE visual descriptions of what would be on screen — never abstract concepts. Match the genre of the user's footage; do not default to sports / gaming examples just because that's a common case.
   GOOD (sports):       "wide shot of a goal celebration with arms raised"
   GOOD (cooking):      "close-up of food being plated on a white dish"
