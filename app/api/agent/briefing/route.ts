@@ -157,7 +157,13 @@ export async function POST(req: NextRequest) {
       frames.map((f) => ({
         base64: f.imageBase64,
         mimeType: f.mime ?? "image/jpeg"
-      }))
+      })),
+      // The briefing JSON is small (overview + ≤5 best parts + ≤4
+      // follow-ups) but thinking-heavy models spend output budget before
+      // emitting it. Give enough headroom that the JSON always finishes;
+      // without a cap these models occasionally truncate mid-structure,
+      // which surfaced as "Briefing returned invalid JSON".
+      { maxOutputTokens: 2048 }
     );
     await recordSuccess("gemini");
   } catch (err) {
@@ -185,8 +191,17 @@ export async function POST(req: NextRequest) {
     followUps?: string[];
   }>(raw);
   if (!parsed) {
+    // The model returned text we couldn't parse into JSON even after the
+    // truncation-salvage pass. This is almost always a transient hiccup
+    // (overloaded model returning a partial/empty body), so mark it
+    // retryable and give the user an actionable message rather than a
+    // dead-end developer string.
     return NextResponse.json(
-      { error: "Briefing returned invalid JSON." },
+      {
+        error:
+          "The video summary came back incomplete. Please try again \u2014 a smaller window or fewer frames also helps.",
+        transient: true
+      },
       { status: 502 }
     );
   }
