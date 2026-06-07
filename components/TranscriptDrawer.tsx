@@ -125,8 +125,7 @@ export function TranscriptDrawer({ open, onClose }: Props) {
         onClick={onClose}
       />
       <div
-        className="drawer-panel"
-        style={{ left: "auto", right: 16 }}
+        className={`drawer-panel ${styles.drawer}`}
         role="dialog"
         aria-label="Transcript"
       >

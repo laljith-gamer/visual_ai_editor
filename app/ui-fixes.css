@@ -252,6 +252,39 @@
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 92%, #ffffff 8%), var(--bg-2)) !important;
 }
 
+/* Transcript drawer: same treatment as the clips drawer so the scrim
+   (z-index 70) never sits on top of the panel — which made the panel look
+   blurred and swallowed every click. The TranscriptDrawer panel carries a
+   hashed `TranscriptDrawer_drawer` class but no `ClipsDrawer_drawer` class,
+   so it needs its own override to clear the scrim. */
+.drawer-panel[class*="TranscriptDrawer_drawer"] {
+  top: 84px !important;
+  right: 20px !important;
+  bottom: 20px !important;
+  left: auto !important;
+  width: min(460px, calc(100vw - 40px)) !important;
+  max-height: calc(100dvh - 104px) !important;
+  border-radius: 20px !important;
+  z-index: 80 !important;
+  overflow: hidden !important;
+  box-shadow:
+    0 28px 70px rgba(0, 0, 0, 0.46),
+    0 6px 20px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 var(--highlight-edge) !important;
+}
+
+@media (max-width: 720px) {
+  .drawer-panel[class*="TranscriptDrawer_drawer"] {
+    top: auto !important;
+    right: 10px !important;
+    bottom: 10px !important;
+    left: 10px !important;
+    width: auto !important;
+    max-height: min(72dvh, 620px) !important;
+    border-radius: 18px !important;
+  }
+}
+
 [class*="ClipsDrawer_list"] {
   min-height: 0 !important;
   padding: 14px !important;

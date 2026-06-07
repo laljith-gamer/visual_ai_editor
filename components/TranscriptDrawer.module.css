@@ -1,3 +1,15 @@
+/* Marker + base layout for the drawer panel. The right-side placement and
+   z-index (above the global .drawer-scrim) are reinforced in ui-fixes.css,
+   mirroring the ClipsDrawer treatment so the scrim never covers the panel. */
+.drawer {
+  top: 84px;
+  right: 20px;
+  bottom: 20px;
+  left: auto;
+  width: min(460px, calc(100vw - 40px));
+  z-index: 80;
+}
+
 .host {
   height: 100%;
   display: flex;
