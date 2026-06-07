@@ -535,6 +535,41 @@ export async function POST(req: NextRequest) {
       warnings
     });
     if (!buildResult.ok) {
+      // v1.7.11 — anti-loop safety net (same pattern the clarify branch
+      // uses). The LLM tagged this turn as plan/moment but failed to
+      // emit usable scenarios, so resolvePlan bailed. Previously this
+      // ALWAYS re-asked "what should the short be about?", with no loop
+      // guard — so a user who already answered (e.g. "food ingredient
+      // scene") got the same question forever.
+      //
+      // If the immediately-previous assistant turn was ALSO a clarify,
+      // we treat the user's reply as the topic and synthesize a plan
+      // from their literal words (SigLIP scores against that text). This
+      // NEVER inspects the user message for keywords — it only checks
+      // our own prior turn shape — so the "no regex on user input" rule
+      // still holds.
+      const previousAssistant = findPreviousAssistant(messages);
+      if (looksLikeClarify(previousAssistant)) {
+        const synth = synthesizeVaguePlan({
+          userText,
+          currentPlan: body.currentPlan ?? null,
+          memory: body.memory
+        });
+        const timelineOp = normalizeTimelineOp(parsed.op);
+        return NextResponse.json<AgentResponse>({
+          mode: "plan",
+          plan: synth,
+          ...(timelineOp ? { op: timelineOp } : {}),
+          message:
+            synth.scenarios.length > 0
+              ? `On it \u2014 ${userText.trim().slice(0, 60)}.`
+              : "Picking the visually richest moments \u2014 just give me a sec.",
+          userTier: "novice",
+          inferred: [],
+          warnings,
+          ...(quotaWarning ? { quotaWarning } : {})
+        });
+      }
       return NextResponse.json<AgentResponse>({
         mode: "clarify",
         message:
