@@ -112,6 +112,15 @@ export async function POST(req: NextRequest) {
     highlights: body.timelineClips,
     memory: body.memory,
     facts: priorFacts,
+    // v1.7.2 — the client already sends the most recent briefing's best
+    // parts; thread them into the prompt so the planner can (a) emit
+    // `mode: "promote"` for "clip those" / "use the second one" and
+    // (b) GROUND a fresh briefing follow-up ("show me all ingredient
+    // prep shots") against what the briefing actually found, instead of
+    // falling back to the "what should the short be about?" clarify.
+    // Without this line the "Last briefing best parts" block in
+    // buildPlannerUserPrompt was always rendered empty.
+    lastBriefing: body.lastBriefing,
     recentActivity:
       typeof body.recentActivity === "string" ? body.recentActivity : undefined
   });
