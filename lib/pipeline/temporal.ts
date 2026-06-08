@@ -44,6 +44,13 @@ export async function runTemporalPass({
         every: denseEvery,
         width: CONTACT_SHEET.cellWidth,
         maxFrames: CONTACT_SHEET.framesPerWindow,
+        // CRITICAL: bound sampling to THIS candidate's time range. Without
+        // it, sampleFrames starts at t=0 every call, so a window at e.g.
+        // 600s collected frames near the start of the video and the
+        // `within` filter below dropped all of them — every non-opening
+        // window silently fell back to a neutral verdict, making the whole
+        // temporal/contact-sheet pass dead for anything but t≈0.
+        range: { startSeconds: c.start, endSeconds: c.end },
         signal
       });
       // Constrain to within the candidate range with a small padding.
