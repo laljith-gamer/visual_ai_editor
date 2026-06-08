@@ -15,7 +15,7 @@
  * by the priority order in PATTERN_ORDER.
  */
 
-import { parse } from "./grammar";
+import { parse, isQuestion } from "./grammar";
 import { matchProjectGrammar } from "./projectGrammar";
 import { matchAffirm } from "./patterns/affirm";
 import { matchCancel } from "./patterns/cancel";
@@ -70,6 +70,19 @@ export function quickMatch(
   if (!trimmed) return { match: null, candidates: [] };
 
   const parsed = parse(trimmed);
+
+  // v1.7.11 — QUESTION GUARD. If the turn reads as a question / request
+  // for information ("explain why they are the best parts", "what's in
+  // clip 2?"), NEVER fire an action shortcut. Action matchers trigger on
+  // keywords (e.g. "best parts" → promote), so a question containing
+  // those words would otherwise silently mutate the timeline. We force
+  // questions to fall through to the cloud planner, which can actually
+  // answer them (describe / briefing). A missed shortcut costs one cloud
+  // turn; a mis-fired action corrupts the user's timeline — so we bias
+  // hard toward falling through here.
+  if (isQuestion(parsed)) {
+    return { match: null, candidates: [] };
+  }
 
   // Build the candidate list. Each matcher returns null on no-match
   // so the array stays small.
