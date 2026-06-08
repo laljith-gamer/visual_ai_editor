@@ -62,6 +62,12 @@ export {
 } from "@/lib/llm/tools";
 
 export {
+  buildBriefingGrounding,
+  buildChatGrounding,
+  type BriefingLike
+} from "@/lib/llm/grounding";
+
+export {
   LOCAL_PLANNER_SYSTEM_PROMPT,
   buildLocalPlannerUserPrompt
 } from "@/lib/llm/prompt";

@@ -132,6 +132,12 @@ export interface ChatTurnOptions {
   model?: string;
   /** Optional system prompt override. */
   system?: string;
+  /** Optional grounding context (briefing best-parts + reasons, footage
+   *  outline, timeline state) injected into the system message so the
+   *  model can answer questions like "why are these the best parts"
+   *  from real data instead of hallucinating. Build via
+   *  lib/llm/grounding.ts → buildChatGrounding(). */
+  grounding?: string;
   temperature?: number;
   maxTokens?: number;
   onProgress?: (p: LocalLlmProgress) => void;
@@ -196,8 +202,12 @@ export async function* streamChat(
   }
 
   const system = opts.system ?? DEFAULT_CHAT_SYSTEM;
+  const groundedSystem =
+    opts.grounding && opts.grounding.trim()
+      ? `${system}\n\nCONTEXT (use this to answer; do not invent facts beyond it):\n${opts.grounding.trim()}`
+      : system;
   const messages = [
-    { role: "system", content: system },
+    { role: "system", content: groundedSystem },
     ...opts.messages.filter((m) => m.role !== "system")
   ];
 
