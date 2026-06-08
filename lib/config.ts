@@ -248,7 +248,10 @@ export const RATE_LIMITS = {
 
 /** Security headers applied by middleware on every response. */
 export const SECURITY_HEADERS = {
-  /** CSP must allow wasm + CDN scripts for ffmpeg + transformers. */
+  /** CSP must allow wasm + CDN scripts for ffmpeg + transformers.
+   *  connect-src also allows raw.githubusercontent.com because WebLLM
+   *  (local LLM) fetches its model-lib .wasm files from there; model
+   *  weights come from huggingface.co (already allowed). */
   contentSecurityPolicy:
     "default-src 'self'; " +
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net; " +
@@ -256,7 +259,7 @@ export const SECURITY_HEADERS = {
     "img-src 'self' data: blob: https:; " +
     "font-src 'self' data:; " +
     "media-src 'self' blob:; " +
-    "connect-src 'self' https://*.googleapis.com https://*.groq.com https://huggingface.co https://*.huggingface.co https://unpkg.com https://cdn.jsdelivr.net; " +
+    "connect-src 'self' https://*.googleapis.com https://*.groq.com https://huggingface.co https://*.huggingface.co https://unpkg.com https://cdn.jsdelivr.net https://raw.githubusercontent.com; " +
     "worker-src 'self' blob:; " +
     "frame-ancestors 'none'; " +
     "base-uri 'self'; " +
@@ -404,4 +407,49 @@ export const AUDIO = {
   /** Same on WASM. Closer to 1x realtime — the bar will look slow on
    *  long videos in this tier, which is honest. */
   expectedRtfWasm: 1
+} as const;
+
+
+
+// =====================================================================
+// Local LLM (WebLLM / WebGPU) configuration — the offline language layer.
+//
+// Runs a quantized instruct model fully in-browser via @mlc-ai/web-llm.
+// This is the LANGUAGE-UNDERSTANDING fallback in the local-first chain:
+//
+//   client grammar shortcut (lib/intent)         [instant]
+//     → deterministic VISION-EDIT-CORE engine    [instant, no model]
+//       → local WebLLM                            [offline, this block]
+//         → cloud Gemini/Groq (OPTIONAL)          [only if configured]
+//
+// Honest tradeoffs (documented so callers gate properly):
+//   - First use downloads the model (hundreds of MB). Cached afterwards
+//     via WebLLM's Cache API backend.
+//   - Needs WebGPU. No WebGPU → this layer is skipped (gate returns
+//     unsupported) and the chain falls through to the next option.
+//   - Small models are less reliable at free-form JSON than Gemini, so
+//     we ALWAYS use JSON-mode (response_format) + a strict schema and a
+//     defensive parser, and prefer the deterministic engine first.
+//
+// Model IDs are WebLLM prebuilt ids (see prebuiltAppConfig.model_list).
+// Only consumers are lib/llm/* .
+// =====================================================================
+
+export const LOCAL_LLM = {
+  /** High tier — better reasoning, larger download (~1.5-2 GB). WebGPU
+   *  desktops with adequate VRAM. */
+  modelHigh: "Qwen2.5-3B-Instruct-q4f16_1-MLC",
+  /** Mid tier — strong small instruct model, ~1 GB. The default target. */
+  modelMid: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+  /** Low tier — smallest viable instruct model, ~0.8 GB, for lower-VRAM
+   *  WebGPU devices. */
+  modelLow: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+  /** Sampling — low temperature for stable, near-deterministic planning
+   *  JSON. We also pass a fixed seed where supported. */
+  temperature: 0.2,
+  /** Fixed seed for reproducibility (WebLLM supports `seed`). */
+  seed: 7,
+  /** Hard cap on output tokens for a planning turn. The planner JSON is
+   *  small; this bounds latency and truncation risk. */
+  maxTokens: 768
 } as const;
