@@ -30,9 +30,24 @@ export {
   disposeLocalLlm,
   isLocalLlmSupported,
   localModelForTier,
+  loadedLocalModel,
+  ensureLocalEngine,
   type LocalPlanOptions,
   type WarmOptions
 } from "@/lib/llm/engine";
+
+export {
+  streamChat,
+  chatOnce,
+  loadModel,
+  listLocalModels,
+  defaultChatModelForTier,
+  type LocalModelInfo,
+  type LoadModelOptions,
+  type LoadModelResult,
+  type ChatTurnOptions,
+  type ChatStreamEvent
+} from "@/lib/llm/chat";
 
 export {
   LOCAL_PLANNER_SYSTEM_PROMPT,
