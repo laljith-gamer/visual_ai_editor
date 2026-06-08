@@ -162,6 +162,156 @@ export function isShortUtterance(p: ParsedText, maxTokens = 4): boolean {
   return p.tokens.length > 0 && p.tokens.length <= maxTokens;
 }
 
+/**
+ * True if the utterance reads as a QUESTION / request for information
+ * rather than an imperative command.
+ *
+ * Why this exists: the action matchers (promote / edit / merge / extract)
+ * trigger on KEYWORDS — e.g. "best parts" enables promote. But a question
+ * like "explain why they are the best parts" contains that keyword while
+ * asking for an explanation, NOT requesting a timeline mutation. Firing a
+ * destructive shortcut on a question is the worst kind of false positive,
+ * so the orchestrator uses this to force questions to fall through to the
+ * cloud planner (which can actually answer via describe / briefing).
+ *
+ * Detection is deliberately broad (favouring "treat as question → fall
+ * through") because a missed shortcut just costs one cloud turn, whereas a
+ * mis-fired action silently changes the user's timeline.
+ *
+ * Returns true for:
+ *   - text ending in "?"
+ *   - leading WH-words / question auxiliaries ("why", "what", "how",
+ *     "can you", "could you", "do they", "is this", "are these", …)
+ *   - explicit ask verbs ("explain", "tell me", "describe", "why is")
+ */
+export function isQuestion(p: ParsedText): boolean {
+  if (p.lower.length === 0) return false;
+
+  // 1. Literal question mark anywhere.
+  if (p.raw.includes("?")) return true;
+
+  const lower = p.lower;
+  const tokens = p.tokens.length > 0 ? p.tokens : lower.split(/\s+/);
+  const first = tokens[0] ?? "";
+  const second = tokens[1] ?? "";
+
+  // 2. Leading interrogative / WH-word or question auxiliary. We compare
+  //    the FIRST token fuzzily so common typos ("waht", "wht", "exaplain",
+  //    "hwo") still classify as questions — keyword lists alone are too
+  //    brittle for free-form chat input.
+  const WH_WORDS = [
+    "why", "what", "whats", "how", "when", "where", "which",
+    "who", "whom", "whose", "why"
+  ];
+  const Q_AUX = [
+    "can", "could", "would", "will", "should", "do", "does", "did",
+    "is", "are", "was", "were", "am", "may", "might", "shall", "have", "has"
+  ];
+  const ASK_VERBS = [
+    "explain", "describe", "clarify", "elaborate", "summarize",
+    "summarise", "list", "show", "tell"
+  ];
+
+  // Imperative look-alikes we must NOT treat as questions.
+  const IMPERATIVE_EXCEPTION = /^(?:do\s+it|do\s+that|will\s+do|can\s+do)\b/;
+
+  if (WH_WORDS.includes(first)) return true;
+
+  if (Q_AUX.includes(first) && !IMPERATIVE_EXCEPTION.test(lower)) {
+    return true;
+  }
+
+  // Fuzzy first-token check for the DISTINCT WH-words only (those with no
+  // common command homograph), so typos like "waht"/"wht"/"wher" still
+  // read as questions. "how" is excluded here because "show" is one
+  // transposition away from it — we require "how" to be exact to avoid
+  // misclassifying "show the best parts" as a question.
+  const FUZZY_WH = ["what", "whats", "why", "where", "when", "which", "whom", "whose"];
+  if (matchesAnyFuzzy(first, FUZZY_WH)) return true;
+
+  // 3. "Ask for information" verbs near the start. Pure ask-verbs
+  //    ("explain"/"describe"/...) are questions on their own. Ambiguous
+  //    verbs ("tell"/"show"/"list") only count when followed by "me"/"us"
+  //    or a WH-word, so imperatives ("show the best parts") stay commands.
+  for (let i = 0; i < Math.min(2, tokens.length); i++) {
+    const tok = tokens[i];
+    if (matchesAnyFuzzy(tok, ["explain", "describe", "clarify", "elaborate"])) {
+      return true;
+    }
+    if (tok === "tell" || tok === "show" || tok === "list" || tok === "summarize" || tok === "summarise") {
+      const next = tokens[i + 1] ?? "";
+      if (next === "me" || next === "us" || matchesAnyFuzzy(next, WH_WORDS)) {
+        return true;
+      }
+    }
+  }
+  void second;
+  void ASK_VERBS;
+
+  return false;
+}
+
+/**
+ * Token-level fuzzy match: true if `token` equals any candidate OR is a
+ * near-miss typo of one (edit distance ≤ 1 for short words, ≤ 2 for
+ * longer ones). This is what makes question detection robust to the kind
+ * of misspellings real users type ("exaplain", "waht", "hwo") instead of
+ * relying on an exhaustive keyword list.
+ */
+function matchesAnyFuzzy(token: string, candidates: string[]): boolean {
+  if (!token) return false;
+  for (const c of candidates) {
+    if (token === c) return true;
+    // Only bother with distance for words of comparable length.
+    if (Math.abs(token.length - c.length) > 2) continue;
+    const budget = c.length <= 4 ? 1 : 2;
+    if (withinEditDistance(token, c, budget)) return true;
+  }
+  return false;
+}
+
+/** Bounded Damerau-Levenshtein: true if edits(a,b) <= max, counting an
+ *  adjacent transposition (a common typing error like "waht"→"what",
+ *  "hwo"→"how") as a SINGLE edit. Early-exits when the running minimum
+ *  exceeds `max`, so it stays cheap for the short words we test. */
+function withinEditDistance(a: string, b: string, max: number): boolean {
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > max) return false;
+
+  // d[i][j] = distance between a[0..i) and b[0..j)
+  const d: number[][] = Array.from({ length: la + 1 }, () =>
+    new Array<number>(lb + 1).fill(0)
+  );
+  for (let i = 0; i <= la; i++) d[i][0] = i;
+  for (let j = 0; j <= lb; j++) d[0][j] = j;
+
+  for (let i = 1; i <= la; i++) {
+    let rowMin = Infinity;
+    for (let j = 1; j <= lb; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(
+        d[i - 1][j] + 1, // deletion
+        d[i][j - 1] + 1, // insertion
+        d[i - 1][j - 1] + cost // substitution
+      );
+      // Transposition of two adjacent characters.
+      if (
+        i > 1 &&
+        j > 1 &&
+        a[i - 1] === b[j - 2] &&
+        a[i - 2] === b[j - 1]
+      ) {
+        v = Math.min(v, d[i - 2][j - 2] + 1);
+      }
+      d[i][j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return false;
+  }
+  return d[la][lb] <= max;
+}
+
 // ---------------------------------------------------------------------
 // Crude pluraliser — only handles English -s / -ies.
 // Avoids a separate "pluralize" dep for what's a tiny lookup helper.
