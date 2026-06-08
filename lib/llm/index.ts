@@ -50,6 +50,18 @@ export {
 } from "@/lib/llm/chat";
 
 export {
+  routeTurn,
+  validateToolDecision,
+  TOOL_CATALOG,
+  type ToolName,
+  type ToolArgs,
+  type ToolDecision,
+  type ToolRouteOutcome,
+  type ToolRouteContext,
+  type ToolRouteOptions
+} from "@/lib/llm/tools";
+
+export {
   LOCAL_PLANNER_SYSTEM_PROMPT,
   buildLocalPlannerUserPrompt
 } from "@/lib/llm/prompt";
