@@ -30,9 +30,42 @@ export {
   disposeLocalLlm,
   isLocalLlmSupported,
   localModelForTier,
+  loadedLocalModel,
+  ensureLocalEngine,
   type LocalPlanOptions,
   type WarmOptions
 } from "@/lib/llm/engine";
+
+export {
+  streamChat,
+  chatOnce,
+  loadModel,
+  listLocalModels,
+  defaultChatModelForTier,
+  type LocalModelInfo,
+  type LoadModelOptions,
+  type LoadModelResult,
+  type ChatTurnOptions,
+  type ChatStreamEvent
+} from "@/lib/llm/chat";
+
+export {
+  routeTurn,
+  validateToolDecision,
+  TOOL_CATALOG,
+  type ToolName,
+  type ToolArgs,
+  type ToolDecision,
+  type ToolRouteOutcome,
+  type ToolRouteContext,
+  type ToolRouteOptions
+} from "@/lib/llm/tools";
+
+export {
+  buildBriefingGrounding,
+  buildChatGrounding,
+  type BriefingLike
+} from "@/lib/llm/grounding";
 
 export {
   LOCAL_PLANNER_SYSTEM_PROMPT,

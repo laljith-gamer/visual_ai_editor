@@ -56,6 +56,25 @@ export function localModelForTier(tier: CapabilityTier): string {
   }
 }
 
+/** The model id currently loaded into the engine, or null when none is
+ *  loaded. Lets the chat UI show / switch the active model. */
+export function loadedLocalModel(): string | null {
+  return loadedModel;
+}
+
+/**
+ * Ensure the engine is loaded for a SPECIFIC model id (not just a tier).
+ * Used by the chat layer's model picker. Reuses the same singleton +
+ * teardown-on-switch logic as the tier path. Returns the engine handle.
+ *
+ * Exported (vs. the private ensureEngine) so the chat module can drive
+ * model selection directly while planLocally keeps its tier-based entry.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function ensureLocalEngine(opts: EnsureOptions): Promise<any> {
+  return ensureEngine(opts);
+}
+
 // ---------------------------------------------------------------------
 // Engine lifecycle (singleton)
 // ---------------------------------------------------------------------
