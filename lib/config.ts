@@ -498,3 +498,26 @@ export const CAPTION = {
    *  worst-case time on very long videos. */
   maxCaptionedFrames: 64
 } as const;
+
+
+
+// =====================================================================
+// Deterministic plan SYNTHESIS (synthesizeVaguePlan fallback) tunables.
+//
+// Used by app/api/agent/route.ts when the LLM fails to emit a usable plan
+// but the turn is clearly actionable (briefing in scope / anti-loop). The
+// fallback grounds ONE scenario in the user's text plus a compact context
+// phrase distilled from briefing best-part labels — NOT a separate
+// scenario per label (which over-broadened specific requests). Generic;
+// no genre/keyword tables. See the Bug 2 fix.
+// =====================================================================
+
+export const SYNTH_PLAN = {
+  /** Max briefing best-part labels folded into the single grounded
+   *  scenario's context phrase. Keeps the prompt focused on the user's
+   *  actual request rather than diluting it across every best part. */
+  maxContextLabels: 3,
+  /** Hard cap on the joined context-phrase length (chars), so the
+   *  scenario prompt stays compact. */
+  maxContextChars: 120
+} as const;
