@@ -19,9 +19,12 @@
    dependencies without explicit approval.
 5. **Explain architecture before making large code changes.** Summarize the
    plan and the affected areas, and get confirmation, before big edits.
-6. **Keep project memory updated when major decisions are made.** Update the
-   relevant files in `memory/` (PROJECT_STATE, DECISIONS, TODO, CHANGELOG)
-   as part of the work, not as an afterthought.
+6. **Always keep project memory updated for whatever you do.** This is a
+   standing rule from the user (2026-06-10): after ANY change — not just
+   major decisions — update the relevant files in `memory/` (PROJECT_STATE,
+   DECISIONS, TODO, CHANGELOG) as part of the same piece of work, not as an
+   afterthought. Every shipped fix/feature/PR gets a CHANGELOG entry and a
+   PROJECT_STATE/TODO refresh.
 
 ## Project-specific constraints
 

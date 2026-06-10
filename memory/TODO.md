@@ -9,10 +9,11 @@
 ## High priority
 
 - [ ] **Wire the merged local-first chat/tool system into the assistant UI**,
-      behind a feature flag defaulting OFF. (`lib/llm/` + `lib/vision-core/`
-      are on main; UI integration + tool-decision execution is missing.)
-- [ ] Merge the remaining open PRs: #28 (temporal fix), #29 (frame-tree),
-      #30 (captioning) — all verified to merge cleanly into main.
+      behind a feature flag defaulting OFF. (`lib/llm/`, `lib/vision-core/`,
+      `lib/frame-tree/`, `lib/vision/caption*` are all on main; UI integration
+      + tool-decision execution is missing — this is THE production step.)
+- [ ] Review/merge PR #33 (briefing follow-up fallback) so briefing chips
+      stop hitting the generic clarify in the running app.
 - [ ] Redeploy `main` so the running app reflects merged fixes.
 
 ## Medium priority
@@ -20,7 +21,11 @@
 - [ ] Add a "download local model" opt-in UX (progress indicator) for WebLLM
       and captioning.
 - [ ] Feed frame-tree outline + captions into the planner prompt / chat
-      grounding once #29 and #30 are merged.
+      grounding (modules now on main).
+- [ ] Structured briefing follow-ups: replace `followUps: string[]` with a
+      `BriefingFollowUp` action union (promote/plan_topic/extract_range) so
+      chips carry intent + skip `/api/agent` for promote. (Medium-term design
+      from the PR #33 spec; P0 fallback shipped first.)
 
 ## Low priority
 
@@ -30,6 +35,10 @@
 
 ## Completed
 
+- [x] (2026-06-10) Briefing follow-up clarify fix — PR #33 (open): chips no
+      longer hit the generic "what should the short be about?".
+- [x] (2026-06-10) Merge frame-tree (#29), captioning (#30), temporal-pass
+      fix (#28) to main.
 - [x] (2026-06-10) Land the local chat + tool router + grounding system on
       `main` (was stranded on a stacked branch).
 - [x] (2026-06-08) Create the persistent project-memory system
