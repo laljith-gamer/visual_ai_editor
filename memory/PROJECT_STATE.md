@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-08
+> Last updated: 2026-06-10
 
 ---
 
@@ -27,8 +27,13 @@ text/JSON calls.
   detect windows → verify → assemble → render.
 - Active line of work: **making the client local-first** (offline reasoning
   + local LLM + frame organization), with cloud Gemini becoming optional
-  rather than required. These pieces exist as **library modules on open PRs**
-  and are **not yet wired into the live chat flow**.
+  rather than required.
+- **Merged to `main` (library layers — NOT yet wired into the chat UI):**
+  the local WebLLM engine + the capable chat system (streaming chat,
+  model-driven tool router that replaces keyword intent matching, briefing
+  grounding) and the deterministic reasoning engine (`lib/vision-core`).
+- **Still in open PRs (not on `main`):** temporal-pass fix (#28),
+  frame-tree (#29), captioning (#30).
 
 > Update this section as PRs merge and features ship.
 
@@ -56,14 +61,19 @@ Upload video (stays in the browser)
 - **State:** Zustand store (`hooks/useEditorStore.ts`); IndexedDB for
   sessions/cache/logs (never blobs).
 
-### Local-first modules added this session (library code; wiring pending)
+### Local-first modules (status as of 2026-06-10)
 
 | Module | Purpose | Status |
 |--------|---------|--------|
-| `lib/vision-core/` | Offline deterministic reasoning engine (segments, scoring, sentiment) | On a PR; not wired |
-| `lib/frame-tree/` | In-browser frame organization tree (frames→shots→scenes→chapters) | On a PR; not wired |
-| `lib/vision/caption*` | Optional in-browser frame captioning (Florence-2 / ViT-GPT2) | On a PR; not wired |
-| `lib/llm/` | Local WebLLM planner (WebGPU), Gemini optional | On a PR; not wired |
+| `lib/llm/` (engine, chat, tools, grounding) | Local WebLLM engine + streaming chat + model-driven tool router (replaces keyword intent) + briefing "why" grounding | **MERGED to main**; not wired into UI |
+| `lib/vision-core/` | Offline deterministic reasoning engine (segments, scoring, sentiment) | **MERGED to main**; not wired |
+| `lib/frame-tree/` | In-browser frame organization tree (frames→shots→scenes→chapters) | **Open PR #29**; not merged |
+| `lib/vision/caption*` | Optional in-browser frame captioning (Florence-2 / ViT-GPT2) | **Open PR #30**; not merged |
+| `lib/pipeline/temporal.ts` range fix | Contact-sheet verification was dead for non-opening windows | **Open PR #28**; not merged |
+
+> "Wired into UI" = an end-to-end path in the assistant panel actually
+> calls these. None are wired yet — they are library layers behind no
+> feature flag. The existing cloud (Gemini/Groq) flow is unchanged.
 
 ## 5. Important files / folders
 
@@ -83,8 +93,11 @@ Upload video (stays in the browser)
 
 > Keep this list honest and current. Remove items when fixed.
 
-- Local-first modules are **not integrated** into the chat flow yet (no
-  end-to-end path uses them).
+- Local-first modules are **not integrated into the chat UI yet** — the
+  `lib/llm/` chat+tool system and `lib/vision-core/` are merged to `main`
+  but no end-to-end path in the assistant panel calls them.
+- **Deploy lag:** fixes merged to `main` (e.g. the briefing "invalid JSON"
+  fix) won't appear in the running app until it is rebuilt/redeployed.
 - **Runtime verification gap:** WebGPU features (SigLIP/Whisper/WebLLM/
   captioning) cannot be verified in a headless/CI sandbox — they need a real
   browser + GPU. Typecheck + unit-level checks only go so far.
@@ -93,11 +106,16 @@ Upload video (stays in the browser)
 
 ## 7. Next best step
 
-- Decide the **integration approach** for the local-first chain
-  (grammar shortcut → deterministic engine → local LLM → optional cloud)
-  and wire it behind a **feature flag that defaults OFF** so the existing
-  Gemini flow stays byte-for-byte unchanged.
-- Before that, get the foundational PRs reviewed/merged so integration can
-  be built cleanly on `main`.
+- **Wire the merged local-first chain into the UI**, behind a feature flag
+  that defaults OFF so the existing Gemini flow is byte-for-byte unchanged.
+  The pieces are on `main` (`lib/llm/` chat+tools+grounding, `lib/vision-core/`);
+  what's missing is the assistant-panel integration that:
+    1. routes a turn with `routeTurn()` (tool decision),
+    2. executes the decision through the existing pipeline, and
+    3. for `chat`/questions, streams a grounded answer via `streamChat()`.
+- **Merge the remaining open PRs** (#28 temporal fix, #29 frame-tree,
+  #30 captioning) — all verified to merge cleanly into `main`.
+- **Redeploy `main`** so the running app reflects the merged fixes (e.g. the
+  briefing "invalid JSON" error is already fixed on `main` but needs a deploy).
 
 > Replace this with the actual next step whenever it changes.

@@ -17,6 +17,20 @@
 
 ---
 
+### 2026-06-10 — Local chat/tool system merged to main; memory synced
+- **Change made:** The capable local-first language layer landed on `main`:
+  WebLLM engine + streaming chat + model-driven **tool router** (replaces the
+  keyword/regex intent matching) + briefing "why" grounding, plus the
+  deterministic `lib/vision-core` engine. Synced the memory files to reflect
+  this (PROJECT_STATE status/module-table/next-step, TODO).
+- **Files affected:** `lib/llm/*`, `lib/vision-core/*` (code, prior PRs);
+  `memory/PROJECT_STATE.md`, `memory/TODO.md`, `memory/CHANGELOG.md` (this
+  sync).
+- **Reason:** Memory had gone stale — it still said the local-first modules
+  were "on PRs / not on main." They are now merged (UI wiring still pending).
+- **Still open (not on main):** PR #28 temporal-pass fix, #29 frame-tree,
+  #30 captioning.
+
 ### 2026-06-08 — Add persistent project-memory system
 - **Change made:** Created the `memory/` knowledge base (INDEX, PROJECT_STATE,
   DECISIONS, CONSTRAINTS, ROADMAP, TODO, CHANGELOG) and added an AI operating
