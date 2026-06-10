@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-10 (clarify briefing guard + synth narrowing)
+> Last updated: 2026-06-10 (structured briefing follow-ups, Phase 3)
 
 ---
 
@@ -111,19 +111,19 @@ Upload video (stays in the browser)
 
 ## 7. Next best step
 
-- **Wire the merged local-first chain into the UI**, behind a feature flag
-  (`NEXT_PUBLIC_LOCAL_FIRST_EDITOR`) that defaults OFF so the existing
-  Gemini flow is byte-for-byte unchanged. Pieces are on `main`
+- **Phase 4 — wire the merged local-first chain into the UI**, behind a
+  feature flag (`NEXT_PUBLIC_LOCAL_FIRST_EDITOR`) that defaults OFF so the
+  existing Gemini flow is byte-for-byte unchanged. Pieces are on `main`
   (`lib/llm/` chat+tools+grounding, `lib/vision-core/`, `lib/frame-tree/`,
   `lib/vision/caption*`); what's missing is the assistant-panel integration:
     1. route a turn with `routeTurn()` (tool decision),
     2. execute the decision through existing editor actions,
     3. for `chat`/questions, stream a grounded answer via `streamChat()`,
     4. fall back to `/api/agent` on disabled/unsupported/low-confidence.
-  This is THE production step that makes the capable system user-facing —
-  until it lands, the live app still runs the old keyword→cloud path.
-- **Structured briefing follow-ups** — replace `followUps: string[]` with a
-  `BriefingFollowUp` action union so chips carry intent (promote/plan_topic/
-  extract) and don't make the server re-guess from raw text.
+  DO NOT wire vision-core until REAL sampled/captioned frame data can be fed
+  — never fake frame data.
+- **Phase 5 — extract focused hooks from `app/editor/page.tsx`** (it's large)
+  only when touching related code, behavior-identical.
 
-> Replace this with the actual next step whenever it changes.
+> Recently done: structured briefing follow-ups (Phase 3) + the clarify
+> briefing guard. Replace this when the next step changes.

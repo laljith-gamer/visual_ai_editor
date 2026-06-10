@@ -22,10 +22,12 @@ import { BriefingCard } from "./BriefingCard";
 import { logUser } from "@/lib/log/recorders";
 import type {
   BestPart,
+  BriefingFollowUp,
   ChatMessage,
   ClarifyQuestion,
   InferredField
 } from "@/lib/types";
+import { followUpToText } from "@/lib/briefing/followups";
 import styles from "./AssistantPanel.module.css";
 
 interface Props {
@@ -33,6 +35,11 @@ interface Props {
   onOpenClips: () => void;
   /** Confirm the pending plan and start the analysis pipeline. */
   onRunPlan: () => void;
+  /** v1.7.14 — Optional deterministic handler for a structured briefing
+   *  follow-up action (promote/plan_topic/extract/chat). When omitted, the
+   *  card falls back to sending the action's text through onSubmit, so
+   *  behavior is backward-compatible. */
+  onBriefingAction?: (action: BriefingFollowUp) => void;
   isBusy: boolean;
 }
 
@@ -71,6 +78,7 @@ export function AssistantPanel({
   onSubmit,
   onOpenClips,
   onRunPlan,
+  onBriefingAction,
   isBusy
 }: Props) {
   const messages = useEditorStore((s) => s.messages);
@@ -221,7 +229,16 @@ export function AssistantPanel({
                   <BriefingCard
                     bestParts={briefingAttachment.bestParts}
                     followUps={briefingAttachment.followUps}
-                    onPickFollowUp={(s) => void send(s, "quickreply")}
+                    sourceId={briefingAttachment.sourceId}
+                    onPickFollowUp={(action) => {
+                      // Prefer the structured handler (deterministic
+                      // routing on the page). Always fall back to sending
+                      // the action's text through the normal chat pipe so
+                      // behavior degrades gracefully and typed-chat parity
+                      // is preserved.
+                      if (onBriefingAction) onBriefingAction(action);
+                      else void send(followUpToText(action), "quickreply");
+                    }}
                     disabled={isBusy}
                   />
                 )}
@@ -365,17 +382,24 @@ export function AssistantPanel({
  */
 function readBriefingAttachment(
   raw: ChatMessage["attachment"]
-): { bestParts: BestPart[]; followUps: string[] } | null {
+): { bestParts: BestPart[]; followUps: Array<string | BriefingFollowUp>; sourceId?: string } | null {
   if (!raw || typeof raw !== "object") return null;
   if (raw.mode !== "briefing") return null;
   const bp = Array.isArray(raw.bestParts) ? (raw.bestParts as BestPart[]) : [];
+  // Accept BOTH legacy string follow-ups and structured actions. The
+  // BriefingCard normalizes whatever it receives, so we keep objects too.
   const fu = Array.isArray(raw.followUps)
     ? ((raw.followUps as unknown[]).filter(
-        (s): s is string => typeof s === "string"
+        (s): s is string | BriefingFollowUp =>
+          typeof s === "string" || (!!s && typeof s === "object")
       ))
     : [];
+  const sourceId =
+    typeof (raw as { sourceId?: unknown }).sourceId === "string"
+      ? ((raw as { sourceId?: string }).sourceId as string)
+      : undefined;
   if (bp.length === 0 && fu.length === 0) return null;
-  return { bestParts: bp, followUps: fu };
+  return { bestParts: bp, followUps: fu, sourceId };
 }
 
 /** v1.7.5 — Read the optional `shortcut` attachment a message carries

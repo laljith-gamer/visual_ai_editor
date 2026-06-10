@@ -521,3 +521,51 @@ export const SYNTH_PLAN = {
    *  scenario prompt stays compact. */
   maxContextChars: 120
 } as const;
+
+
+
+// =====================================================================
+// Structured briefing FOLLOW-UP normalization (lib/briefing/followups.ts).
+//
+// Turns plain-string briefing chips into typed actions so a tap carries
+// intent. The only string inspection is a tiny generic check for PROMOTE
+// phrasing (acting on the briefing's OWN parts) — NOT genre/subject
+// classification. No cooking/keyword tables. Everything else becomes a
+// plan_topic whose scenario is the chip label verbatim.
+// =====================================================================
+
+export const BRIEFING_FOLLOWUP = {
+  /** Action verbs that, combined with a back-reference below, indicate the
+   *  user wants to act on the briefing's existing best parts (promote). */
+  promoteVerbs: [
+    "use",
+    "clip",
+    "compile",
+    "make",
+    "turn",
+    "add",
+    "promote",
+    "put",
+    "lift",
+    "create"
+  ],
+  /** Back-references to the briefing's OWN moments (not a video subject). */
+  promoteBackRefs: [
+    "these",
+    "those",
+    "them",
+    "best parts",
+    "best moments",
+    "the moments",
+    "these moments",
+    "those moments",
+    "highlights",
+    "the clips",
+    "these clips",
+    "reel of these",
+    "reel of those"
+  ],
+  /** Default signal mix for a plan_topic follow-up (semantic-heavy: a chip
+   *  names a concrete subject, so SigLIP should dominate). */
+  planTopicSignals: { semantic: 0.65, motion: 0.2, saliency: 0.15 }
+} as const;

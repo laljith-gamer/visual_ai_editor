@@ -17,6 +17,31 @@
 
 ---
 
+### 2026-06-10 — Structured briefing follow-ups (Phase 3)
+- **Change made:** Briefing follow-up chips now carry typed intent instead of
+  raw strings. Added `BriefingFollowUp` union to `lib/types.ts`
+  (promote/plan_topic/extract_range/chat); `BriefingResult.followUps` widened
+  to `Array<string | BriefingFollowUp>` (backward compatible). New pure
+  `lib/briefing/followups.ts` normalizes strings → actions generically
+  (bounded promote-phrase check; everything else → plan_topic with the label
+  as scenario — NO genre/keyword tables). `BriefingCard` renders + emits typed
+  actions; `AssistantPanel` forwards via optional `onBriefingAction` (falls
+  back to text send); `app/editor/page.tsx` routes promote → deterministic
+  `promoteBriefingParts` (no cloud round-trip), others → existing agent pipe.
+  New `BRIEFING_FOLLOWUP` config constants.
+- **Files affected:** `lib/types.ts`, `lib/briefing/followups.ts` (new),
+  `lib/config.ts`, `components/BriefingCard.tsx`,
+  `components/AssistantPanel.tsx`, `app/editor/page.tsx`.
+- **Reason:** Stop the server re-guessing intent from raw chip text; promote
+  chips now skip `/api/agent` entirely. Backward compatible with legacy
+  string follow-ups.
+- **Validation:** typecheck ✓, build ✓, 14/14 normalizer unit checks ✓.
+  Browser not verified (no GPU/browser in sandbox).
+- **Deferred (separate PRs):** Phase 4 (local-first wiring behind
+  `NEXT_PUBLIC_LOCAL_FIRST_EDITOR`) and Phase 5 (page.tsx hook extraction) —
+  kept separate per "focused PRs / don't mix refactor with fixes". Phase 4
+  also needs REAL sampled/captioned frame data for vision-core (must not fake).
+
 ### 2026-06-10 — Clarify-branch briefing guard + narrowed plan synthesis
 - **Change made:** (Bug 1) The `mode === "clarify"` branch in
   `app/api/agent/route.ts` now also synthesizes a briefing-grounded plan

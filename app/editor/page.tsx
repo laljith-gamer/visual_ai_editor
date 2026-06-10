@@ -36,12 +36,14 @@ import { summarizeRecentActivity } from "@/lib/log/summarize";
 import type {
   AgentRequest,
   AgentResponse,
+  BriefingFollowUp,
   EditPlan,
   FrameScore,
   InferredField,
   IntentMode,
   VideoLibraryEntry
 } from "@/lib/types";
+import { followUpToText } from "@/lib/briefing/followups";
 
 interface QuotaWarning {
   usage: number;
@@ -1692,6 +1694,64 @@ export default function Home() {
     ]
   );
 
+  // ---- v1.7.14 — Structured briefing follow-up actions --------------------
+  // A tapped briefing chip now carries its intent (see
+  // lib/briefing/followups.ts), so we can route deterministically:
+  //   - promote      → lift the briefing's best parts onto the timeline via
+  //                    the store. No cloud round-trip.
+  //   - plan_topic   → send the ready scenario prompt through the normal
+  //                    agent pipe (the server grounds it in lastBriefing).
+  //   - extract_range→ send a precise "from X to Y" request through the pipe.
+  //   - chat         → send the text through the pipe.
+  // Everything except promote reuses the existing handleAgent flow, so no
+  // behavior is duplicated and typed chat parity is preserved.
+  const handleBriefingAction = useCallback(
+    (action: BriefingFollowUp) => {
+      if (action.kind === "promote") {
+        const store = useEditorStore.getState();
+        const briefing = store.lastBriefing;
+        // Echo the user's tap into the conversation for continuity.
+        pushMessage({ role: "user", content: action.label });
+        if (!briefing || briefing.bestParts.length === 0) {
+          // No briefing in scope — fall back to the agent pipe, which has
+          // its own graceful handling.
+          void handleAgent(followUpToText(action));
+          return;
+        }
+        const result = store.promoteBriefingParts({
+          partIds: action.partIds,
+          targetSeconds: action.targetSeconds,
+          op: action.op ?? "append"
+        });
+        if (result.added === 0) {
+          pushMessage({
+            role: "assistant",
+            content:
+              "Those briefing moments didn't match anything to promote \u2014 try \u201Cuse the best parts\u201D."
+          });
+          return;
+        }
+        const total = useEditorStore.getState().highlights.length;
+        pushMessage({
+          role: "assistant",
+          content: `Added ${result.added} ${result.added === 1 ? "clip" : "clips"} from the briefing. Timeline is now ${total} ${total === 1 ? "clip" : "clips"}.`
+        });
+        logUser({
+          sessionId,
+          kind: "briefing.promote.applied",
+          payload: { added: result.added, op: action.op ?? "append" },
+          summary: `Promoted ${result.added} briefing parts to the timeline`
+        });
+        return;
+      }
+      // plan_topic / extract_range / chat → reuse the existing agent pipe
+      // with the action's resolved text. The server's briefing-aware
+      // fallback turns this into a grounded plan, never a generic clarify.
+      void handleAgent(followUpToText(action));
+    },
+    [handleAgent, pushMessage, sessionId]
+  );
+
   // ---- Confirm-and-run from the PlanPreview card --------------------------
   const handleRunPipeline = useCallback(async () => {
     const cur = useEditorStore.getState();
@@ -1874,6 +1934,7 @@ export default function Home() {
           onSubmit={handleAgent}
           onOpenClips={() => setClipsDrawerOpen(true)}
           onRunPlan={handleRunPipeline}
+          onBriefingAction={handleBriefingAction}
           isBusy={busy}
         />
       </div>
