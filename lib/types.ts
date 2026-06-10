@@ -850,9 +850,62 @@ export interface BriefingResult {
   bestParts: BestPart[];
   /** Suggested next user actions, generated from the briefing content
    *  ("Make a 30s reel of these moments", "Show me clip 2", etc.).
-   *  Up to 4. The chat surface renders these as one-tap buttons. */
-  followUps: string[];
+   *  Up to 4. The chat surface renders these as one-tap buttons.
+   *
+   *  v1.7.14: this may be plain strings (legacy / what the vision model
+   *  returns) OR structured `BriefingFollowUp` actions. The client
+   *  normalizes strings into actions (see lib/briefing/followups.ts) so
+   *  a tapped chip carries its intent instead of making the server
+   *  re-guess from raw text. Kept as a union for backward compatibility. */
+  followUps: Array<string | BriefingFollowUp>;
 }
+
+/**
+ * v1.7.14 — A structured briefing follow-up action. Lets a tapped chip
+ * carry its intent (and the data needed to act on it) rather than sending
+ * a raw string the server must re-interpret.
+ *
+ *   - promote:       lift the briefing's already-pinned best parts onto the
+ *                    timeline. Deterministic; no cloud round-trip needed.
+ *   - plan_topic:    build a highlight reel about a named topic from the
+ *                    video. Carries a ready scenario prompt + signals.
+ *   - extract_range: grab an exact time slice. Deterministic.
+ *   - chat:          a plain conversational prompt (answer, don't edit).
+ *
+ * `label` is the human button text; `id` is a stable key.
+ */
+export type BriefingFollowUp =
+  | {
+      id: string;
+      label: string;
+      kind: "promote";
+      partIds?: string[];
+      targetSeconds?: number;
+      op?: "append" | "replace";
+    }
+  | {
+      id: string;
+      label: string;
+      kind: "plan_topic";
+      sourceId: string;
+      topic: string;
+      scenarioPrompt: string;
+      signals?: { semantic: number; motion: number; saliency: number };
+    }
+  | {
+      id: string;
+      label: string;
+      kind: "extract_range";
+      sourceId: string;
+      startSeconds: number;
+      endSeconds: number;
+    }
+  | {
+      id: string;
+      label: string;
+      kind: "chat";
+      text: string;
+    };
 
 // ---------------------------------------------------------------------
 // v1.7.0 — Persistent memory facts

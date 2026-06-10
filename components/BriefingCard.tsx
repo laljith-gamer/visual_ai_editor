@@ -3,13 +3,19 @@
 import { Clock, Lightbulb, MousePointerClick, Play, Sparkles } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { logUser } from "@/lib/log/recorders";
-import type { BestPart } from "@/lib/types";
+import type { BestPart, BriefingFollowUp } from "@/lib/types";
+import { normalizeFollowUps } from "@/lib/briefing/followups";
 import styles from "./BriefingCard.module.css";
 
 interface Props {
   bestParts: BestPart[];
-  followUps: string[];
-  onPickFollowUp: (text: string) => void;
+  followUps: Array<string | BriefingFollowUp>;
+  /** Structured handler — receives the typed action so the page can route
+   *  it deterministically (promote → store, plan_topic → plan, etc.). */
+  onPickFollowUp: (action: BriefingFollowUp) => void;
+  /** Source id this briefing came from (grounds plan_topic/extract). When
+   *  omitted, the active source is assumed. */
+  sourceId?: string;
   disabled?: boolean;
 }
 
@@ -34,11 +40,20 @@ export function BriefingCard({
   bestParts,
   followUps,
   onPickFollowUp,
+  sourceId,
   disabled
 }: Props) {
   const sessionId = useEditorStore((s) => s.sessionId);
   const setActiveSource = useEditorStore((s) => s.setActiveSource);
   const sources = useEditorStore((s) => s.sources);
+  const activeSourceId = useEditorStore((s) => s.activeSourceId);
+
+  // Normalize string/structured follow-ups into typed actions once. The
+  // briefing's source + best-part ids ground promote/plan_topic actions.
+  const actions: BriefingFollowUp[] = normalizeFollowUps(followUps, {
+    sourceId: sourceId ?? activeSourceId ?? "",
+    bestPartIds: bestParts.map((p) => p.id)
+  });
 
   function handleScrubTo(part: BestPart) {
     // Pick the right source first when the briefing pinned one.
@@ -83,12 +98,18 @@ export function BriefingCard({
     });
   }
 
-  function handleFollowUp(text: string) {
+  function handleFollowUp(action: BriefingFollowUp) {
     if (disabled) return;
-    onPickFollowUp(text);
+    logUser({
+      sessionId,
+      kind: "briefing.followup",
+      payload: { id: action.id, kind: action.kind, label: action.label },
+      summary: `Tapped follow-up: "${action.label}" (${action.kind})`
+    });
+    onPickFollowUp(action);
   }
 
-  if (bestParts.length === 0 && followUps.length === 0) return null;
+  if (bestParts.length === 0 && actions.length === 0) return null;
 
   return (
     <div className={styles.card} role="group" aria-label="Smart summary">
@@ -135,23 +156,23 @@ export function BriefingCard({
         </>
       )}
 
-      {followUps.length > 0 && (
+      {actions.length > 0 && (
         <div className={styles.followUps}>
           <span className={styles.followLabel}>
             <Lightbulb size={11} aria-hidden />
             What next?
           </span>
           <div className={styles.followRow}>
-            {followUps.map((f, i) => (
+            {actions.map((a) => (
               <button
-                key={`${f}-${i}`}
+                key={a.id}
                 type="button"
                 className={styles.followBtn}
-                onClick={() => handleFollowUp(f)}
+                onClick={() => handleFollowUp(a)}
                 disabled={disabled}
               >
                 <MousePointerClick size={11} aria-hidden />
-                {f}
+                {a.label}
               </button>
             ))}
           </div>

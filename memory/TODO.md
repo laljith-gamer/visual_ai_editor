@@ -12,11 +12,13 @@
       behind a feature flag (`NEXT_PUBLIC_LOCAL_FIRST_EDITOR`) defaulting OFF.
       (`lib/llm/`, `lib/vision-core/`, `lib/frame-tree/`, `lib/vision/caption*`
       are all on main; UI integration + tool-decision execution is missing —
-      this is THE production step.)
-- [ ] **Structured briefing follow-ups** — replace `followUps: string[]` with a
-      `BriefingFollowUp` action union (promote/plan_topic/extract_range/chat)
-      so chips carry intent + skip `/api/agent` for promote. Normalize legacy
-      string follow-ups generically (no keyword tables).
+      this is THE production step. Phase 4 of the improvement spec.)
+      NOTE: do not wire vision-core until REAL sampled/captioned frame data
+      can be fed — never fake frame data.
+- [ ] **Structured briefing follow-ups** — DONE for the normalize+route layer
+      (see Completed). Remaining optional polish: have the briefing route emit
+      structured actions directly (server-side) instead of the client
+      normalizing strings.
 
 ## Medium priority
 
@@ -36,6 +38,10 @@
 
 ## Completed
 
+- [x] (2026-06-10) Structured briefing follow-ups (Phase 3): `BriefingFollowUp`
+      union + `lib/briefing/followups.ts` normalizer; chips carry typed intent;
+      promote routes deterministically (no cloud); backward compatible with
+      legacy string follow-ups.
 - [x] (2026-06-10) Clarify-branch briefing guard + narrowed synthesizeVaguePlan
       (Bug 1 + Bug 2): the LLM's own `mode:"clarify"` now respects briefing
       context, and the fallback uses ONE grounded scenario instead of diluting
