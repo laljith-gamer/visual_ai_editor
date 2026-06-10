@@ -544,25 +544,42 @@ export async function POST(req: NextRequest) {
       warnings
     });
     if (!buildResult.ok) {
-      // v1.7.11 — anti-loop safety net (same pattern the clarify branch
-      // uses). The LLM tagged this turn as plan/moment but failed to
-      // emit usable scenarios, so resolvePlan bailed. Previously this
-      // ALWAYS re-asked "what should the short be about?", with no loop
-      // guard — so a user who already answered (e.g. "food ingredient
-      // scene") got the same question forever.
+      // v1.7.12 — deterministic safety net so product-critical UX does
+      // not depend only on the LLM emitting a valid plan.
       //
-      // If the immediately-previous assistant turn was ALSO a clarify,
-      // we treat the user's reply as the topic and synthesize a plan
-      // from their literal words (SigLIP scores against that text). This
-      // NEVER inspects the user message for keywords — it only checks
-      // our own prior turn shape — so the "no regex on user input" rule
-      // still holds.
+      // The LLM tagged this turn as plan/moment but failed to emit usable
+      // scenarios, so resolvePlan bailed. We synthesize a plan from the
+      // user's own words (instead of re-asking "what should the short be
+      // about?") in EITHER of these cases:
+      //
+      //   (a) the previous assistant turn was a clarify — the original
+      //       anti-loop guard, so a user who already answered isn't asked
+      //       the same thing forever; OR
+      //   (b) a briefing is in scope (body.lastBriefing has best parts)
+      //       AND the user gave a non-empty request. After a briefing the
+      //       app already knows the video's subject, and follow-up chips
+      //       ("Show all ingredient preparation clips") always carry a
+      //       concrete topic — so re-asking is never correct.
+      //
+      // This only inspects our OWN prior turn shape + the presence of a
+      // briefing; it never keyword-matches the user's text. The synthesis
+      // turns their literal words into a scenario the pipeline can score.
       const previousAssistant = findPreviousAssistant(messages);
-      if (looksLikeClarify(previousAssistant)) {
+      const previousWasClarify = looksLikeClarify(previousAssistant);
+      const hasBriefingContext =
+        !!body.lastBriefing &&
+        Array.isArray(body.lastBriefing.bestParts) &&
+        body.lastBriefing.bestParts.length > 0;
+      const hasUsableTopic = userText.trim().length > 0;
+
+      if (previousWasClarify || (hasBriefingContext && hasUsableTopic)) {
         const synth = synthesizeVaguePlan({
           userText,
           currentPlan: body.currentPlan ?? null,
-          memory: body.memory
+          memory: body.memory,
+          // Pass the briefing so the synthesizer can ground concrete
+          // scenario prompts in the video's actual subject.
+          lastBriefing: hasBriefingContext ? body.lastBriefing : undefined
         });
         const timelineOp = normalizeTimelineOp(parsed.op);
         return NextResponse.json<AgentResponse>({
@@ -1325,6 +1342,21 @@ function synthesizeVaguePlan(args: {
   userText: string;
   currentPlan: EditPlan | null;
   memory?: SessionMemory;
+  /** v1.7.12 — when a briefing is in scope, its best-part labels are used
+   *  as extra grounding so the synthesized scenario is concrete (tied to
+   *  what the video actually contains) rather than just the raw chip text.
+   *  Optional; absent keeps the original literal-text behaviour. */
+  lastBriefing?: {
+    sourceId: string;
+    sourceName?: string;
+    bestParts: Array<{
+      id: string;
+      startSeconds: number;
+      endSeconds: number;
+      label: string;
+      why: string;
+    }>;
+  };
 }): EditPlan {
   const text = args.userText.trim().slice(0, 200);
   const useSemantic = text.length >= 3;
@@ -1333,8 +1365,38 @@ function synthesizeVaguePlan(args: {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 24) || "topic";
-  const scenarios = useSemantic ? [{ id, prompt: text, weight: 1 }] : [];
-  const labelWeights = useSemantic ? { [id]: 1 } : {};
+
+  // v1.7.12 — build the scenario list. With a briefing in scope we ground
+  // the user's request in the video's actual content: the chip text is the
+  // primary scenario, and the briefing's best-part labels are added as
+  // additional concrete scenarios so SigLIP has real on-screen descriptions
+  // to score against (e.g. "onion chopping", "chicken frying"). This is
+  // derived from briefing DATA, not a hardcoded keyword->template table, so
+  // it generalises to any genre.
+  const scenarios: Array<{ id: string; prompt: string; weight: number }> = [];
+  const labelWeights: Record<string, number> = {};
+
+  if (useSemantic) {
+    scenarios.push({ id, prompt: text, weight: 1 });
+    labelWeights[id] = 1;
+
+    const briefingParts = args.lastBriefing?.bestParts ?? [];
+    if (briefingParts.length > 0) {
+      const seen = new Set<string>([text.toLowerCase()]);
+      for (const part of briefingParts) {
+        if (scenarios.length >= 5) break;
+        const label = (part.label ?? "").trim();
+        if (label.length < 3) continue;
+        const key = label.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const sid = `bp_${part.id}`.slice(0, 24);
+        scenarios.push({ id: sid, prompt: label.slice(0, 200), weight: 0.6 });
+        labelWeights[sid] = 0.6;
+      }
+    }
+  }
+
   const signals = useSemantic
     ? { semantic: 0.55, motion: 0.3, saliency: 0.15 }
     : { semantic: 0, motion: 0.6, saliency: 0.4 };
