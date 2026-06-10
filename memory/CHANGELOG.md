@@ -17,6 +17,26 @@
 
 ---
 
+### 2026-06-10 — Clarify-branch briefing guard + narrowed plan synthesis
+- **Change made:** (Bug 1) The `mode === "clarify"` branch in
+  `app/api/agent/route.ts` now also synthesizes a briefing-grounded plan
+  when a briefing is in scope AND the user gave a topic — previously only
+  the plan/moment branch did this, so a direct LLM `mode:"clarify"` could
+  still ask "what should the short be about?" after a briefing chip.
+  (Bug 2) `synthesizeVaguePlan` no longer adds every best-part label as a
+  separate ~equal scenario (which diluted specific requests). It now builds
+  ONE scenario = user text + a compact context phrase from ≤3 best-part
+  labels, with semantic-heavy signals (0.65/0.2/0.15). New `SYNTH_PLAN`
+  config constants (no magic numbers). Also corrected stale memory: PR #33
+  is MERGED, not open.
+- **Files affected:** `app/api/agent/route.ts`, `lib/config.ts`;
+  `memory/PROJECT_STATE.md`, `memory/TODO.md`, `memory/CHANGELOG.md`.
+- **Reason:** Close the remaining clarify hole and stop specific briefing
+  follow-ups from being broadened into wrong clips. Deterministic safety
+  around the LLM; generic (no genre/keyword tables).
+- **Validation:** typecheck ✓, production build ✓, 8/8 logic unit checks ✓.
+  Browser/GPU not verified (sandbox has no GPU).
+
 ### 2026-06-10 — Briefing follow-up clarify fix (PR #33) + memory sync
 - **Change made:** Fixed the P0 bug where tapping a briefing follow-up chip
   (e.g. "Show all ingredient preparation clips") could return the generic

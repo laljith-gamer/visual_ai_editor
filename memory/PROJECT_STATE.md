@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-10 (briefing follow-up fix)
+> Last updated: 2026-06-10 (clarify briefing guard + synth narrowing)
 
 ---
 
@@ -33,9 +33,11 @@ text/JSON calls.
   model-driven tool router that replaces keyword intent matching, briefing
   grounding), the deterministic reasoning engine (`lib/vision-core`),
   the frame-organization tree (`lib/frame-tree`), optional frame
-  captioning (`lib/vision/caption*`), and the temporal-pass range fix.
-- **Open PR (not yet on `main`):** briefing follow-up fallback fix (#33) —
-  stops briefing chips from hitting the generic clarify.
+  captioning (`lib/vision/caption*`), the temporal-pass range fix, and the
+  briefing follow-up clarify fallback (PR #33, now merged + extended so the
+  LLM's own `mode:"clarify"` also respects briefing context).
+- **No open PRs blocking** at time of writing; next major step is the
+  flag-gated local-first UI wiring (see Next best step).
 
 > Update this section as PRs merge and features ship.
 
@@ -72,7 +74,7 @@ Upload video (stays in the browser)
 | `lib/frame-tree/` | In-browser frame organization tree (frames→shots→scenes→chapters) | **MERGED to main** (#29); not wired |
 | `lib/vision/caption*` | Optional in-browser frame captioning (Florence-2 / ViT-GPT2) | **MERGED to main** (#30); not wired |
 | `lib/pipeline/temporal.ts` range fix | Contact-sheet verification was dead for non-opening windows | **MERGED to main** (#28) |
-| `app/api/agent/route.ts` briefing fallback | Briefing follow-up chips no longer hit generic clarify; synthesizes a plan grounded in briefing best-part labels | **Open PR #33** |
+| `app/api/agent/route.ts` briefing fallback | Briefing follow-up chips no longer hit generic clarify; both the plan/moment branch AND the direct `mode:"clarify"` branch synthesize a single briefing-grounded scenario | **MERGED to main** (#33 + clarify-guard follow-up) |
 
 > "Wired into UI" = an end-to-end path in the assistant panel actually
 > calls these. None are wired yet — they are library layers behind no
@@ -110,17 +112,18 @@ Upload video (stays in the browser)
 ## 7. Next best step
 
 - **Wire the merged local-first chain into the UI**, behind a feature flag
-  that defaults OFF so the existing Gemini flow is byte-for-byte unchanged.
-  The pieces are on `main` (`lib/llm/` chat+tools+grounding, `lib/vision-core/`,
-  `lib/frame-tree/`, `lib/vision/caption*`); what's missing is the
-  assistant-panel integration that:
-    1. routes a turn with `routeTurn()` (tool decision),
-    2. executes the decision through the existing pipeline, and
-    3. for `chat`/questions, streams a grounded answer via `streamChat()`.
+  (`NEXT_PUBLIC_LOCAL_FIRST_EDITOR`) that defaults OFF so the existing
+  Gemini flow is byte-for-byte unchanged. Pieces are on `main`
+  (`lib/llm/` chat+tools+grounding, `lib/vision-core/`, `lib/frame-tree/`,
+  `lib/vision/caption*`); what's missing is the assistant-panel integration:
+    1. route a turn with `routeTurn()` (tool decision),
+    2. execute the decision through existing editor actions,
+    3. for `chat`/questions, stream a grounded answer via `streamChat()`,
+    4. fall back to `/api/agent` on disabled/unsupported/low-confidence.
   This is THE production step that makes the capable system user-facing —
   until it lands, the live app still runs the old keyword→cloud path.
-- **Review/merge PR #33** (briefing follow-up fallback) so briefing chips
-  stop hitting the generic clarify in the running app.
-- **Redeploy `main`** so the running app reflects already-merged fixes.
+- **Structured briefing follow-ups** — replace `followUps: string[]` with a
+  `BriefingFollowUp` action union so chips carry intent (promote/plan_topic/
+  extract) and don't make the server re-guess from raw text.
 
 > Replace this with the actual next step whenever it changes.

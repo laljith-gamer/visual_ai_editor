@@ -20,7 +20,7 @@ import { extractFacts } from "@/lib/memory/extract";
 import { decayFacts, mergeFacts } from "@/lib/memory/store";
 import { extractJsonObject } from "@/lib/util/safeJson";
 import { newId } from "@/lib/util/id";
-import { CONVERSATION, PLAN_DEFAULTS, RATE_LIMITS, SIGNAL_DEFAULTS } from "@/lib/config";
+import { CONVERSATION, PLAN_DEFAULTS, RATE_LIMITS, SIGNAL_DEFAULTS, SYNTH_PLAN } from "@/lib/config";
 import type {
   AgentRequest,
   AgentResponse,
@@ -495,13 +495,31 @@ export async function POST(req: NextRequest) {
     // This NEVER inspects the user message for keywords — it only
     // checks our own prior turn shape. The user's text just becomes
     // the scenario verbatim. No regex, no keyword classification.
+    // v1.7.13 — mirror the plan/moment branch's deterministic safety net
+    // here. We synthesize a grounded plan instead of asking
+    // "what should the short be about?" when EITHER:
+    //   (a) the previous assistant turn was a clarify (the original
+    //       anti-loop guard), OR
+    //   (b) a briefing is in scope (body.lastBriefing has best parts) AND
+    //       the user gave a non-empty request. After a briefing the app
+    //       already knows the video's subject and follow-up chips always
+    //       carry a concrete topic, so re-asking is never correct — even
+    //       when the LLM itself returned mode:"clarify" directly.
+    // Only inspects our own prior turn shape + briefing presence; never
+    // keyword-matches the user's text.
     const previousAssistant = findPreviousAssistant(messages);
     const previousWasClarify = looksLikeClarify(previousAssistant);
-    if (previousWasClarify) {
+    const hasBriefingContext =
+      !!body.lastBriefing &&
+      Array.isArray(body.lastBriefing.bestParts) &&
+      body.lastBriefing.bestParts.length > 0;
+    const hasUsableTopic = userText.trim().length > 0;
+    if (previousWasClarify || (hasBriefingContext && hasUsableTopic)) {
       const synth = synthesizeVaguePlan({
         userText,
         currentPlan: body.currentPlan ?? null,
-        memory: body.memory
+        memory: body.memory,
+        lastBriefing: hasBriefingContext ? body.lastBriefing : undefined
       });
       return NextResponse.json<AgentResponse>({
         mode: "plan",
@@ -1366,39 +1384,39 @@ function synthesizeVaguePlan(args: {
     .replace(/^_+|_+$/g, "")
     .slice(0, 24) || "topic";
 
-  // v1.7.12 — build the scenario list. With a briefing in scope we ground
-  // the user's request in the video's actual content: the chip text is the
-  // primary scenario, and the briefing's best-part labels are added as
-  // additional concrete scenarios so SigLIP has real on-screen descriptions
-  // to score against (e.g. "onion chopping", "chicken frying"). This is
-  // derived from briefing DATA, not a hardcoded keyword->template table, so
-  // it generalises to any genre.
+  // v1.7.13 (Bug 2 fix) — build ONE primary scenario grounded by, but not
+  // broadened by, the briefing. Previously every best-part label was added
+  // as a separate ~equal scenario, which diluted a specific request like
+  // "ingredient preparation clips" with unrelated parts (e.g. "final dish
+  // reveal", "chicken frying"). Instead we keep a single scenario whose
+  // prompt is the user's text plus a COMPACT context phrase distilled from
+  // the briefing labels. SigLIP still scores primarily against the user's
+  // intent; the context only nudges it toward this video's domain. This is
+  // generic (derived from briefing data, no genre/keyword table).
   const scenarios: Array<{ id: string; prompt: string; weight: number }> = [];
   const labelWeights: Record<string, number> = {};
 
   if (useSemantic) {
-    scenarios.push({ id, prompt: text, weight: 1 });
-    labelWeights[id] = 1;
-
-    const briefingParts = args.lastBriefing?.bestParts ?? [];
-    if (briefingParts.length > 0) {
-      const seen = new Set<string>([text.toLowerCase()]);
-      for (const part of briefingParts) {
-        if (scenarios.length >= 5) break;
-        const label = (part.label ?? "").trim();
-        if (label.length < 3) continue;
-        const key = label.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const sid = `bp_${part.id}`.slice(0, 24);
-        scenarios.push({ id: sid, prompt: label.slice(0, 200), weight: 0.6 });
-        labelWeights[sid] = 0.6;
-      }
+    let prompt = text;
+    const labels = (args.lastBriefing?.bestParts ?? [])
+      .map((p) => (p.label ?? "").trim())
+      .filter((l) => l.length >= 3)
+      // Drop labels already implied by the user's text to avoid redundancy.
+      .filter((l) => !text.toLowerCase().includes(l.toLowerCase()))
+      .slice(0, SYNTH_PLAN.maxContextLabels);
+    if (labels.length > 0) {
+      const context = labels.join(", ").slice(0, SYNTH_PLAN.maxContextChars);
+      prompt = `${text}. Relevant video context: ${context}`.slice(0, 300);
     }
+    scenarios.push({ id, prompt, weight: 1 });
+    labelWeights[id] = 1;
   }
 
+  // Bug 2: semantic-heavy signals for a concrete topic (a named subject
+  // should lean on SigLIP, not motion/saliency). The visual-interest
+  // fallback (no usable text) stays motion+saliency only.
   const signals = useSemantic
-    ? { semantic: 0.55, motion: 0.3, saliency: 0.15 }
+    ? { semantic: 0.65, motion: 0.2, saliency: 0.15 }
     : { semantic: 0, motion: 0.6, saliency: 0.4 };
   void SIGNAL_DEFAULTS; // imported for future use; reserved.
   const target =
