@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-10
+> Last updated: 2026-06-10 (briefing follow-up fix)
 
 ---
 
@@ -31,9 +31,11 @@ text/JSON calls.
 - **Merged to `main` (library layers — NOT yet wired into the chat UI):**
   the local WebLLM engine + the capable chat system (streaming chat,
   model-driven tool router that replaces keyword intent matching, briefing
-  grounding) and the deterministic reasoning engine (`lib/vision-core`).
-- **Still in open PRs (not on `main`):** temporal-pass fix (#28),
-  frame-tree (#29), captioning (#30).
+  grounding), the deterministic reasoning engine (`lib/vision-core`),
+  the frame-organization tree (`lib/frame-tree`), optional frame
+  captioning (`lib/vision/caption*`), and the temporal-pass range fix.
+- **Open PR (not yet on `main`):** briefing follow-up fallback fix (#33) —
+  stops briefing chips from hitting the generic clarify.
 
 > Update this section as PRs merge and features ship.
 
@@ -67,9 +69,10 @@ Upload video (stays in the browser)
 |--------|---------|--------|
 | `lib/llm/` (engine, chat, tools, grounding) | Local WebLLM engine + streaming chat + model-driven tool router (replaces keyword intent) + briefing "why" grounding | **MERGED to main**; not wired into UI |
 | `lib/vision-core/` | Offline deterministic reasoning engine (segments, scoring, sentiment) | **MERGED to main**; not wired |
-| `lib/frame-tree/` | In-browser frame organization tree (frames→shots→scenes→chapters) | **Open PR #29**; not merged |
-| `lib/vision/caption*` | Optional in-browser frame captioning (Florence-2 / ViT-GPT2) | **Open PR #30**; not merged |
-| `lib/pipeline/temporal.ts` range fix | Contact-sheet verification was dead for non-opening windows | **Open PR #28**; not merged |
+| `lib/frame-tree/` | In-browser frame organization tree (frames→shots→scenes→chapters) | **MERGED to main** (#29); not wired |
+| `lib/vision/caption*` | Optional in-browser frame captioning (Florence-2 / ViT-GPT2) | **MERGED to main** (#30); not wired |
+| `lib/pipeline/temporal.ts` range fix | Contact-sheet verification was dead for non-opening windows | **MERGED to main** (#28) |
+| `app/api/agent/route.ts` briefing fallback | Briefing follow-up chips no longer hit generic clarify; synthesizes a plan grounded in briefing best-part labels | **Open PR #33** |
 
 > "Wired into UI" = an end-to-end path in the assistant panel actually
 > calls these. None are wired yet — they are library layers behind no
@@ -108,14 +111,16 @@ Upload video (stays in the browser)
 
 - **Wire the merged local-first chain into the UI**, behind a feature flag
   that defaults OFF so the existing Gemini flow is byte-for-byte unchanged.
-  The pieces are on `main` (`lib/llm/` chat+tools+grounding, `lib/vision-core/`);
-  what's missing is the assistant-panel integration that:
+  The pieces are on `main` (`lib/llm/` chat+tools+grounding, `lib/vision-core/`,
+  `lib/frame-tree/`, `lib/vision/caption*`); what's missing is the
+  assistant-panel integration that:
     1. routes a turn with `routeTurn()` (tool decision),
     2. executes the decision through the existing pipeline, and
     3. for `chat`/questions, streams a grounded answer via `streamChat()`.
-- **Merge the remaining open PRs** (#28 temporal fix, #29 frame-tree,
-  #30 captioning) — all verified to merge cleanly into `main`.
-- **Redeploy `main`** so the running app reflects the merged fixes (e.g. the
-  briefing "invalid JSON" error is already fixed on `main` but needs a deploy).
+  This is THE production step that makes the capable system user-facing —
+  until it lands, the live app still runs the old keyword→cloud path.
+- **Review/merge PR #33** (briefing follow-up fallback) so briefing chips
+  stop hitting the generic clarify in the running app.
+- **Redeploy `main`** so the running app reflects already-merged fixes.
 
 > Replace this with the actual next step whenever it changes.
