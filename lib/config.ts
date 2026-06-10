@@ -453,3 +453,48 @@ export const LOCAL_LLM = {
    *  small; this bounds latency and truncation risk. */
   maxTokens: 768
 } as const;
+
+
+
+// =====================================================================
+// Local frame CAPTIONING (image-to-text) configuration.
+//
+// OPTIONAL, capability-gated, in-browser. Produces a short natural-
+// language caption per sampled frame so the frame-tree and the offline
+// reasoning engine get semantic context WITHOUT any cloud call. When the
+// device can't run it (no WebGPU / low memory) or the model fails to
+// load, the pipeline silently degrades to motion + saliency only — the
+// caption field just stays empty. Mirrors the AUDIO tier pattern and the
+// SigLIP capability gating in useCapability.ts.
+//
+// Models are transformers.js-compatible ONNX repos verified to exist:
+//   - Florence-2-base: stronger, multi-task, ~230 MB. WebGPU desktops.
+//   - vit-gpt2-image-captioning: the proven lightweight default, ~50 MB
+//     quantized. Solid single-sentence captions with minimal deps.
+// Only consumers are lib/vision/caption.worker.ts + lib/vision/caption.ts.
+// =====================================================================
+
+export const CAPTION = {
+  /** High tier — Florence-2 base (multi-task VLM). Best caption quality,
+   *  needs WebGPU + adequate memory. */
+  modelHigh: "onnx-community/Florence-2-base",
+  /** Mid tier — ViT-GPT2, the established lightweight captioner. Good
+   *  one-sentence descriptions, runs on WASM if needed. */
+  modelMid: "Xenova/vit-gpt2-image-captioning",
+  /** Low tier — same lightweight captioner; we don't ship a smaller
+   *  reliable option yet, so low == mid until one lands. */
+  modelLow: "Xenova/vit-gpt2-image-captioning",
+  /** Florence-2 task token for plain captioning. Ignored by ViT-GPT2. */
+  florenceTask: "<CAPTION>",
+  /** Max new tokens per caption. Captions are short by design — this
+   *  bounds latency and keeps the frame-tree token-lean. */
+  maxNewTokens: 32,
+  /** Caption every Nth sampled frame, not every frame. Captioning is the
+   *  most expensive optional step; 1 caption per ~4 samples is plenty to
+   *  label shots/scenes in the tree while keeping the pass fast. The
+   *  uncaptioned frames inherit context from their shot. */
+  captionStride: 4,
+  /** Hard cap on number of frames captioned in a single pass, to bound
+   *  worst-case time on very long videos. */
+  maxCaptionedFrames: 64
+} as const;
