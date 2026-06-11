@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (structured briefing follow-ups + safe local-first actions)
+> Last updated: 2026-06-11 (Phase 4.5 sourceId polish + Phase 5 first hook extraction)
 
 ## High priority
 
@@ -37,14 +37,24 @@
       tool-decision validator, `normalizeBriefingFollowUps`,
       synthesizeVaguePlan).
 - [ ] Document device-tier expectations (which models run where).
-- [ ] **Phase 5 (maintainability):** extract focused hooks from the large
-      `app/editor/page.tsx` (`useAgentPlanner` / `useBriefingActions` /
-      `useTimelineCommandRunner` / `usePipelineRunner` /
-      `useAssistantController`) — only when touching related code,
-      behavior-identical, not mixed with feature work.
+- [ ] **Phase 5 (maintainability) — continue ONE hook at a time.** First
+      extraction done (`hooks/useBriefingActions.ts`). Remaining candidates
+      from `app/editor/page.tsx`: `useAgentPlanner`,
+      `useTimelineCommandRunner`, `usePipelineRunner`,
+      `useAssistantController`. Behavior-identical only; not mixed with
+      feature work; no big rewrite.
+- [ ] Add a CI workflow (GitHub Actions) running `npm ci` + `npm run typecheck`
+      + `npm run build` so merges are gated (no CI runs today).
 
 ## Completed
 
+- [x] (2026-06-11) **Phase 4.5 polish — briefing `plan_topic` preserves
+      `sourceId`.** Client-side plan now passes `sources:[action.sourceId]`
+      into `normalizePlan`, so multi-source briefings stay grounded on the
+      briefed source. No cloud call, no category logic.
+- [x] (2026-06-11) **Phase 5 first extraction — `hooks/useBriefingActions.ts`.**
+      Pulled the deterministic briefing follow-up handler out of
+      `app/editor/page.tsx`, behavior-identical; page calls the hook.
 - [x] (2026-06-11) **Structured briefing follow-ups (Phase 3).**
       `BriefingFollowUp` union + `lib/briefing/followups.ts` normalizer;
       `BriefingCard`/`AssistantPanel`/editor wired to dispatch intent

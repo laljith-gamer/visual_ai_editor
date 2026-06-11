@@ -17,7 +17,42 @@
 
 ---
 
-### 2026-06-11 — Structured briefing follow-ups + safe local-first actions (Phase 3 complete, Phase 4.5)
+### 2026-06-11 — Phase 4.5 sourceId polish + Phase 5 first hook extraction
+- **Change made:**
+  1. **Phase 4.5 polish — briefing `plan_topic` actions preserve `sourceId`.**
+     When a briefing was created from one specific source in a multi-source
+     project, clicking a topic chip could build a plan that ran across ALL
+     selected sources. The client-side plan now passes
+     `sources: [action.sourceId]` into `normalizePlan()` (which already
+     sanitizes `sources`), so the run stays grounded on the source that was
+     actually briefed. No `/api/agent` call; no genre/category logic. When a
+     follow-up has no `sourceId`, behavior is unchanged. The `plan.created`
+     activity log now records the locked `sources`.
+  2. **Phase 5 (first extraction) — `hooks/useBriefingActions.ts`.** Moved the
+     deterministic briefing follow-up handler (`promote` / `plan_topic` /
+     `extract_range`, plus their logging + status/progress updates) out of the
+     ~2000-line `app/editor/page.tsx` into one focused, behavior-identical
+     hook. The page now calls `useBriefingActions({...})` and supplies the
+     store setters/loggers it owns; the hook reuses the same store actions
+     (`promoteBriefingParts`, `buildExtractedHighlight`, `normalizePlan`,
+     `mergeHighlights`/`setHighlights`, `setPlan`/`setMode`/
+     `setPendingExecution`/`setPendingClarify`). `chat` follow-ups still route
+     through the normal chat pipe in `AssistantPanel`. No behavior change.
+- **Files affected:** `hooks/useBriefingActions.ts` (new),
+  `app/editor/page.tsx` (replaced the inline `handleBriefingAction` with the
+  hook call; dropped now-unused `normalizePlan` / `SIGNAL_DEFAULTS` /
+  `BriefingFollowUp` imports), `memory/*`.
+- **Reason:** Keep multi-source briefings grounded (correctness), and begin
+  Phase 5 maintainability with ONE low-risk, behavior-preserving extraction
+  (no big refactor, no feature mixing).
+- **Validation:** `npm install` ✓, `npm run typecheck` ✓, `npm run build` ✓
+  (only the pre-existing `@huggingface/transformers` `import.meta` warning;
+  `/editor` bundle unchanged at ~47.8 kB). `npm run lint` still NOT configured
+  (`next lint` prompts for interactive setup). Browser/WebGPU runtime and the
+  multi-source manual checks (plan locked to `sources:[briefingSourceId]`,
+  Run analysis uses the intended source) still need a real browser. No CI run.
+
+
 - **Change made:**
   1. **Structured briefing follow-ups (Phase 3 — now done).** Replaced the
      plain-string follow-up chips with an intent-carrying

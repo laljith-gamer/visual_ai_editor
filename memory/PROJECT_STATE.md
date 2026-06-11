@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (structured briefing follow-ups + safe local-first actions)
+> Last updated: 2026-06-11 (Phase 4.5 sourceId polish + Phase 5 first hook extraction)
 
 ---
 
@@ -48,6 +48,14 @@ text/JSON calls.
   carry intent via a `BriefingFollowUp` union and run deterministically
   (promote/plan_topic/extract_range) or via chat — no more raw-text
   round-trip to the planner and no "what should the short be about?" loop.
+  Multi-source safe: a `plan_topic` chip locks its plan to the briefing's
+  `sourceId` so the run stays on the source that was briefed.
+- **Phase 5 has STARTED (one extraction only).** The briefing follow-up
+  handler now lives in `hooks/useBriefingActions.ts` (behavior-identical);
+  `app/editor/page.tsx` calls it. The remaining hook extractions
+  (`useAgentPlanner` / `useTimelineCommandRunner` / `usePipelineRunner` /
+  `useAssistantController`) are NOT done — do them one at a time, only when
+  touching related code.
 - **Still library-only / not wired:** `lib/vision-core/`, `lib/frame-tree/`,
   `lib/vision/caption*`. These need REAL sampled/captioned frame data before
   the local router should execute `plan`/`describe` locally (deliberately
@@ -87,6 +95,7 @@ Upload video (stays in the browser)
 | `lib/llm/` (engine, chat, tools, grounding) | Local WebLLM engine + streaming chat + model-driven tool router (replaces keyword intent) + briefing "why" grounding | **MERGED + WIRED** behind flag via `lib/llm/localFirst.ts` |
 | `lib/llm/localFirst.ts` | Flag-gated live entry: routes a turn locally, answers `chat`, and EXECUTES safe `promote`/`extract`/`reset` actions; falls through to cloud otherwise | **LIVE (flag default OFF)** |
 | `lib/briefing/followups.ts` | Pure normalizer: legacy/string briefing follow-ups → structured `BriefingFollowUp` actions | **LIVE** |
+| `hooks/useBriefingActions.ts` | Phase 5 extraction: deterministic briefing follow-up handler (promote/plan_topic/extract_range) pulled out of `app/editor/page.tsx`, behavior-identical | **LIVE** |
 | `lib/vision-core/` | Offline deterministic reasoning engine (segments, scoring, sentiment) | **MERGED to main**; not wired |
 | `lib/frame-tree/` | In-browser frame organization tree (frames→shots→scenes→chapters) | **MERGED to main** (#29); not wired |
 | `lib/vision/caption*` | Optional in-browser frame captioning (Florence-2 / ViT-GPT2) | **MERGED to main** (#30); not wired |
@@ -144,11 +153,13 @@ Upload video (stays in the browser)
   run locally; `edit` (trim/drop/split) is the next deterministic candidate
   — map `ToolDecision.operation` onto the existing `EditOperation` store
   actions, behind the same flag + confidence floor.
-- **Phase 5 (maintainability, NOT yet started):** `app/editor/page.tsx` is
-  large. Extract focused hooks (`useAgentPlanner`, `useBriefingActions`,
-  `useTimelineCommandRunner`, `usePipelineRunner`, `useAssistantController`)
-  ONLY when touching related code and behavior-identical. Do not mix with
-  feature work.
+- **Phase 5 (maintainability, IN PROGRESS — 1 of ~5 done):**
+  `app/editor/page.tsx` is large. First extraction shipped:
+  `hooks/useBriefingActions.ts`. Continue ONE hook at a time, only when
+  touching related code and strictly behavior-identical — next candidates:
+  `useAgentPlanner`, `useTimelineCommandRunner`, `usePipelineRunner`,
+  `useAssistantController`. Do not mix with feature work; do not do a big
+  rewrite.
 - **Browser/GPU verification** of the flag-ON path (local router executing
   promote/extract/reset, and local chat) is still pending — needs a real
   WebGPU browser; the sandbox has no GPU.
