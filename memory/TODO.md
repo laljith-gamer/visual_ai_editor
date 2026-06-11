@@ -43,8 +43,6 @@
       `useTimelineCommandRunner`, `usePipelineRunner`,
       `useAssistantController`. Behavior-identical only; not mixed with
       feature work; no big rewrite.
-- [ ] Add a CI workflow (GitHub Actions) running `npm ci` + `npm run typecheck`
-      + `npm run build` so merges are gated (no CI runs today).
 
 ## Completed
 
@@ -56,6 +54,18 @@
       fallback; flag default still OFF; no cloud-flow change; no fake vision
       data. Full Gemini-optional still needs real frame-tree/caption/vision-
       core grounding.
+- [x] (2026-06-11) **Briefing endpoint resilience.** `/api/agent/briefing`
+      retries once with fewer frames + a stricter compact prompt when the
+      first Gemini response is unparseable, and degrades to a minimal 200
+      fallback `BriefingResult` instead of a dead-end error. Safe logging
+      (truncated model text, no base64/video). No UI/ffmpeg/scoring changes.
+- [x] (2026-06-11) **Add GitHub Actions CI** (`.github/workflows/ci.yml`).
+      Runs `npm run typecheck` + `npm run build` on PRs to `main` and pushes
+      to `main` (Ubuntu, Node 20, npm cache, `npm ci`). Lint intentionally
+      excluded (no ESLint config; `next lint` is interactive). Browser/WebGPU
+      verification stays manual.
+- [x] (2026-06-11) **Phase 4.5 polish — briefing `plan_topic` preserves
+      `sourceId`.** Client-side plan now passes `sources:[action.sourceId]`
       into `normalizePlan`, so multi-source briefings stay grounded on the
       briefed source. No cloud call, no category logic.
 - [x] (2026-06-11) **Phase 5 first extraction — `hooks/useBriefingActions.ts`.**

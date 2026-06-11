@@ -56,7 +56,65 @@
   loading + tool-routing quality is NOT verified here — needs a real WebGPU
   browser with `NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true` (no GPU in sandbox).
 
+---
 
+### 2026-06-11 — Briefing endpoint: retry-once + minimal fallback (resilience fix)
+- **Change made:** Fixed the live bug where "Describe what's in this video"
+  could dead-end on *"The video summary came back incomplete…"* whenever
+  Gemini reached the endpoint but returned text `extractJsonObject()` couldn't
+  parse (truncated/wrapped JSON from thinking-heavy/overloaded models).
+  `app/api/agent/briefing/route.ts` now:
+  1. **Retries once** when the first parse fails — with **fewer frames**
+     (`selectRetryFrames`: first + last + evenly-spaced middle, capped at
+     `RETRY_FRAME_CAP = 8`) and a **stricter, compact prompt** (`STRICT_SYSTEM`:
+     JSON-only, overview ≤ 40 words, ≤ 3 best parts, ≤ 3 follow-ups) at a
+     higher output cap (`RETRY_MAX_OUTPUT_TOKENS = 3072`).
+  2. **Degrades to a minimal fallback `BriefingResult`** (HTTP 200, no `error`)
+     when the retry also can't be parsed OR the retry call throws — so the UI
+     renders a real briefing card (overview + "Try a smaller window" /
+     "Pick the best parts for me" chips) instead of only an error bubble.
+  3. **Hard error only** when the FIRST Gemini call fails or the request is
+     invalid (unchanged).
+  4. **Safe logging:** parse failures log the model text truncated to 300
+     chars + its length via `console.warn`; never image/base64 or video bytes.
+  - Extracted helpers: `selectRetryFrames`, `buildBriefingPrompt`,
+    `parseBriefingJson`, `framesToImages`, `fallbackBriefing`, and two log
+    helpers. No UI, ffmpeg/render/scoring, or Phase 5 changes. Video privacy
+    unchanged — only the already-sampled frames are sent; no new upload path.
+- **Files affected:** `app/api/agent/briefing/route.ts`, `memory/*`.
+- **Reason:** Make the briefing resilient to incomplete/non-JSON Gemini output.
+- **Validation:** `npm install` ✓, `npm run typecheck` ✓, `npm run build` ✓.
+  CI (typecheck + build) will run on the PR. Browser/WebGPU + live-Gemini
+  manual testing still required (no Gemini key / GPU in the build sandbox).
+
+---
+
+### 2026-06-11 — Add GitHub Actions CI + CHANGELOG formatting cleanup
+- **Change made:**
+  1. **CI workflow added** (`.github/workflows/ci.yml`). Runs on
+     `pull_request` targeting `main` and on `push` to `main`: Ubuntu latest,
+     Node 20 with npm cache, installs via `npm ci` (lockfile present, else
+     `npm install`), then `npm run typecheck` and `npm run build`. Lint is
+     intentionally NOT run — there is no ESLint config and `next lint` prompts
+     interactively, which would hang CI. So future merges are gated on
+     typecheck + build.
+  2. **CHANGELOG formatting cleanup.** Restored two `###` headings that had
+     been dropped by earlier chained edits (the "Structured briefing
+     follow-ups + safe local-first actions" and "Editor syntax/typecheck fix"
+     entries) and added the missing `---` separators, so each entry is again
+     readable as a discrete dated block. No meaning changed.
+- **Files affected:** `.github/workflows/ci.yml` (new), `memory/CHANGELOG.md`,
+  `memory/PROJECT_STATE.md`, `memory/TODO.md`, `memory/CONSTRAINTS.md`.
+- **Reason:** Production hygiene — automatically validate PRs, and keep the
+  memory handoff brain clean for future agents.
+- **Validation:** `npm install` ✓, `npm run typecheck` ✓, `npm run build` ✓
+  (only the pre-existing `@huggingface/transformers` `import.meta` warning).
+  CI workflow run status to be confirmed after the PR opens. Browser/WebGPU
+  runtime still NOT verified — manual browser testing required.
+
+---
+
+### 2026-06-11 — Phase 4.5 sourceId polish + Phase 5 first hook extraction
 - **Change made:**
   1. **Phase 4.5 polish — briefing `plan_topic` actions preserve `sourceId`.**
      When a briefing was created from one specific source in a multi-source
@@ -91,7 +149,9 @@
   multi-source manual checks (plan locked to `sources:[briefingSourceId]`,
   Run analysis uses the intended source) still need a real browser. No CI run.
 
+---
 
+### 2026-06-11 — Structured briefing follow-ups + safe local-first actions
 - **Change made:**
   1. **Structured briefing follow-ups (Phase 3 — now done).** Replaced the
      plain-string follow-up chips with an intent-carrying
@@ -132,7 +192,9 @@
   executing actions) NOT verified — no GPU in sandbox; needs a real browser
   with `NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true`. No CI workflow run.
 
+---
 
+### 2026-06-11 — Editor syntax/typecheck fix
 - **Change made:** Removed a duplicated quick-shortcut `catch` block in
   `app/editor/page.tsx` that caused TypeScript parser errors and cascade
   declaration errors.

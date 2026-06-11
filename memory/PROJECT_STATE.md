@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (local-first high-tier model → Hermes-3-Llama-3.1-8B for agentic/tool-use)
+> Last updated: 2026-06-11 (local-first high-tier model → Hermes-3-Llama-3.1-8B; prior: briefing retry/fallback, CI added)
 
 ---
 
@@ -26,6 +26,11 @@ text/JSON calls.
 - Latest validation: `npm install` + `npm run typecheck` + `npm run build`
   all pass. (`npm run lint` is not separately configured — `next lint`
   prompts for interactive setup; the build runs its own type/lint pass.)
+- **CI (GitHub Actions) is now in place** — `.github/workflows/ci.yml` runs
+  `npm run typecheck` + `npm run build` on every PR to `main` and every push
+  to `main` (Ubuntu, Node 20, npm cache). Lint is intentionally excluded
+  (no ESLint config; `next lint` is interactive). **Browser/WebGPU runtime
+  verification is still manual and still required** — CI cannot exercise it.
 - Core conversational editing pipeline is working: plan → sample → score →
   detect windows → verify → assemble → render.
 - Active line of work: **making the client local-first** (offline reasoning
@@ -71,6 +76,14 @@ text/JSON calls.
   `lib/vision/caption*`. These need REAL sampled/captioned frame data before
   the local router should execute `plan`/`describe` locally (deliberately
   deferred — see Next best step).
+- **Briefing endpoint is resilient to bad JSON (2026-06-11).**
+  `/api/agent/briefing` now retries ONCE with fewer frames + a stricter
+  compact prompt when the first Gemini response can't be parsed, and falls
+  back to a minimal 200 `BriefingResult` (overview + "Try a smaller window" /
+  "Pick the best parts for me" chips) if the retry also fails — so
+  "Describe what's in this video" no longer dead-ends on *"The video summary
+  came back incomplete…"*. A hard error is returned only when the first
+  Gemini call fails or the request is invalid.
 - **No open PRs blocking** at time of writing.
 
 > Update this section as PRs merge and features ship.
