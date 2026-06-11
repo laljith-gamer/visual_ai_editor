@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (editor syntax/typecheck fix)
+> Last updated: 2026-06-11 (structured briefing follow-ups + safe local-first actions)
 
 ---
 
@@ -23,23 +23,36 @@ text/JSON calls.
 ## 3. Current status
 
 - Version: **1.7.9** (see `package.json`).
-- Latest validation: `npm.cmd run typecheck` passes after removing a duplicated
-  quick-shortcut `catch` block in `app/editor/page.tsx`.
+- Latest validation: `npm install` + `npm run typecheck` + `npm run build`
+  all pass. (`npm run lint` is not separately configured — `next lint`
+  prompts for interactive setup; the build runs its own type/lint pass.)
 - Core conversational editing pipeline is working: plan → sample → score →
   detect windows → verify → assemble → render.
 - Active line of work: **making the client local-first** (offline reasoning
   + local LLM + frame organization), with cloud Gemini becoming optional
   rather than required.
-- **Merged to `main` (library layers — NOT yet wired into the chat UI):**
-  the local WebLLM engine + the capable chat system (streaming chat,
-  model-driven tool router that replaces keyword intent matching, briefing
-  grounding), the deterministic reasoning engine (`lib/vision-core`),
-  the frame-organization tree (`lib/frame-tree`), optional frame
-  captioning (`lib/vision/caption*`), the temporal-pass range fix, and the
-  briefing follow-up clarify fallback (PR #33, now merged + extended so the
-  LLM's own `mode:"clarify"` also respects briefing context).
-- **No open PRs blocking** at time of writing; next major step is the
-  flag-gated local-first UI wiring (see Next best step).
+- **Local-first is PARTIALLY WIRED into the live assistant UI** behind the
+  `NEXT_PUBLIC_LOCAL_FIRST_EDITOR` flag (default OFF):
+    - **Phase 4 v1 (on main):** `lib/llm/localFirst.ts` runs the model-driven
+      router (`routeTurn`) on-device before the cloud planner and answers
+      `chat` turns locally with grounding.
+    - **Phase 4.5 (this change):** the local path now also EXECUTES a closed
+      set of safe deterministic actions on-device — `promote`, `extract`,
+      `reset` — each mapping onto an existing tested store path. Everything
+      else (`plan`/`moment`/`edit`/`merge`/`describe`), low confidence, or
+      missing data FALLS THROUGH to the unchanged cloud planner. No faked
+      frame-tree/vision data.
+    - With the flag OFF or on any fall-through, the existing Gemini/Groq
+      flow is byte-for-byte unchanged.
+- **Structured briefing follow-ups are DONE (Phase 3).** Briefing chips now
+  carry intent via a `BriefingFollowUp` union and run deterministically
+  (promote/plan_topic/extract_range) or via chat — no more raw-text
+  round-trip to the planner and no "what should the short be about?" loop.
+- **Still library-only / not wired:** `lib/vision-core/`, `lib/frame-tree/`,
+  `lib/vision/caption*`. These need REAL sampled/captioned frame data before
+  the local router should execute `plan`/`describe` locally (deliberately
+  deferred — see Next best step).
+- **No open PRs blocking** at time of writing.
 
 > Update this section as PRs merge and features ship.
 
@@ -67,20 +80,25 @@ Upload video (stays in the browser)
 - **State:** Zustand store (`hooks/useEditorStore.ts`); IndexedDB for
   sessions/cache/logs (never blobs).
 
-### Local-first modules (status as of 2026-06-10)
+### Local-first modules (status as of 2026-06-11)
 
 | Module | Purpose | Status |
 |--------|---------|--------|
-| `lib/llm/` (engine, chat, tools, grounding) | Local WebLLM engine + streaming chat + model-driven tool router (replaces keyword intent) + briefing "why" grounding | **MERGED to main**; not wired into UI |
+| `lib/llm/` (engine, chat, tools, grounding) | Local WebLLM engine + streaming chat + model-driven tool router (replaces keyword intent) + briefing "why" grounding | **MERGED + WIRED** behind flag via `lib/llm/localFirst.ts` |
+| `lib/llm/localFirst.ts` | Flag-gated live entry: routes a turn locally, answers `chat`, and EXECUTES safe `promote`/`extract`/`reset` actions; falls through to cloud otherwise | **LIVE (flag default OFF)** |
+| `lib/briefing/followups.ts` | Pure normalizer: legacy/string briefing follow-ups → structured `BriefingFollowUp` actions | **LIVE** |
 | `lib/vision-core/` | Offline deterministic reasoning engine (segments, scoring, sentiment) | **MERGED to main**; not wired |
 | `lib/frame-tree/` | In-browser frame organization tree (frames→shots→scenes→chapters) | **MERGED to main** (#29); not wired |
 | `lib/vision/caption*` | Optional in-browser frame captioning (Florence-2 / ViT-GPT2) | **MERGED to main** (#30); not wired |
 | `lib/pipeline/temporal.ts` range fix | Contact-sheet verification was dead for non-opening windows | **MERGED to main** (#28) |
-| `app/api/agent/route.ts` briefing fallback | Briefing follow-up chips no longer hit generic clarify; both the plan/moment branch AND the direct `mode:"clarify"` branch synthesize a single briefing-grounded scenario | **MERGED to main** (#33 + clarify-guard follow-up) |
+| `app/api/agent/route.ts` briefing fallback | Briefing follow-up chips no longer hit generic clarify | **MERGED to main** (#33 + clarify-guard follow-up) |
 
 > "Wired into UI" = an end-to-end path in the assistant panel actually
-> calls these. None are wired yet — they are library layers behind no
-> feature flag. The existing cloud (Gemini/Groq) flow is unchanged.
+> calls these. `lib/llm/` is now wired behind `NEXT_PUBLIC_LOCAL_FIRST_EDITOR`
+> for chat + the safe deterministic actions; `vision-core` / `frame-tree` /
+> captioning remain library-only until real frame data feeds them. The
+> existing cloud (Gemini/Groq) flow is unchanged when the flag is off or the
+> local path falls through.
 
 ## 5. Important files / folders
 
@@ -100,9 +118,11 @@ Upload video (stays in the browser)
 
 > Keep this list honest and current. Remove items when fixed.
 
-- Local-first modules are **not integrated into the chat UI yet** — the
-  `lib/llm/` chat+tool system and `lib/vision-core/` are merged to `main`
-  but no end-to-end path in the assistant panel calls them.
+- The deeper local-first modules (`lib/vision-core/`, `lib/frame-tree/`,
+  `lib/vision/caption*`) are **merged but not wired** — the local router
+  still defers `plan`/`moment`/`describe` to the cloud because executing
+  them locally requires REAL sampled/captioned frame-tree data that isn't
+  fed in yet. Do not fake that data.
 - **Deploy lag:** fixes merged to `main` (e.g. the briefing "invalid JSON"
   fix) won't appear in the running app until it is rebuilt/redeployed.
 - **Runtime verification gap:** WebGPU features (SigLIP/Whisper/WebLLM/
@@ -113,19 +133,24 @@ Upload video (stays in the browser)
 
 ## 7. Next best step
 
-- **Wire the merged local-first chain into the UI**, behind a feature flag
-  (`NEXT_PUBLIC_LOCAL_FIRST_EDITOR`) that defaults OFF so the existing
-  Gemini flow is byte-for-byte unchanged. Pieces are on `main`
-  (`lib/llm/` chat+tools+grounding, `lib/vision-core/`, `lib/frame-tree/`,
-  `lib/vision/caption*`); what's missing is the assistant-panel integration:
-    1. route a turn with `routeTurn()` (tool decision),
-    2. execute the decision through existing editor actions,
-    3. for `chat`/questions, stream a grounded answer via `streamChat()`,
-    4. fall back to `/api/agent` on disabled/unsupported/low-confidence.
-  This is THE production step that makes the capable system user-facing —
-  until it lands, the live app still runs the old keyword→cloud path.
-- **Structured briefing follow-ups** — replace `followUps: string[]` with a
-  `BriefingFollowUp` action union so chips carry intent (promote/plan_topic/
-  extract) and don't make the server re-guess from raw text.
+- **Feed REAL frame data into local `plan`/`describe`.** The remaining
+  local-first win is letting the on-device router execute `plan`/`moment`/
+  `describe` using `lib/frame-tree/` + `lib/vision/caption*` outputs (and
+  `lib/vision-core/` scoring) instead of deferring to the cloud. This is
+  gated on building the sampled/captioned frame-tree for the active source
+  and passing its outline into `routeTurn`/grounding. Never fake it — until
+  the tree is real, these stay cloud-owned.
+- **Extend safe local actions to `edit`.** `promote`/`extract`/`reset` now
+  run locally; `edit` (trim/drop/split) is the next deterministic candidate
+  — map `ToolDecision.operation` onto the existing `EditOperation` store
+  actions, behind the same flag + confidence floor.
+- **Phase 5 (maintainability, NOT yet started):** `app/editor/page.tsx` is
+  large. Extract focused hooks (`useAgentPlanner`, `useBriefingActions`,
+  `useTimelineCommandRunner`, `usePipelineRunner`, `useAssistantController`)
+  ONLY when touching related code and behavior-identical. Do not mix with
+  feature work.
+- **Browser/GPU verification** of the flag-ON path (local router executing
+  promote/extract/reset, and local chat) is still pending — needs a real
+  WebGPU browser; the sandbox has no GPU.
 
 > Replace this with the actual next step whenever it changes.

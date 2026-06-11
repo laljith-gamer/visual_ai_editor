@@ -1,15 +1,25 @@
 "use client";
 
+import { useMemo } from "react";
 import { Clock, Lightbulb, MousePointerClick, Play, Sparkles } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { logUser } from "@/lib/log/recorders";
-import type { BestPart } from "@/lib/types";
+import { normalizeBriefingFollowUps } from "@/lib/briefing/followups";
+import type { BestPart, BriefingFollowUp } from "@/lib/types";
 import styles from "./BriefingCard.module.css";
 
 interface Props {
   bestParts: BestPart[];
-  followUps: string[];
-  onPickFollowUp: (text: string) => void;
+  /** v1.8.1 — raw follow-ups: plain strings (legacy / current briefing
+   *  API) and/or structured actions. Normalized to structured actions
+   *  for rendering. */
+  followUps: Array<string | BriefingFollowUp>;
+  /** v1.8.1 — structured action callback. Strings are upgraded to actions
+   *  before this fires, so the click always carries intent. */
+  onPickFollowUp: (action: BriefingFollowUp) => void;
+  /** Source the briefing was about — grounds plan_topic / extract_range
+   *  actions when normalizing legacy string follow-ups. */
+  sourceId?: string;
   disabled?: boolean;
 }
 
@@ -21,24 +31,36 @@ interface Props {
  *   1. Best parts list — clickable items that scrub the preview to
  *      that timestamp on the active source. Each shows a rank, the
  *      time range, the label, and the one-sentence "why".
- *   2. Follow-up actions — pill buttons that re-submit a one-liner
- *      back through the chat pipe so the user doesn't have to type.
+ *   2. Follow-up actions — pill buttons. v1.8.1: each follow-up is a
+ *      structured `BriefingFollowUp` (promote / plan_topic /
+ *      extract_range / chat). Legacy string follow-ups are normalized
+ *      into actions before rendering, so a click dispatches INTENT, not
+ *      raw text — only `chat` actions still go through the chat pipe.
  *   3. A subtle hint reminding the user that nothing was rendered.
  *
  * The card NEVER mutates the timeline on its own — clicking a best
- * part only scrubs the preview. Rendering is one of the follow-up
- * actions ("Make a 30s reel of these moments") which routes through
- * the planner like any other turn.
+ * part only scrubs the preview. Follow-up actions are dispatched to the
+ * caller (AssistantPanel → editor page), which runs the deterministic
+ * path (or chat) for each.
  */
 export function BriefingCard({
   bestParts,
   followUps,
   onPickFollowUp,
+  sourceId,
   disabled
 }: Props) {
   const sessionId = useEditorStore((s) => s.sessionId);
   const setActiveSource = useEditorStore((s) => s.setActiveSource);
   const sources = useEditorStore((s) => s.sources);
+
+  // v1.8.1 — Upgrade raw follow-ups (strings and/or structured) into typed
+  // actions once per change. Stable ids keep React keys steady; the click
+  // handler then dispatches a structured action instead of raw text.
+  const actions = useMemo(
+    () => normalizeBriefingFollowUps(followUps, { sourceId }),
+    [followUps, sourceId]
+  );
 
   function handleScrubTo(part: BestPart) {
     // Pick the right source first when the briefing pinned one.
@@ -83,12 +105,12 @@ export function BriefingCard({
     });
   }
 
-  function handleFollowUp(text: string) {
+  function handleFollowUp(action: BriefingFollowUp) {
     if (disabled) return;
-    onPickFollowUp(text);
+    onPickFollowUp(action);
   }
 
-  if (bestParts.length === 0 && followUps.length === 0) return null;
+  if (bestParts.length === 0 && actions.length === 0) return null;
 
   return (
     <div className={styles.card} role="group" aria-label="Smart summary">
@@ -135,23 +157,23 @@ export function BriefingCard({
         </>
       )}
 
-      {followUps.length > 0 && (
+      {actions.length > 0 && (
         <div className={styles.followUps}>
           <span className={styles.followLabel}>
             <Lightbulb size={11} aria-hidden />
             What next?
           </span>
           <div className={styles.followRow}>
-            {followUps.map((f, i) => (
+            {actions.map((action) => (
               <button
-                key={`${f}-${i}`}
+                key={action.id}
                 type="button"
                 className={styles.followBtn}
-                onClick={() => handleFollowUp(f)}
+                onClick={() => handleFollowUp(action)}
                 disabled={disabled}
               >
                 <MousePointerClick size={11} aria-hidden />
-                {f}
+                {action.label}
               </button>
             ))}
           </div>
