@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (Phase 4.5 sourceId polish + Phase 5 first hook extraction)
+> Last updated: 2026-06-11 (added GitHub Actions CI + CHANGELOG cleanup)
 
 ## High priority
 
@@ -43,10 +43,14 @@
       `useTimelineCommandRunner`, `usePipelineRunner`,
       `useAssistantController`. Behavior-identical only; not mixed with
       feature work; no big rewrite.
-- [ ] Add a CI workflow (GitHub Actions) running `npm ci` + `npm run typecheck`
-      + `npm run build` so merges are gated (no CI runs today).
 
 ## Completed
+
+- [x] (2026-06-11) **Add GitHub Actions CI** (`.github/workflows/ci.yml`).
+      Runs `npm run typecheck` + `npm run build` on PRs to `main` and pushes
+      to `main` (Ubuntu, Node 20, npm cache, `npm ci`). Lint intentionally
+      excluded (no ESLint config; `next lint` is interactive). Browser/WebGPU
+      verification stays manual.
 
 - [x] (2026-06-11) **Phase 4.5 polish — briefing `plan_topic` preserves
       `sourceId`.** Client-side plan now passes `sources:[action.sourceId]`

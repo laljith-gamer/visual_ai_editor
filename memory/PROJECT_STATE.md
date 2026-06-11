@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (Phase 4.5 sourceId polish + Phase 5 first hook extraction)
+> Last updated: 2026-06-11 (added GitHub Actions CI + CHANGELOG cleanup)
 
 ---
 
@@ -26,6 +26,11 @@ text/JSON calls.
 - Latest validation: `npm install` + `npm run typecheck` + `npm run build`
   all pass. (`npm run lint` is not separately configured — `next lint`
   prompts for interactive setup; the build runs its own type/lint pass.)
+- **CI (GitHub Actions) is now in place** — `.github/workflows/ci.yml` runs
+  `npm run typecheck` + `npm run build` on every PR to `main` and every push
+  to `main` (Ubuntu, Node 20, npm cache). Lint is intentionally excluded
+  (no ESLint config; `next lint` is interactive). **Browser/WebGPU runtime
+  verification is still manual and still required** — CI cannot exercise it.
 - Core conversational editing pipeline is working: plan → sample → score →
   detect windows → verify → assemble → render.
 - Active line of work: **making the client local-first** (offline reasoning
