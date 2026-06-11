@@ -57,7 +57,7 @@ async function writeState(provider: string, state: CircuitState): Promise<void> 
   await r.set(key(provider), JSON.stringify(state), { ex: ttlSeconds });
 }
 
-export type Provider = "gemini" | "groq";
+export type Provider = "gemini" | "groq" | "openrouter";
 
 export interface CircuitDecision {
   /** True if the caller should attempt this provider. */

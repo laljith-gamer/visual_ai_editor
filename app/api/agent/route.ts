@@ -2,14 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
 import { cookies } from "next/headers";
 import { sessionOptions, type SessionData } from "@/lib/session/cookie";
-import {
-  checkAllLimits,
-  recordFailure,
-  recordSuccess
-} from "@/lib/ratelimit";
-import { hasAnyChatProvider, hasGemini, serverEnv } from "@/lib/env";
-import { geminiJson, isTransientError } from "@/lib/providers/gemini";
-import { groqJson } from "@/lib/providers/groq";
+import { checkAllLimits } from "@/lib/ratelimit";
+import { hasAnyChatProvider } from "@/lib/env";
+import { isTransientError } from "@/lib/providers/gemini";
+import { cloudPlannerJson, primaryProvider } from "@/lib/providers/cloud";
 import {
   PLANNER_SYSTEM_PROMPT,
   buildPlannerUserPrompt
@@ -45,7 +41,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json<AgentResponse>(
       {
         mode: "error",
-        error: "No chat provider configured. Set GEMINI_API_KEY or GROQ_API_KEY."
+        error: "No chat provider configured. Set OPENROUTER_API_KEY, GEMINI_API_KEY, or GROQ_API_KEY."
       },
       { status: 503 }
     );
@@ -63,7 +59,7 @@ export async function POST(req: NextRequest) {
     sid: session.sid,
     scope: "agent",
     consumesLlm: true,
-    provider: "gemini"
+    provider: primaryProvider()
   });
   if (!rl.allowed) {
     return rateLimitResponse(rl);
@@ -125,26 +121,20 @@ export async function POST(req: NextRequest) {
       typeof body.recentActivity === "string" ? body.recentActivity : undefined
   });
 
-  // ---- Call LLM with circuit-aware fallback chain --------------------
+  // ---- Call the cloud planner via the provider dispatcher ------------
+  // Provider order: OpenRouter → Gemini → Groq (see lib/providers/cloud.ts +
+  // CLOUD_PROVIDER_ORDER). The dispatcher records each provider's circuit
+  // success/failure and falls back on failure, so an OpenRouter outage (or
+  // no OpenRouter key) degrades to the existing Gemini/Groq flow unchanged.
   const warnings: string[] = [];
   let raw: string;
   try {
-    if (hasGemini()) {
-      try {
-        raw = await geminiJson(PLANNER_SYSTEM_PROMPT, userPrompt);
-        await recordSuccess("gemini");
-      } catch (err) {
-        await recordFailure("gemini");
-        // Try Groq if available before surfacing failure.
-        if (serverEnv.GROQ_API_KEY) {
-          raw = await groqJson(PLANNER_SYSTEM_PROMPT, userPrompt);
-          warnings.push("Gemini failed; used Groq fallback.");
-        } else {
-          throw err;
-        }
-      }
-    } else {
-      raw = await groqJson(PLANNER_SYSTEM_PROMPT, userPrompt);
+    const result = await cloudPlannerJson(PLANNER_SYSTEM_PROMPT, userPrompt);
+    raw = result.raw;
+    if (result.usedFallback) {
+      warnings.push(
+        `Primary model provider unavailable; used ${result.provider} fallback.`
+      );
     }
   } catch (e2) {
     const transient = isTransientError(e2);

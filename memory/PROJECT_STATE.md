@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (local-first high-tier model → Hermes-3-Llama-3.1-8B; prior: briefing retry/fallback, CI added)
+> Last updated: 2026-06-11 (removed browser WebLLM; language/tool routing now server-side via OpenRouter, with Gemini/Groq fallback)
 
 ---
 
@@ -33,33 +33,35 @@ text/JSON calls.
   verification is still manual and still required** — CI cannot exercise it.
 - Core conversational editing pipeline is working: plan → sample → score →
   detect windows → verify → assemble → render.
-- Active line of work: **making the client local-first** (offline reasoning
-  + local LLM + frame organization), with cloud Gemini becoming optional
-  rather than required.
-- **Local-first is PARTIALLY WIRED into the live assistant UI** behind the
-  `NEXT_PUBLIC_LOCAL_FIRST_EDITOR` flag (default OFF):
-    - **Phase 4 v1 (on main):** `lib/llm/localFirst.ts` runs the model-driven
-      router (`routeTurn`) on-device before the cloud planner and answers
-      `chat` turns locally with grounding.
-    - **Phase 4.5 (this change):** the local path now also EXECUTES a closed
-      set of safe deterministic actions on-device — `promote`, `extract`,
-      `reset` — each mapping onto an existing tested store path. Everything
-      else (`plan`/`moment`/`edit`/`merge`/`describe`), low confidence, or
-      missing data FALLS THROUGH to the unchanged cloud planner. No faked
-      frame-tree/vision data.
-    - With the flag OFF or on any fall-through, the existing Gemini/Groq
-      flow is byte-for-byte unchanged.
-- **Local WebLLM model tiers re-tiered for agentic/tool-use (2026-06-11).**
-  `LOCAL_LLM` in `lib/config.ts` now selects **Hermes-3-Llama-3.1-8B**
-  (`q4f16_1-MLC`) for the **high** tier — it is on WebLLM's official
-  `functionCallingModelIds` list, so the local tool router gets more reliable
-  JSON tool decisions. **Mid** = Qwen2.5-3B (the old high model), **low** =
-  Llama-3.2-1B (unchanged). An additive `roles` metadata block documents the
-  intent; the runtime tier→model selectors are unchanged. **Gemini is still
-  required** — it remains the cloud planner AND the **vision-briefing**
-  fallback. These local LLMs do language/tool routing only and do **not**
-  replace Gemini vision; Gemini cannot become optional until REAL local
-  frame-tree + caption grounding is wired (no fake vision data added).
+- Active line of work (2026-06-11): **removed the in-browser WebLLM
+  local-first path** and moved language/tool routing **server-side to
+  OpenRouter**, with Gemini/Groq kept as fallbacks. The app is **no longer
+  offline / local-LLM**, and there is no in-browser model download.
+- **Cloud model routing** goes through a provider dispatcher
+  (`lib/providers/cloud.ts`) in the order **OpenRouter → Gemini → Groq**
+  (`CLOUD_PROVIDER_ORDER`): the first provider with a configured key wins,
+  a failure falls back to the next, and each provider's circuit breaker is
+  recorded independently. Groq is text-only (skipped for vision).
+    - `/api/agent` planner JSON uses `cloudPlannerJson`; `normalizePlan` and
+      every mode (clarify/briefing/promote/extract/edit/merge/describe) are
+      unchanged.
+    - `/api/agent/briefing` + `/api/vision/clip` use `cloudVisionJson`
+      (OpenRouter multimodal → direct Gemini). OpenRouter handles vision only
+      when its configured model is multimodal (default
+      `google/gemini-2.5-flash` is); otherwise it falls back to Gemini. No
+      fake frame/caption/vision data. (`/api/vision/frame` + `/api/vision/window`
+      still use Gemini direct — intentionally out of scope this change.)
+- **Security:** the OpenRouter key is **server-only** (`OPENROUTER_API_KEY`,
+  read in `lib/env.ts`); there is **no** `NEXT_PUBLIC_OPENROUTER_API_KEY`;
+  the key name + endpoint are verified absent from the client bundle.
+  Providers never log the key, prompts, or base64 frames. Full video bytes
+  never leave the browser — only the already-sampled frames go to the cloud
+  vision routes.
+- **Deterministic, non-model client paths remain intact:** structured
+  briefing follow-ups (`lib/briefing/followups.ts`,
+  `hooks/useBriefingActions.ts`), the grammar quick-shortcut gate
+  (`lib/intent/*`), and promote/extract/reset via the cloud planner's modes
+  + their existing client handlers.
 - **Structured briefing follow-ups are DONE (Phase 3).** Briefing chips now
   carry intent via a `BriefingFollowUp` union and run deterministically
   (promote/plan_topic/extract_range) or via chat — no more raw-text
@@ -95,7 +97,7 @@ High level:
 ```
 Upload video (stays in the browser)
   → User chats: "make a 30s reel of the best moments"
-  → Planner (server → Gemini, Groq fallback) returns a structured EditPlan
+  → Planner (server → OpenRouter → Gemini → Groq) returns a structured EditPlan
   → Browser samples frames (mediabunny) + computes motion/saliency
   → Scores frames (SigLIP via WebGPU; motion+saliency when semantic=0)
   → Groups high-score frames into candidate windows
@@ -108,7 +110,8 @@ Upload video (stays in the browser)
 - **In-browser AI:** `@huggingface/transformers` (SigLIP, Whisper) on WebGPU.
 - **Rendering:** `@ffmpeg/ffmpeg` (wasm) in a worker.
 - **Server routes:** `app/api/*` — auth (iron-session) + 4-layer rate limit;
-  proxy LLM calls only. No video upload.
+  proxy LLM calls only (OpenRouter → Gemini → Groq via
+  `lib/providers/cloud.ts`). No video upload.
 - **State:** Zustand store (`hooks/useEditorStore.ts`); IndexedDB for
   sessions/cache/logs (never blobs).
 
@@ -116,8 +119,8 @@ Upload video (stays in the browser)
 
 | Module | Purpose | Status |
 |--------|---------|--------|
-| `lib/llm/` (engine, chat, tools, grounding) | Local WebLLM engine + streaming chat + model-driven tool router (replaces keyword intent) + briefing "why" grounding | **MERGED + WIRED** behind flag via `lib/llm/localFirst.ts` |
-| `lib/llm/localFirst.ts` | Flag-gated live entry: routes a turn locally, answers `chat`, and EXECUTES safe `promote`/`extract`/`reset` actions; falls through to cloud otherwise | **LIVE (flag default OFF)** |
+| `lib/providers/openrouter.ts` + `lib/providers/cloud.ts` | Server-side OpenRouter client + provider-order dispatcher (OpenRouter → Gemini → Groq) for language/tool routing + vision | **LIVE (server-side)** |
+| `lib/llm/` (WebLLM engine/chat/tools/grounding) + `localFirst.ts` | Browser WebLLM language + tool router | **REMOVED (2026-06-11)** — replaced by server-side OpenRouter |
 | `lib/briefing/followups.ts` | Pure normalizer: legacy/string briefing follow-ups → structured `BriefingFollowUp` actions | **LIVE** |
 | `hooks/useBriefingActions.ts` | Phase 5 extraction: deterministic briefing follow-up handler (promote/plan_topic/extract_range) pulled out of `app/editor/page.tsx`, behavior-identical | **LIVE** |
 | `lib/vision-core/` | Offline deterministic reasoning engine (segments, scoring, sentiment) | **MERGED to main**; not wired |
@@ -127,11 +130,10 @@ Upload video (stays in the browser)
 | `app/api/agent/route.ts` briefing fallback | Briefing follow-up chips no longer hit generic clarify | **MERGED to main** (#33 + clarify-guard follow-up) |
 
 > "Wired into UI" = an end-to-end path in the assistant panel actually
-> calls these. `lib/llm/` is now wired behind `NEXT_PUBLIC_LOCAL_FIRST_EDITOR`
-> for chat + the safe deterministic actions; `vision-core` / `frame-tree` /
-> captioning remain library-only until real frame data feeds them. The
-> existing cloud (Gemini/Groq) flow is unchanged when the flag is off or the
-> local path falls through.
+> calls these. The browser WebLLM layer was **removed**; language/tool
+> routing is now **server-side** (OpenRouter → Gemini → Groq via
+> `lib/providers/cloud.ts`). `vision-core` / `frame-tree` / captioning
+> remain library-only until real frame data feeds them.
 
 ## 5. Important files / folders
 
@@ -141,7 +143,9 @@ Upload video (stays in the browser)
 - `lib/plan/normalize.ts` — validates/normalizes LLM plans into `EditPlan`.
 - `lib/pipeline/*` — sample, score, events, temporal, highlights, render.
 - `lib/vision/*` — SigLIP worker, contact sheet, (new) captioning.
-- `lib/providers/*` — Gemini + Groq clients.
+- `lib/providers/*` — OpenRouter + Gemini + Groq clients, plus the
+  `cloud.ts` provider-order dispatcher (the single place provider preference
+  is decided).
 - `lib/config.ts` — all tunable constants + CSP.
 - `lib/types.ts` — central domain types (`EditPlan`, `AgentResponse`, etc.).
 - `hooks/useEditorStore.ts` — client source of truth (Zustand).
@@ -152,40 +156,46 @@ Upload video (stays in the browser)
 > Keep this list honest and current. Remove items when fixed.
 
 - The deeper local-first modules (`lib/vision-core/`, `lib/frame-tree/`,
-  `lib/vision/caption*`) are **merged but not wired** — the local router
-  still defers `plan`/`moment`/`describe` to the cloud because executing
-  them locally requires REAL sampled/captioned frame-tree data that isn't
-  fed in yet. Do not fake that data.
+  `lib/vision/caption*`) are **merged but not wired** — they were built to
+  ground a local router that has since been **removed**. They remain
+  available for future use (e.g. enriching the server planner with
+  client-computed frame context) but are not on any live path. Do not fake
+  frame data to wire them.
 - **Deploy lag:** fixes merged to `main` (e.g. the briefing "invalid JSON"
   fix) won't appear in the running app until it is rebuilt/redeployed.
-- **Runtime verification gap:** WebGPU features (SigLIP/Whisper/WebLLM/
-  captioning) cannot be verified in a headless/CI sandbox — they need a real
-  browser + GPU. Typecheck + unit-level checks only go so far.
+- **Runtime verification gap:** WebGPU features (SigLIP / Whisper /
+  captioning) and live OpenRouter/Gemini calls cannot be verified in a
+  headless/CI sandbox — they need a real browser + GPU and real API keys.
+  Typecheck + unit-level checks only go so far.
 - Sandbox/CI may have **no `node_modules` by default** — run `npm install`
   before trusting a typecheck (otherwise bare-import type errors are hidden).
 
 ## 7. Next best step
 
-- **Feed REAL frame data into local `plan`/`describe`.** The remaining
-  local-first win is letting the on-device router execute `plan`/`moment`/
-  `describe` using `lib/frame-tree/` + `lib/vision/caption*` outputs (and
-  `lib/vision-core/` scoring) instead of deferring to the cloud. This is
-  gated on building the sampled/captioned frame-tree for the active source
-  and passing its outline into `routeTurn`/grounding. Never fake it — until
-  the tree is real, these stay cloud-owned.
-- **Extend safe local actions to `edit`.** `promote`/`extract`/`reset` now
-  run locally; `edit` (trim/drop/split) is the next deterministic candidate
-  — map `ToolDecision.operation` onto the existing `EditOperation` store
-  actions, behind the same flag + confidence floor.
+- **Validate OpenRouter end-to-end in a real deployment.** Set
+  `OPENROUTER_API_KEY` and confirm: `/api/agent` returns valid planner JSON;
+  "Describe what's in this video" works via OpenRouter multimodal (default
+  `google/gemini-2.5-flash`); structured briefing chips +
+  promote/extract/reset still work; and with the key unset (or on a forced
+  failure) the flow falls back to direct Gemini/Groq. Confirm in the browser
+  Network tab that there is no model download and the key never appears
+  client-side.
+- **Optional: extend OpenRouter to the remaining vision routes.**
+  `/api/vision/frame` + `/api/vision/window` still call Gemini directly; they
+  could route through `cloudVisionJson` for consistency (intentionally left
+  out of this change to keep scope tight).
+- **Optional: enrich the server planner with client frame context.** Now that
+  routing is server-side, `lib/frame-tree/` + `lib/vision/caption*` outputs
+  could be summarised and passed into the planner prompt (text only, never
+  fake) to improve grounding — a future enhancement, not required.
 - **Phase 5 (maintainability, IN PROGRESS — 1 of ~5 done):**
   `app/editor/page.tsx` is large. First extraction shipped:
   `hooks/useBriefingActions.ts`. Continue ONE hook at a time, only when
   touching related code and strictly behavior-identical — next candidates:
   `useAgentPlanner`, `useTimelineCommandRunner`, `usePipelineRunner`,
-  `useAssistantController`. Do not mix with feature work; do not do a big
-  rewrite.
-- **Browser/GPU verification** of the flag-ON path (local router executing
-  promote/extract/reset, and local chat) is still pending — needs a real
-  WebGPU browser; the sandbox has no GPU.
+  `useAssistantController`. Do not mix with feature work; no big rewrite.
+- **Browser/GPU + live-API verification** of the cloud chat/vision path and
+  the on-device SigLIP/Whisper/captioning features is still pending — needs a
+  real WebGPU browser and real API keys; the sandbox has neither.
 
 > Replace this with the actual next step whenever it changes.

@@ -30,9 +30,15 @@
 
 - **Never upload the user's video off-device.** The architecture guarantees
   video bytes stay in the browser; server routes proxy LLM text/JSON only.
-- **Don't break the existing cloud (Gemini/Groq) flow.** New local-first
-  features must be additive and, when wired in, gated behind a flag that
-  defaults to the current behavior.
+- **API keys are SERVER-ONLY.** Provider keys (OpenRouter / Gemini / Groq)
+  are read via `lib/env.ts` and must never reach the browser. Never create a
+  `NEXT_PUBLIC_*` variable for a secret, and never log API keys, prompts
+  containing user data, or base64 frame data.
+- **Don't break the cloud provider chain.** Language/tool routing goes
+  through `lib/providers/cloud.ts` in the order OpenRouter → Gemini → Groq;
+  keep the fallbacks working so a missing/failing provider degrades
+  gracefully. New providers should slot into `CLOUD_PROVIDER_ORDER` rather
+  than bypassing the dispatcher.
 - **WebGPU features can't be verified in CI/headless.** Typecheck and unit-
   test what you can, but clearly state that browser+GPU runtime verification
   is pending and must be done by the user.
@@ -45,10 +51,10 @@
 
 - **CI must pass.** `.github/workflows/ci.yml` runs `npm run typecheck` +
   `npm run build` on every PR to `main`; don't merge red.
-- **WebGPU / local-model behavior is not covered by CI** — manual browser
+- **WebGPU + live-API behavior is not covered by CI** — manual browser
   testing (real GPU) is still required for anything touching
-  SigLIP/Whisper/WebLLM/captioning or the `NEXT_PUBLIC_LOCAL_FIRST_EDITOR`
-  path.
+  SigLIP / Whisper / captioning, and live OpenRouter/Gemini calls need real
+  API keys to verify.
 
 ## Working-style rules for AI agents
 

@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
 import { cookies } from "next/headers";
 import { sessionOptions, type SessionData } from "@/lib/session/cookie";
-import { checkAllLimits, recordFailure, recordSuccess } from "@/lib/ratelimit";
-import { hasGemini } from "@/lib/env";
-import { geminiMultiImageJson, isTransientError } from "@/lib/providers/gemini";
+import { checkAllLimits } from "@/lib/ratelimit";
+import { hasGemini, hasOpenRouter } from "@/lib/env";
+import { isTransientError } from "@/lib/providers/gemini";
+import { cloudVisionJson, primaryProvider } from "@/lib/providers/cloud";
 import { extractJsonObject } from "@/lib/util/safeJson";
 import { newId } from "@/lib/util/id";
 import type { RateLimitDecision } from "@/lib/types";
@@ -94,9 +95,9 @@ const MAX_FRAMES = 8;
 const MAX_QUESTION_CHARS = 500;
 
 export async function POST(req: NextRequest) {
-  if (!hasGemini()) {
+  if (!hasGemini() && !hasOpenRouter()) {
     return NextResponse.json(
-      { error: "Cloud vision unavailable. Set GEMINI_API_KEY." },
+      { error: "Cloud vision unavailable. Set OPENROUTER_API_KEY or GEMINI_API_KEY." },
       { status: 503 }
     );
   }
@@ -112,7 +113,7 @@ export async function POST(req: NextRequest) {
     sid: session.sid,
     scope: "vision-clip",
     consumesLlm: true,
-    provider: "gemini"
+    provider: primaryProvider({ vision: true })
   });
   if (!rl.allowed) {
     return rateLimitResponse(rl);
@@ -145,18 +146,20 @@ export async function POST(req: NextRequest) {
     `User question: ${body.question.slice(0, MAX_QUESTION_CHARS)}`
   ].join("\n");
 
+  // Vision via the provider dispatcher: OpenRouter (multimodal model) →
+  // Gemini direct. Only the already-sampled frames are sent; full video
+  // bytes never leave the browser.
   let raw: string;
   try {
-    raw = await geminiMultiImageJson(
+    const result = await cloudVisionJson(
       `${SYSTEM}\n\n${userPrompt}`,
       frames.map((f) => ({
         base64: f.imageBase64,
         mimeType: f.mime ?? "image/jpeg"
       }))
     );
-    await recordSuccess("gemini");
+    raw = result.raw;
   } catch (err) {
-    await recordFailure("gemini");
     const transient = isTransientError(err);
     return NextResponse.json(
       {

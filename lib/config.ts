@@ -249,9 +249,10 @@ export const RATE_LIMITS = {
 /** Security headers applied by middleware on every response. */
 export const SECURITY_HEADERS = {
   /** CSP must allow wasm + CDN scripts for ffmpeg + transformers.
-   *  connect-src also allows raw.githubusercontent.com because WebLLM
-   *  (local LLM) fetches its model-lib .wasm files from there; model
-   *  weights come from huggingface.co (already allowed). */
+   *  connect-src allows huggingface.co for transformers.js (SigLIP /
+   *  Whisper / captioning) model weights. (The raw.githubusercontent.com
+   *  entry for WebLLM model-lib .wasm was removed when the browser WebLLM
+   *  path was retired in favour of server-side OpenRouter.) */
   contentSecurityPolicy:
     "default-src 'self'; " +
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net; " +
@@ -259,7 +260,7 @@ export const SECURITY_HEADERS = {
     "img-src 'self' data: blob: https:; " +
     "font-src 'self' data:; " +
     "media-src 'self' blob:; " +
-    "connect-src 'self' https://*.googleapis.com https://*.groq.com https://huggingface.co https://*.huggingface.co https://unpkg.com https://cdn.jsdelivr.net https://raw.githubusercontent.com; " +
+    "connect-src 'self' https://*.googleapis.com https://*.groq.com https://huggingface.co https://*.huggingface.co https://unpkg.com https://cdn.jsdelivr.net; " +
     "worker-src 'self' blob:; " +
     "frame-ancestors 'none'; " +
     "base-uri 'self'; " +
@@ -412,85 +413,55 @@ export const AUDIO = {
 
 
 // =====================================================================
-// Local LLM (WebLLM / WebGPU) configuration — the offline language layer.
+// Cloud model provider — OpenRouter (SERVER-SIDE) configuration.
 //
-// Runs a quantized instruct model fully in-browser via @mlc-ai/web-llm.
-// This is the LANGUAGE-UNDERSTANDING fallback in the local-first chain:
+// v1.8.x — The in-browser WebLLM / WebGPU local language layer was REMOVED
+// (multi-GB model downloads, WebGPU/device instability, poor universal
+// support, and — critically — API keys must never run in the browser).
+// Language + tool routing now happens SERVER-SIDE via OpenRouter's
+// OpenAI-compatible API, with the existing Gemini/Groq providers kept as
+// fallbacks (see CLOUD_PROVIDER_ORDER below + lib/providers/cloud.ts).
 //
-//   client grammar shortcut (lib/intent)         [instant]
-//     → deterministic VISION-EDIT-CORE engine    [instant, no model]
-//       → local WebLLM                            [offline, this block]
-//         → cloud Gemini/Groq (OPTIONAL)          [only if configured]
+// SECURITY: the OpenRouter API key is SERVER-ONLY (OPENROUTER_API_KEY, read
+// via lib/env.ts). It is never sent to the browser and there is no
+// NEXT_PUBLIC_OPENROUTER_API_KEY.
 //
-// Honest tradeoffs (documented so callers gate properly):
-//   - First use downloads the model (hundreds of MB). Cached afterwards
-//     via WebLLM's Cache API backend.
-//   - Needs WebGPU. No WebGPU → this layer is skipped (gate returns
-//     unsupported) and the chain falls through to the next option.
-//   - Small models are less reliable at free-form JSON than Gemini, so
-//     we ALWAYS use JSON-mode (response_format) + a strict schema and a
-//     defensive parser, and prefer the deterministic engine first.
+// VISION HONESTY: OpenRouter handles vision ONLY when the configured model
+// is multimodal (the default google/gemini-2.5-flash is). Direct Gemini
+// remains the vision fallback. We never fake frame/caption data, and full
+// video bytes never leave the browser — only the already-sampled frames are
+// sent to the cloud vision routes (same as before; the destination can now
+// be OpenRouter instead of Google directly).
 //
-// Model IDs are WebLLM prebuilt ids (see prebuiltAppConfig.model_list).
-// Only consumers are lib/llm/* .
+// Model ids are OpenRouter slugs; each can be overridden via env
+// (OPENROUTER_*_MODEL). Only consumers are lib/providers/openrouter.ts and
+// the dispatcher lib/providers/cloud.ts.
 // =====================================================================
 
-export const LOCAL_LLM = {
-  /** High tier — AGENTIC / TOOL-USE model.
-   *
-   *  Hermes-3-Llama-3.1-8B is chosen for the high tier because WebLLM
-   *  EXPLICITLY lists the Hermes family in its `functionCallingModelIds`
-   *  (verified against the prebuilt model_list). Hermes-3 is fine-tuned for
-   *  structured function-calling / tool-use, which is exactly what the local
-   *  model-driven tool router (lib/llm/tools.ts) depends on to emit reliable
-   *  JSON tool decisions. This makes the flag-gated local-first agentic path
-   *  meaningfully more dependable than a generic instruct model.
-   *
-   *  Cost/honesty: ~4.9 GB VRAM (q4f16_1) and a multi-GB first-run download —
-   *  so it is only offered on capable WebGPU desktops in the "high" tier.
-   *  Devices that can't run it degrade to the mid/low tier, and ultimately
-   *  to the cloud planner (unchanged). This model handles LANGUAGE/TOOL
-   *  routing only — it does NOT replace Gemini's vision briefing (see below). */
-  modelHigh: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",
-  /** Mid tier — FAST PLANNER fallback.
-   *
-   *  Qwen2.5-3B remains a strong mid-tier choice: solid instruct + JSON
-   *  behaviour at a fraction of the download/VRAM of Hermes-8B. Used when a
-   *  device can't comfortably run the 8B agentic model but still has WebGPU.
-   *  (This was the previous high-tier model — kept, just demoted a tier.) */
-  modelMid: "Qwen2.5-3B-Instruct-q4f16_1-MLC",
-  /** Low tier — TINY FALLBACK for lower-VRAM WebGPU devices (~0.8 GB).
-   *  Smallest viable instruct model; least reliable at free-form JSON, so the
-   *  deterministic engine is always preferred ahead of it. */
-  modelLow: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
-  /** Sampling — low temperature for stable, near-deterministic planning
-   *  JSON. We also pass a fixed seed where supported. */
-  temperature: 0.2,
-  /** Fixed seed for reproducibility (WebLLM supports `seed`). */
-  seed: 7,
-  /** Hard cap on output tokens for a planning turn. The planner JSON is
-   *  small; this bounds latency and truncation risk. */
-  maxTokens: 768,
-  /** Optional role metadata — names mirror the tier ids above. This is
-   *  documentation + a future allowlist hook ONLY; the runtime tier→model
-   *  selector in lib/llm/engine.ts (and the mirror in lib/llm/tools.ts) still
-   *  reads modelHigh/modelMid/modelLow directly, so adding this stays purely
-   *  additive and keeps the actual runtime simple.
-   *
-   *  VISION CAVEAT: none of these local LLMs replace Gemini's vision
-   *  briefing. Gemini remains the vision fallback until REAL local
-   *  frame-tree + caption grounding (lib/frame-tree, lib/vision/caption*,
-   *  lib/vision-core) is wired in. No fake frame/vision data is fed to the
-   *  local models to fake that capability. */
-  roles: {
-    /** Tool-use / agentic routing (on WebLLM's function-calling list). */
-    agenticToolModel: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",
-    /** Lighter, faster planner fallback when the 8B model is too heavy. */
-    fastPlannerModel: "Qwen2.5-3B-Instruct-q4f16_1-MLC",
-    /** Smallest fallback for low-VRAM WebGPU devices. */
-    tinyFallbackModel: "Llama-3.2-1B-Instruct-q4f16_1-MLC"
-  }
+export const OPENROUTER = {
+  /** OpenAI-compatible chat-completions endpoint. */
+  endpoint: "https://openrouter.ai/api/v1/chat/completions",
+  /** Sent as the X-Title header (labels traffic in the OpenRouter dashboard). */
+  appTitle: "Shorts Studio",
+  /** Default planner + vision model. Multimodal, fast, free-tier friendly.
+   *  Override with OPENROUTER_DEFAULT_MODEL. */
+  defaultModel: "google/gemini-2.5-flash",
+  /** Cheaper/faster model for light turns. Override OPENROUTER_CHEAP_MODEL. */
+  cheapModel: "google/gemini-2.5-flash-lite",
+  /** Premium model for harder reasoning. Override OPENROUTER_PREMIUM_MODEL. */
+  premiumModel: "anthropic/claude-sonnet-4.5",
+  /** Open-source fallback. Override OPENROUTER_OSS_MODEL. */
+  ossModel: "qwen/qwen3-coder",
+  /** Default sampling temperature for planner / JSON turns. */
+  temperature: 0.4
 } as const;
+
+// Cloud provider PREFERENCE ORDER. The dispatcher (lib/providers/cloud.ts)
+// walks this list and skips any provider whose key is absent. OpenRouter is
+// preferred when OPENROUTER_API_KEY is set; Gemini direct is the next
+// fallback; Groq is text-only (skipped for vision). This array is the single
+// place to re-order provider preference.
+export const CLOUD_PROVIDER_ORDER = ["openrouter", "gemini", "groq"] as const;
 
 
 
@@ -560,26 +531,21 @@ export const SYNTH_PLAN = {
   maxContextChars: 120
 } as const;
 // =====================================================================
-// LOCAL-FIRST editor wiring (Phase 4) tunables.
+// LOCAL-FIRST editor wiring — REMOVED (v1.8.x).
 //
-// Gates how the flag-gated local model-driven path behaves once
-// NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true. See lib/llm/localFirst.ts. Default
-// behaviour (flag off) is the unchanged Gemini/Groq cloud flow.
+// The flag-gated, in-browser WebLLM model-driven router (lib/llm/*,
+// NEXT_PUBLIC_LOCAL_FIRST_EDITOR) was removed in favour of SERVER-SIDE
+// OpenRouter (see OPENROUTER + CLOUD_PROVIDER_ORDER above). The
+// deterministic, non-model client paths it used to share with the cloud
+// flow remain intact:
+//   - structured briefing follow-ups (lib/briefing/followups.ts,
+//     hooks/useBriefingActions.ts)
+//   - the grammar quick-shortcut gate (lib/intent/*)
+//   - promote / extract / reset, which still run via the cloud planner's
+//     modes and their existing client handlers.
+// No LOCAL_FIRST confidence tunables are needed any more, so the block was
+// removed rather than left dangling.
 // =====================================================================
-
-export const LOCAL_FIRST = {
-  /** Minimum router self-confidence required to answer a `chat` turn
-   *  locally. Below this we defer to the cloud planner, which may do
-   *  better. Conservative so a weak local reply never wins over cloud. */
-  minChatConfidence: 0.5,
-  /** v1.8.1 — Minimum router self-confidence required to EXECUTE a safe
-   *  deterministic action (promote / extract / reset) locally. Set
-   *  higher than chat because an action mutates the timeline: when the
-   *  model isn't confident we defer to the cloud planner rather than
-   *  risk a wrong local edit. Plan/moment/edit/merge/describe always
-   *  defer regardless of confidence (cloud still owns them). */
-  minActionConfidence: 0.6
-} as const;
 
 // =====================================================================
 // Structured BRIEFING FOLLOW-UP normalization (lib/briefing/followups.ts).
