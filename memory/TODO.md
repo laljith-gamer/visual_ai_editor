@@ -4,10 +4,25 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (CLOUD_PROVIDER_ORDER env toggle; provider circuit-open no longer blocks Gemini/Groq fallback)
+> Last updated: 2026-06-11 (dynamic duration — removed forced/default 30s; explicit-only)
 
 ## High priority
 
+- [ ] **Manual test — dynamic duration (run after deploy).** Verify each case:
+      1. "make best moments" → mode=plan, `userSpecifiedDuration=false`, no
+         fixed target, chat/PlanPreview never say "30s", length emerges from
+         clip quality.
+      2. "make a 30 second reel" → `userSpecifiedDuration=true`,
+         `targetShortSeconds=30`, budgeted fit runs.
+      3. "make it 15s" → `userSpecifiedDuration=true`, `targetShortSeconds=15`.
+      4. "make a 1 minute highlight" → true, 60.
+      5. After briefing, "clip those" → mode=promote, NO `targetSeconds`,
+         natural clip lengths preserved.
+      6. "make a 15s reel of these" → mode=promote, `targetSeconds=15`.
+      7. "make a YouTube Short from this" → vertical format OK,
+         `userSpecifiedDuration=false`, no default 30s.
+      8. Memory with explicit prior 45s preference may apply (true/45) only
+         when clearly relevant; otherwise don't assume.
 - [ ] **Validate OpenRouter end-to-end (real deployment).** With
       `OPENROUTER_API_KEY` set: `/api/agent` returns valid planner JSON;
       multimodal briefing / "describe" works (default
@@ -46,6 +61,14 @@
 
 ## Completed
 
+- [x] (2026-06-11) **Dynamic duration — removed forced/default 30s.** Length is
+      explicit-only now: no user-named duration → quality-floor selection,
+      emergent length, "flexible length" in UI/copy; user-named duration →
+      parsed `targetShortSeconds` + budgeted fit. Fixed planner prompt (D1
+      "never assume 30s"; platform=format-only; parse examples), briefing
+      follow-up chips (no 30s default), `PlanPreview`, starter chip, activity
+      log, and `memoryFromPlan` (no phantom-30s memory leak). Pipeline branch
+      was already correct. typecheck + build ✓.
 - [x] (2026-06-11) **Added `CLOUD_PROVIDER_ORDER` env toggle.** Server-only
       comma-separated var (openrouter|gemini|groq) overrides the config
       provider order so you can switch between OpenRouter and Gemini (or pin

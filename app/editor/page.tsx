@@ -1577,7 +1577,7 @@ export default function Home() {
               inferred: data.inferred,
               warnings: data.warnings
             },
-            `Plan created: ${activePlan.targetShortSeconds}s ${activePlan.format} (${activePlan.scenarios.length} scenarios)`,
+            `Plan created: ${activePlan.userSpecifiedDuration ? `${activePlan.targetShortSeconds}s` : "flexible length"} ${activePlan.format} (${activePlan.scenarios.length} scenarios)`,
             plannerMs
           );
         }

@@ -35,7 +35,7 @@ export function PlanPreview({ onRun, onAdjust, disabled }: Props) {
       <div className={styles.head}>
         <span className={styles.tag}>{isMoment ? "Moment ready" : "Plan ready"}</span>
         <span className="faint">
-          {plan.targetShortSeconds}s · {plan.format} · {plan.transition} · {plan.selectionStrategy}
+          {plan.userSpecifiedDuration ? `${plan.targetShortSeconds}s` : "flexible length"} · {plan.format} · {plan.transition} · {plan.selectionStrategy}
         </span>
       </div>
 

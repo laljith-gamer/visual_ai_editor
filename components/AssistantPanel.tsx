@@ -70,7 +70,7 @@ interface Props {
 const STARTER_PROMPTS = [
   "Describe what's in this video",
   "Pick the best parts for me",
-  "Make a 30s vertical reel",
+  "Make a vertical reel",
   "Find a specific moment"
 ];
 

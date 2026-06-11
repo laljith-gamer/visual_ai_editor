@@ -17,6 +17,61 @@
 
 ---
 
+### 2026-06-11 — Dynamic duration: removed forced/default 30s (explicit-only)
+- **Change made:** Final clip length is now **explicit-only**. When the user
+  does NOT name a duration, the app does not force or display 30s — selection
+  runs the quality-floor path and total length is **emergent** from clip
+  quality. When the user names a duration ("30 second reel", "make it 15s",
+  "1 minute highlight"), `userSpecifiedDuration=true` + `targetShortSeconds`
+  is parsed and the budgeted fit/trim runs. The pipeline already branched on
+  `userSpecifiedDuration` (highlights.ts quality-floor vs budgeted;
+  mergeAcrossSources skips budget when false) — this change removes the
+  remaining places that *forced/showed* 30s when the user hadn't asked:
+    - `lib/plan/prompt.ts` — D1 rewritten: "NEVER ASSUME 30 SECONDS";
+      platform words (TikTok / YouTube Short / Instagram) imply FORMAT
+      (vertical) only, never a duration; added parse examples (15s→15,
+      "1 minute"→60, 1m30s→90, 0:45→45) and the "make it tighter" rule;
+      removed the anti-loop example that forced `targetShortSeconds:30` + the
+      "30s action reel" message; clarify chip "Make a 30s highlight reel" →
+      "Make a highlight reel"; good-message exemplar no longer says "30s";
+      promote `targetSeconds` documented as explicit-only; the rendered
+      "Current plan" line now says `target=flexible (no user-set duration)`
+      unless the user set one.
+    - `app/api/agent/briefing/route.ts` — the vision SYSTEM prompt now tells
+      the model NOT to bake a duration into follow-up chips ("no 30s/15s
+      reel") unless asked; the no-follow-ups fallback is "Make a highlight
+      reel of these moments".
+    - `components/PlanPreview.tsx` — shows `{target}s` only when the user set
+      a duration, else "flexible length".
+    - `components/AssistantPanel.tsx` — starter chip "Make a 30s vertical
+      reel" → "Make a vertical reel".
+    - `app/editor/page.tsx` — the `plan.created` activity-log summary shows
+      "flexible length" instead of "30s" for no-duration plans.
+    - `hooks/useEditorStore.ts` — `memoryFromPlan` only persists
+      `memory.duration` when `userSpecifiedDuration` is true, so the soft
+      fallback (30) can no longer resurface as a phantom "30s preference" in
+      the planner's memory block on later turns.
+    - `lib/config.ts` — `PLAN_DEFAULTS.targetShortSeconds` (30) commented as a
+      SOFT, NON-ENFORCED fallback only.
+- **Promote/briefing:** "clip those" / "use these moments" / "make a reel
+  from these" carry NO `targetSeconds` (natural clip lengths preserved);
+  "make a 15s reel of these" sets `targetSeconds=15`. No default `30`.
+- **OpenRouter setup verified unchanged + server-only:** `OPENROUTER_API_KEY`
+  read only in `lib/env.ts` (no `NEXT_PUBLIC_OPENROUTER_API_KEY`),
+  `OPENROUTER_DEFAULT_MODEL` defaults `google/gemini-2.5-flash`,
+  `CLOUD_PROVIDER_ORDER` server-only toggle works, order OpenRouter → Gemini →
+  Groq, vision excludes Groq, PR #43 circuit fallback intact, no browser
+  WebLLM, no key/prompt/base64 logging.
+- **Files affected:** `lib/plan/prompt.ts`, `lib/config.ts`,
+  `app/api/agent/briefing/route.ts`, `components/PlanPreview.tsx`,
+  `components/AssistantPanel.tsx`, `app/editor/page.tsx`,
+  `hooks/useEditorStore.ts`; `memory/*`.
+- **Reason:** A no-duration request should produce a natural-length reel
+  driven by footage quality, not a forced 30s. Explicit durations still fit.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓.
+
+---
+
 ### 2026-06-11 — Add CLOUD_PROVIDER_ORDER env var to toggle/re-order providers
 - **Change made:** Added an optional **server-only** `CLOUD_PROVIDER_ORDER`
   env var so you can toggle between providers (and set fallback order)
