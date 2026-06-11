@@ -17,7 +17,46 @@
 
 ---
 
-### 2026-06-11 — Phase 4.5 sourceId polish + Phase 5 first hook extraction
+### 2026-06-11 — Local-first high-tier model → Hermes-3-Llama-3.1-8B (agentic/tool-use)
+- **Change made:** Re-tiered the local WebLLM model choices in
+  `lib/config.ts` (`LOCAL_LLM`) so the high tier prefers a model WebLLM
+  explicitly supports for function-calling/tool-use:
+    - **high:** `Hermes-3-Llama-3.1-8B-q4f16_1-MLC` (was
+      `Qwen2.5-3B-Instruct-q4f16_1-MLC`) — Hermes-3 is on WebLLM's
+      `functionCallingModelIds` list (verified against the prebuilt
+      `model_list`; ~4.9 GB VRAM, `low_resource_required: false`), so the
+      flag-gated local tool router (`lib/llm/tools.ts`) gets more reliable
+      JSON tool decisions.
+    - **mid:** `Qwen2.5-3B-Instruct-q4f16_1-MLC` (the previous high-tier
+      model, kept as a strong/lighter fallback).
+    - **low:** `Llama-3.2-1B-Instruct-q4f16_1-MLC` (unchanged).
+    - Dropped the old `Qwen2.5-1.5B-Instruct-q4f16_1-MLC` mid entry.
+  Added an **additive** `roles` metadata block
+  (`agenticToolModel`/`fastPlannerModel`/`tinyFallbackModel`) for
+  documentation + future allowlisting; the runtime tier→model selectors in
+  `lib/llm/engine.ts` and `lib/llm/tools.ts` still read
+  `modelHigh`/`modelMid`/`modelLow` directly, so the runtime stays simple and
+  unchanged. Comments document the Hermes rationale, the Qwen mid fallback,
+  and the **vision caveat**.
+- **What did NOT change (by design):** Gemini is **not** removed — it remains
+  the cloud planner AND the **vision briefing** fallback. These local LLMs do
+  language/tool routing only; they do **not** replace Gemini vision. Full
+  Gemini-optional requires REAL local frame-tree + caption grounding
+  (`lib/frame-tree`, `lib/vision/caption*`, `lib/vision-core`) to be wired —
+  no fake frame/vision data was added. `NEXT_PUBLIC_LOCAL_FIRST_EDITOR`
+  default stays **OFF**; the cloud fallback path is byte-for-byte unchanged.
+  `app/api/agent/briefing`, ffmpeg/render/scoring/sampling, and Phase 5 were
+  intentionally untouched.
+- **Files affected:** `lib/config.ts` (`LOCAL_LLM` only); `memory/*`.
+- **Reason:** Better agentic/tool-use behaviour on the local-first path by
+  using a model WebLLM officially supports for function-calling, without
+  weakening or removing the cloud Gemini flow.
+- **Validation:** `npm install` ✓, `npm run typecheck` ✓, `npm run build` ✓
+  (see CHANGELOG validation note / final report for status). Hermes-8B
+  loading + tool-routing quality is NOT verified here — needs a real WebGPU
+  browser with `NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true` (no GPU in sandbox).
+
+
 - **Change made:**
   1. **Phase 4.5 polish — briefing `plan_topic` actions preserve `sourceId`.**
      When a briefing was created from one specific source in a multi-source

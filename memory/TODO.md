@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (Phase 4.5 sourceId polish + Phase 5 first hook extraction)
+> Last updated: 2026-06-11 (local-first high-tier model → Hermes-3-Llama-3.1-8B)
 
 ## High priority
 
@@ -48,8 +48,14 @@
 
 ## Completed
 
-- [x] (2026-06-11) **Phase 4.5 polish — briefing `plan_topic` preserves
-      `sourceId`.** Client-side plan now passes `sources:[action.sourceId]`
+- [x] (2026-06-11) **Local-first high-tier model → Hermes-3-Llama-3.1-8B.**
+      `LOCAL_LLM` in `lib/config.ts` now uses Hermes-3-Llama-3.1-8B
+      (`q4f16_1-MLC`) for the high tier (WebLLM function-calling/tool-use
+      model), Qwen2.5-3B for mid, Llama-3.2-1B for low; added additive
+      `roles` metadata. Gemini still required as cloud planner + vision
+      fallback; flag default still OFF; no cloud-flow change; no fake vision
+      data. Full Gemini-optional still needs real frame-tree/caption/vision-
+      core grounding.
       into `normalizePlan`, so multi-source briefings stay grounded on the
       briefed source. No cloud call, no category logic.
 - [x] (2026-06-11) **Phase 5 first extraction — `hooks/useBriefingActions.ts`.**
