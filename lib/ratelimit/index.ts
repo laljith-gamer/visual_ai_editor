@@ -14,7 +14,9 @@ import type { RateLimitDecision } from "@/lib/types";
  *
  *   2. Session burst + daily limits per scope (cookie-sid).
  *   3. Global LLM daily budget (only for scopes that hit Gemini).
- *   4. Provider circuit breaker (only for scopes that hit Gemini).
+ *   4. Provider circuit breaker — OPT-IN: only runs (and can block) when the
+ *      caller passes an explicit `provider`. Multi-provider dispatcher routes
+ *      omit it so the dispatcher can own circuit-skip + fallback.
  *
  * Returns a RateLimitDecision the route handler can directly translate
  * into a response. Soft-tier requests succeed but get tightened bursts
@@ -136,21 +138,32 @@ interface CheckArgs {
   scope: RateLimitScope;
   /** True for scopes that consume LLM budget (agent + vision/*). */
   consumesLlm?: boolean;
-  /** Provider whose circuit should be checked. Default "gemini". */
+  /** OPT-IN provider circuit pre-check. Pass this ONLY from single-provider
+   *  routes (e.g. Gemini-direct vision) that want a blocking fast-fail when
+   *  the provider's circuit is open. Dispatcher-backed routes must OMIT it so
+   *  the dispatcher (lib/providers/cloud.ts) can skip open circuits and fall
+   *  back to the next provider instead of being blocked here. */
   provider?: Provider;
 }
 
 export async function checkAllLimits(args: CheckArgs): Promise<RateLimitDecision> {
-  const { sid, scope, provider = "gemini" } = args;
+  const { sid, scope, provider } = args;
   const consumesLlm = args.consumesLlm ?? true;
 
-  // ---- Layer 4: circuit breaker -------------------------------------
-  if (consumesLlm) {
+  // ---- Layer 4: provider circuit breaker (OPT-IN) -------------------
+  // Only SINGLE-PROVIDER routes (e.g. /api/vision/frame and
+  // /api/vision/window → Gemini direct) pass an explicit `provider` and get
+  // a blocking fast-fail when that provider's circuit is open. Routes backed
+  // by the multi-provider dispatcher (lib/providers/cloud.ts) intentionally
+  // DO NOT pass a provider: the dispatcher itself skips circuit-open
+  // providers and falls back to the next configured one, so a route-level
+  // fast-fail here would wrongly block that fallback (returning 503 before
+  // Gemini/Groq could be tried).
+  if (consumesLlm && provider) {
     const c = await checkCircuit(provider);
     if (!c.closed) {
-      // Circuit open → fail fast, the caller's fallback chain will pick up.
-      // We still return a decision so the caller can choose to surface a
-      // friendly message rather than spinning a request that will fail.
+      // Circuit open → fail fast for this single-provider route. We still
+      // return a decision so the caller can surface a friendly message.
       return {
         allowed: false,
         reason: `circuit_open:${provider}`,

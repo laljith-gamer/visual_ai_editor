@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (added CLOUD_PROVIDER_ORDER env toggle for cloud providers)
+> Last updated: 2026-06-11 (CLOUD_PROVIDER_ORDER env toggle; provider circuit-open no longer blocks Gemini/Groq fallback)
 
 ## High priority
 
@@ -51,6 +51,14 @@
       provider order so you can switch between OpenRouter and Gemini (or pin
       one) without code changes. `lib/env.ts` + `configuredOrder()` in
       `lib/providers/cloud.ts`; `.env.example` documented. typecheck + build ✓.
+- [x] (2026-06-11) **Fix: provider circuit-open no longer blocks fallback.**
+      Made the route-level circuit pre-check opt-in (only single-provider
+      Gemini-direct routes pass `provider`); moved circuit-skip + fallback
+      into `lib/providers/cloud.ts` (`attemptableOrder` skips open circuits,
+      tries the next provider, best-effort if all open). `agent`/`briefing`/
+      `clip` dropped the `provider` arg so an open OpenRouter circuit reroutes
+      to Gemini/Groq instead of 503. Session/global limits unchanged; Groq
+      stays text-only. typecheck + build ✓.
 - [x] (2026-06-11) **Removed browser WebLLM; server-side OpenRouter provider.**
       Deleted `lib/llm/*` + `@mlc-ai/web-llm` + `LOCAL_LLM`/`LOCAL_FIRST` +
       `NEXT_PUBLIC_LOCAL_FIRST_EDITOR` + the editor's local-first gate +

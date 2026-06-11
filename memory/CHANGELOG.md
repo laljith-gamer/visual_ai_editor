@@ -41,6 +41,41 @@
 
 ---
 
+### 2026-06-11 — Fix: provider circuit-open no longer blocks Gemini/Groq fallback
+- **Change made:** The route-level circuit pre-check could 503 a request when
+  the **primary** provider's circuit was open — before the dispatcher could
+  try the fallbacks. Fixed so the dispatcher owns circuit handling:
+  - `lib/ratelimit/index.ts` — Layer 4 (provider circuit breaker) is now
+    **opt-in**: it only runs (and can block) when a caller passes an explicit
+    `provider`. Dispatcher-backed routes omit it. Session (Layer 2) + global
+    budget (Layer 3) checks are unchanged and still apply.
+  - `lib/providers/cloud.ts` — new `attemptableOrder()` filters
+    `CLOUD_PROVIDER_ORDER` by circuit state: **skips circuit-open providers**
+    and tries the next configured one; if EVERY provider's circuit is open it
+    falls back to the full configured order (best-effort, self-healing).
+    `cloudPlannerJson` / `cloudVisionJson` use it; success/failure is still
+    recorded per **actual** provider attempted.
+  - `app/api/agent/route.ts`, `app/api/agent/briefing/route.ts`,
+    `app/api/vision/clip/route.ts` — dropped the `provider: primaryProvider()`
+    arg from `checkAllLimits` (+ removed the now-unused import) so an open
+    primary circuit can't 503 before fallback.
+  - `app/api/vision/frame` + `/api/vision/window` (Gemini-direct, single
+    provider, no fallback) keep passing `provider: "gemini"` → their fast-fail
+    behaviour is unchanged.
+- **Result:** With OpenRouter primary + Gemini/Groq configured, an OpenRouter
+  outage/open-circuit now falls back (text → Gemini → Groq; vision → Gemini)
+  instead of returning 503. Groq stays text-only (excluded from vision).
+- **Files affected:** `lib/ratelimit/index.ts`, `lib/providers/cloud.ts`,
+  `app/api/agent/route.ts`, `app/api/agent/briefing/route.ts`,
+  `app/api/vision/clip/route.ts`; `memory/*`.
+- **Reason:** A circuit breaker on the primary should reroute to a healthy
+  fallback, not fail the whole request.
+- **Validation:** `npm install` ✓, `npm run typecheck` ✓, `npm run build` ✓.
+  No browser WebLLM reintroduced; keys still server-only; no prompt/base64/key
+  logging. Live forced-failure fallback test pending (no API keys in sandbox).
+
+---
+
 ### 2026-06-11 — Removed browser WebLLM; cloud routing via server-side OpenRouter
 - **Change made:** Retired the in-browser WebLLM / WebGPU local language +
   tool-routing path and replaced cloud language/tool routing with a
