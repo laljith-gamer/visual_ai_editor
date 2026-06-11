@@ -521,3 +521,17 @@ export const SYNTH_PLAN = {
    *  scenario prompt stays compact. */
   maxContextChars: 120
 } as const;
+// =====================================================================
+// LOCAL-FIRST editor wiring (Phase 4) tunables.
+//
+// Gates how the flag-gated local model-driven path behaves once
+// NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true. See lib/llm/localFirst.ts. Default
+// behaviour (flag off) is the unchanged Gemini/Groq cloud flow.
+// =====================================================================
+
+export const LOCAL_FIRST = {
+  /** Minimum router self-confidence required to answer a `chat` turn
+   *  locally. Below this we defer to the cloud planner, which may do
+   *  better. Conservative so a weak local reply never wins over cloud. */
+  minChatConfidence: 0.5
+} as const;
