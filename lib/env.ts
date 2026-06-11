@@ -21,6 +21,12 @@ export const serverEnv = {
   // Optional public app URL sent to OpenRouter as the HTTP-Referer header.
   // Accepts a server-only APP_URL or the existing NEXT_PUBLIC_APP_URL.
   APP_URL: readOptional("APP_URL") ?? readOptional("NEXT_PUBLIC_APP_URL"),
+  // Optional SERVER-ONLY toggle for which cloud provider(s) the dispatcher
+  // uses and in what order. Comma-separated provider names
+  // (openrouter | gemini | groq). Set a single name to force just that
+  // provider, e.g. CLOUD_PROVIDER_ORDER=gemini. Unset → the default order in
+  // lib/config.ts (openrouter,gemini,groq). See lib/providers/cloud.ts.
+  CLOUD_PROVIDER_ORDER: readOptional("CLOUD_PROVIDER_ORDER"),
   SESSION_SECRET: readOptional("SESSION_SECRET"),
   UPSTASH_REDIS_REST_URL: readOptional("UPSTASH_REDIS_REST_URL"),
   UPSTASH_REDIS_REST_TOKEN: readOptional("UPSTASH_REDIS_REST_TOKEN"),

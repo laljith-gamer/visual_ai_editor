@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (provider circuit-open no longer blocks Gemini/Groq fallback)
+> Last updated: 2026-06-11 (CLOUD_PROVIDER_ORDER env toggle; provider circuit-open no longer blocks Gemini/Groq fallback)
 
 ## High priority
 
@@ -46,6 +46,11 @@
 
 ## Completed
 
+- [x] (2026-06-11) **Added `CLOUD_PROVIDER_ORDER` env toggle.** Server-only
+      comma-separated var (openrouter|gemini|groq) overrides the config
+      provider order so you can switch between OpenRouter and Gemini (or pin
+      one) without code changes. `lib/env.ts` + `configuredOrder()` in
+      `lib/providers/cloud.ts`; `.env.example` documented. typecheck + build ✓.
 - [x] (2026-06-11) **Fix: provider circuit-open no longer blocks fallback.**
       Made the route-level circuit pre-check opt-in (only single-provider
       Gemini-direct routes pass `provider`); moved circuit-skip + fallback

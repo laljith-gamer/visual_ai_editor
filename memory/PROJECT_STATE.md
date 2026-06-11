@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (provider circuit-open no longer blocks Gemini/Groq fallback; dispatcher owns circuit-skip)
+> Last updated: 2026-06-11 (CLOUD_PROVIDER_ORDER env toggle; provider circuit-open no longer blocks Gemini/Groq fallback)
 
 ---
 
@@ -46,7 +46,10 @@ text/JSON calls.
   tries the next one — so an OpenRouter outage reroutes to Gemini/Groq rather
   than 503-ing. The route-level circuit pre-check (`checkAllLimits`) is
   **opt-in** (only the single-provider Gemini-direct routes pass `provider`);
-  session + global-budget limits still apply to every route.
+  session + global-budget limits still apply to every route. The order can
+  also be overridden/toggled at deploy time via the server-only
+  `CLOUD_PROVIDER_ORDER` env var (e.g. `gemini` = Gemini only, `openrouter` =
+  OpenRouter only); unset → the config default above.
     - `/api/agent` planner JSON uses `cloudPlannerJson`; `normalizePlan` and
       every mode (clarify/briefing/promote/extract/edit/merge/describe) are
       unchanged.
