@@ -5,7 +5,7 @@ import { sessionOptions, type SessionData } from "@/lib/session/cookie";
 import { checkAllLimits } from "@/lib/ratelimit";
 import { hasAnyChatProvider } from "@/lib/env";
 import { isTransientError } from "@/lib/providers/gemini";
-import { cloudPlannerJson, primaryProvider } from "@/lib/providers/cloud";
+import { cloudPlannerJson } from "@/lib/providers/cloud";
 import {
   PLANNER_SYSTEM_PROMPT,
   buildPlannerUserPrompt
@@ -54,12 +54,15 @@ export async function POST(req: NextRequest) {
     await session.save();
   }
 
-  // ---- Layers 2/3/4 rate check (Layer 1 already ran in middleware) ---
+  // ---- Layers 2/3 rate check (Layer 1 already ran in middleware) -----
+  // No `provider` is passed: the planner goes through the multi-provider
+  // dispatcher (OpenRouter → Gemini → Groq), which skips circuit-open
+  // providers itself. Passing a provider here would let an open primary
+  // circuit 503 the request before fallback could run.
   const rl = await checkAllLimits({
     sid: session.sid,
     scope: "agent",
-    consumesLlm: true,
-    provider: primaryProvider()
+    consumesLlm: true
   });
   if (!rl.allowed) {
     return rateLimitResponse(rl);

@@ -16,10 +16,12 @@
 // OpenRouter outage (or no OpenRouter key) degrades gracefully instead of
 // breaking the app.
 //
-// Circuit breaker: each attempt records success/failure on THAT provider's
-// circuit (recordSuccess/recordFailure), so a flapping provider opens its
-// own circuit without affecting the others. The coarse pre-check in the
-// route (checkAllLimits) targets the primary provider.
+// Circuit breaker (owned HERE, not at the route): before attempting, we
+// SKIP any provider whose circuit is open and move to the next configured
+// provider, then record success/failure on THAT provider's circuit. This is
+// what lets an OpenRouter outage (open circuit) fall back to Gemini/Groq
+// instead of the route returning 503 up front. Routes must therefore NOT do
+// a blocking provider-circuit pre-check (see lib/ratelimit/index.ts).
 //
 // Privacy/security: providers themselves never log prompts/keys/images.
 // Full video bytes never leave the browser — vision calls carry only the
@@ -27,7 +29,12 @@
 // =====================================================================
 
 import { hasGemini, hasOpenRouter, serverEnv } from "@/lib/env";
-import { recordFailure, recordSuccess, type Provider } from "@/lib/ratelimit";
+import {
+  checkCircuit,
+  recordFailure,
+  recordSuccess,
+  type Provider
+} from "@/lib/ratelimit";
 import { CLOUD_PROVIDER_ORDER } from "@/lib/config";
 import { geminiJson, geminiMultiImageJson } from "@/lib/providers/gemini";
 import { groqJson } from "@/lib/providers/groq";
@@ -71,10 +78,45 @@ function providerOrder(opts: { vision: boolean }): Provider[] {
 }
 
 /** The provider the app prefers right now (first available in order). Used
- *  by routes for the coarse circuit pre-check + fallback messaging. */
+ *  for fallback messaging. NOTE: this is NOT used to gate the request — the
+ *  dispatcher attempts the full circuit-filtered order regardless, so a
+ *  circuit-open primary never blocks the Gemini/Groq fallback. */
 export function primaryProvider(opts: { vision?: boolean } = {}): Provider {
   const order = providerOrder({ vision: opts.vision ?? false });
   return order[0] ?? "gemini";
+}
+
+/**
+ * The configured provider order, filtered by circuit state: providers whose
+ * circuit is OPEN are skipped so we don't waste a call on a known-down
+ * provider and instead fall straight through to the next one.
+ *
+ * If EVERY configured provider's circuit is open, we return the full
+ * configured order as a best-effort last resort (each attempt still records
+ * success/failure, so a recovered provider closes its own circuit and the
+ * system self-heals) rather than failing the request outright.
+ *
+ * Returns empty ONLY when no provider is configured for this request type.
+ */
+async function attemptableOrder(opts: { vision: boolean }): Promise<Provider[]> {
+  const configured = providerOrder(opts);
+  // Nothing to skip toward — return as-is (best-effort even if its circuit
+  // is open, since there is no alternative to fall back to).
+  if (configured.length <= 1) return configured;
+
+  const states = await Promise.all(
+    configured.map(async (p) => {
+      try {
+        const c = await checkCircuit(p);
+        return { provider: p, closed: c.closed };
+      } catch {
+        // If circuit state can't be read, treat the provider as attemptable.
+        return { provider: p, closed: true };
+      }
+    })
+  );
+  const closed = states.filter((s) => s.closed).map((s) => s.provider);
+  return closed.length > 0 ? closed : configured;
 }
 
 /**
@@ -87,7 +129,7 @@ export async function cloudPlannerJson(
   user: string,
   options: TextOptions = {}
 ): Promise<CloudJsonResult> {
-  const order = providerOrder({ vision: false });
+  const order = await attemptableOrder({ vision: false });
   if (order.length === 0) throw new Error("No chat provider configured");
 
   let lastErr: unknown = null;
@@ -119,7 +161,7 @@ export async function cloudVisionJson(
   images: Array<{ base64: string; mimeType?: string }>,
   options: VisionOptions = {}
 ): Promise<CloudJsonResult> {
-  const order = providerOrder({ vision: true });
+  const order = await attemptableOrder({ vision: true });
   if (order.length === 0) throw new Error("No vision provider configured");
 
   let lastErr: unknown = null;

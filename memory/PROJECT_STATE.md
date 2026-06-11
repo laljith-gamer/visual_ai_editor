@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (removed browser WebLLM; language/tool routing now server-side via OpenRouter, with Gemini/Groq fallback)
+> Last updated: 2026-06-11 (provider circuit-open no longer blocks Gemini/Groq fallback; dispatcher owns circuit-skip)
 
 ---
 
@@ -41,7 +41,12 @@ text/JSON calls.
   (`lib/providers/cloud.ts`) in the order **OpenRouter → Gemini → Groq**
   (`CLOUD_PROVIDER_ORDER`): the first provider with a configured key wins,
   a failure falls back to the next, and each provider's circuit breaker is
-  recorded independently. Groq is text-only (skipped for vision).
+  recorded independently. Groq is text-only (skipped for vision). The
+  dispatcher also **skips circuit-open providers** (`attemptableOrder`) and
+  tries the next one — so an OpenRouter outage reroutes to Gemini/Groq rather
+  than 503-ing. The route-level circuit pre-check (`checkAllLimits`) is
+  **opt-in** (only the single-provider Gemini-direct routes pass `provider`);
+  session + global-budget limits still apply to every route.
     - `/api/agent` planner JSON uses `cloudPlannerJson`; `normalizePlan` and
       every mode (clarify/briefing/promote/extract/edit/merge/describe) are
       unchanged.

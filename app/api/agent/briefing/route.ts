@@ -5,7 +5,7 @@ import { sessionOptions, type SessionData } from "@/lib/session/cookie";
 import { checkAllLimits } from "@/lib/ratelimit";
 import { hasGemini, hasOpenRouter } from "@/lib/env";
 import { isTransientError } from "@/lib/providers/gemini";
-import { cloudVisionJson, primaryProvider } from "@/lib/providers/cloud";
+import { cloudVisionJson } from "@/lib/providers/cloud";
 import { extractJsonObject } from "@/lib/util/safeJson";
 import { newId } from "@/lib/util/id";
 import type { BestPart, BriefingResult, RateLimitDecision } from "@/lib/types";
@@ -155,12 +155,13 @@ export async function POST(req: NextRequest) {
 
   // Briefing reuses the same per-session vision-LLM rate-limit scope as
   // /api/vision/clip — both consume the same shared vision credits and we
-  // don't want one path to starve the other.
+  // don't want one path to starve the other. No `provider` is passed: the
+  // vision dispatcher (OpenRouter → Gemini) skips circuit-open providers and
+  // falls back itself, so an open primary circuit must not 503 here.
   const rl = await checkAllLimits({
     sid: session.sid,
     scope: "vision-clip",
-    consumesLlm: true,
-    provider: primaryProvider({ vision: true })
+    consumesLlm: true
   });
   if (!rl.allowed) {
     return rateLimitResponse(rl);
