@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
 import { cookies } from "next/headers";
 import { sessionOptions, type SessionData } from "@/lib/session/cookie";
-import { checkAllLimits, recordFailure, recordSuccess } from "@/lib/ratelimit";
-import { hasGemini } from "@/lib/env";
-import { geminiMultiImageJson, isTransientError } from "@/lib/providers/gemini";
+import { checkAllLimits } from "@/lib/ratelimit";
+import { hasGemini, hasOpenRouter } from "@/lib/env";
+import { isTransientError } from "@/lib/providers/gemini";
+import { cloudVisionJson, primaryProvider } from "@/lib/providers/cloud";
 import { extractJsonObject } from "@/lib/util/safeJson";
 import { newId } from "@/lib/util/id";
 import type { BestPart, BriefingResult, RateLimitDecision } from "@/lib/types";
@@ -138,9 +139,9 @@ Return exactly this shape and nothing else:
 {"overview":"...","bestParts":[{"startSeconds":0,"endSeconds":0,"label":"...","why":"..."}],"followUps":["..."]}`;
 
 export async function POST(req: NextRequest) {
-  if (!hasGemini()) {
+  if (!hasGemini() && !hasOpenRouter()) {
     return NextResponse.json(
-      { error: "Cloud vision unavailable. Set GEMINI_API_KEY." },
+      { error: "Cloud vision unavailable. Set OPENROUTER_API_KEY or GEMINI_API_KEY." },
       { status: 503 }
     );
   }
@@ -153,13 +154,13 @@ export async function POST(req: NextRequest) {
   }
 
   // Briefing reuses the same per-session vision-LLM rate-limit scope as
-  // /api/vision/clip — both consume the same Gemini credits and we
+  // /api/vision/clip — both consume the same shared vision credits and we
   // don't want one path to starve the other.
   const rl = await checkAllLimits({
     sid: session.sid,
     scope: "vision-clip",
     consumesLlm: true,
-    provider: "gemini"
+    provider: primaryProvider({ vision: true })
   });
   if (!rl.allowed) {
     return rateLimitResponse(rl);
@@ -182,9 +183,13 @@ export async function POST(req: NextRequest) {
   const rangeEnd = body.range?.endSeconds ?? body.duration;
 
   // ---- Attempt 1: full frames, standard prompt -----------------------
+  // Vision via the provider dispatcher: OpenRouter (multimodal model) →
+  // Gemini direct. The dispatcher records each provider's circuit + falls
+  // back on failure. Only the already-sampled frames are sent; full video
+  // bytes never leave the browser.
   let raw: string;
   try {
-    raw = await geminiMultiImageJson(
+    const result = await cloudVisionJson(
       buildBriefingPrompt({ system: SYSTEM, body, frames, rangeStart, rangeEnd }),
       framesToImages(frames),
       // The briefing JSON is small (overview + ≤5 best parts + ≤4
@@ -194,9 +199,8 @@ export async function POST(req: NextRequest) {
       // which surfaced as "Briefing returned invalid JSON".
       { maxOutputTokens: FIRST_MAX_OUTPUT_TOKENS }
     );
-    await recordSuccess("gemini");
+    raw = result.raw;
   } catch (err) {
-    await recordFailure("gemini");
     const transient = isTransientError(err);
     return NextResponse.json(
       {
@@ -212,9 +216,9 @@ export async function POST(req: NextRequest) {
   let parsed = parseBriefingJson(raw);
 
   // ---- Attempt 2 (retry): fewer frames, stricter/compact prompt ------
-  // The first call REACHED Gemini (we have `raw`) but its output couldn't be
-  // parsed into JSON even after the truncation-salvage pass. Retry once with
-  // a reduced frame set and a tighter schema; this resolves the common
+  // The first call REACHED a provider (we have `raw`) but its output couldn't
+  // be parsed into JSON even after the truncation-salvage pass. Retry once
+  // with a reduced frame set and a tighter schema; this resolves the common
   // "incomplete summary" case. We deliberately do NOT return a dead-end error
   // here — the UI should still get a usable briefing card.
   if (!parsed) {
@@ -223,7 +227,7 @@ export async function POST(req: NextRequest) {
     const retryFrames = selectRetryFrames(frames);
     let retryRaw: string;
     try {
-      retryRaw = await geminiMultiImageJson(
+      const retryResult = await cloudVisionJson(
         buildBriefingPrompt({
           system: STRICT_SYSTEM,
           body,
@@ -234,11 +238,10 @@ export async function POST(req: NextRequest) {
         framesToImages(retryFrames),
         { maxOutputTokens: RETRY_MAX_OUTPUT_TOKENS, temperature: 0.2 }
       );
-      await recordSuccess("gemini");
+      retryRaw = retryResult.raw;
     } catch (err) {
-      // The retry call itself failed. Since the first call proved Gemini is
-      // reachable, degrade to a minimal briefing instead of an error bubble.
-      await recordFailure("gemini");
+      // The retry call itself failed. Since the first call proved a provider
+      // is reachable, degrade to a minimal briefing instead of an error bubble.
       logBriefingRetryError(err);
       return NextResponse.json(fallbackBriefing());
     }

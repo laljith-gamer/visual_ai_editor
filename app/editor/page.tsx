@@ -34,7 +34,6 @@ import { sha1String } from "@/lib/util/hash";
 import { logAi, logSystem, logUser } from "@/lib/log/recorders";
 import { summarizeRecentActivity } from "@/lib/log/summarize";
 import { useBriefingActions } from "@/hooks/useBriefingActions";
-import type { LocalEditorAction } from "@/lib/llm/localFirst";
 import type {
   AgentRequest,
   AgentResponse,
@@ -480,107 +479,6 @@ export default function Home() {
     ]
   );
 
-  // ---- v1.8.1 — Execute a safe deterministic local-first action ----------
-  // Runs ONLY for the closed set the local router is allowed to act on
-  // (promote / extract / reset). Each maps onto the SAME store path / pure
-  // builder the cloud handlers use, so there is no scoring, no vision, and
-  // no network call. `message` is the router's natural-language line; we
-  // show it, then add a concrete summary where a count is useful. Defined
-  // before handleAgent so the local-first gate can call it.
-  const executeLocalFirstAction = useCallback(
-    (action: LocalEditorAction, message: string) => {
-      const store = useEditorStore.getState();
-
-      if (action.tool === "promote") {
-        const briefing = store.lastBriefing;
-        if (!briefing || briefing.bestParts.length === 0) {
-          pushMessage({
-            role: "assistant",
-            content:
-              "I don't have a recent briefing in scope to clip from. Ask me to describe the video first."
-          });
-          return;
-        }
-        const result = store.promoteBriefingParts({
-          partIds: action.partIds,
-          targetSeconds: action.targetSeconds,
-          op: action.op
-        });
-        if (
-          briefing.sourceId &&
-          briefing.sourceId !== useEditorStore.getState().activeSourceId &&
-          useEditorStore.getState().sources.some((s) => s.id === briefing.sourceId)
-        ) {
-          useEditorStore.getState().setActiveSource(briefing.sourceId);
-        }
-        const tl = useEditorStore.getState().highlights;
-        const total = tl.reduce((a, h) => a + (h.end - h.start), 0);
-        pushMessage({
-          role: "assistant",
-          content:
-            result.added > 0
-              ? `${message} Added ${result.added} clip${result.added === 1 ? "" : "s"} \u2014 timeline is now ${tl.length} clip${tl.length === 1 ? "" : "s"}, ${total.toFixed(1)}s.`
-              : "Couldn't promote any briefing parts \u2014 they may overlap clips you already have."
-        });
-        setStatus("ready", undefined);
-        setProgress(1);
-        return;
-      }
-
-      if (action.tool === "extract") {
-        const sid = store.activeSourceId ?? undefined;
-        const src = store.sources.find((s) => s.id === sid) ?? store.sources[0];
-        if (!src) {
-          pushMessage({
-            role: "assistant",
-            content: "Upload a video first, then I can grab that slice."
-          });
-          return;
-        }
-        const built = buildExtractedHighlight({
-          range: {
-            kind: action.range.kind,
-            startSeconds: action.range.startSeconds,
-            endSeconds: action.range.endSeconds
-          },
-          videoDuration: src.meta.duration,
-          transition: "none"
-        });
-        if (built.length === 0) {
-          pushMessage({
-            role: "assistant",
-            content: "That range doesn't fit inside this video. Try a different start or end."
-          });
-          return;
-        }
-        const tagged = built.map((h) => ({ ...h, sourceId: h.sourceId ?? src.id }));
-        if (store.highlights.length > 0) {
-          useEditorStore.getState().mergeHighlights(tagged, { allowOverlap: true });
-        } else {
-          setHighlights(tagged);
-        }
-        const finalCount = useEditorStore.getState().highlights.length;
-        pushMessage({
-          role: "assistant",
-          content: `${message} ${finalCount} clip${finalCount === 1 ? "" : "s"} on the timeline now.`
-        });
-        setStatus("ready", "Ready to render");
-        setProgress(1);
-        return;
-      }
-
-      // action.tool === "reset" — clear the whole timeline.
-      setHighlights([]);
-      pushMessage({
-        role: "assistant",
-        content: message || "Cleared the timeline \u2014 starting fresh."
-      });
-      setStatus("idle", undefined);
-      setProgress(0);
-    },
-    [pushMessage, setStatus, setProgress, setHighlights]
-  );
-
   // ---- Submit a chat turn -------------------------------------------------
   const handleAgent = useCallback(
     async (userRequest: string) => {
@@ -637,74 +535,11 @@ export default function Home() {
           `Shortcut path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
         );
       }
-      // ---- Local-first gate (flag-gated, default OFF) ----------------
-      // When NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true, run the model-driven
-      // router on-device BEFORE the cloud planner. We act locally on
-      // `chat` plus a small set of safe deterministic actions (promote /
-      // extract / reset); everything else falls through to the cloud.
-      try {
-        const { tryLocalFirst, isLocalFirstEnabled } = await import(
-          "@/lib/llm/localFirst"
-        );
-
-        if (isLocalFirstEnabled()) {
-          const s = useEditorStore.getState();
-
-          const lf = await tryLocalFirst({
-            tier: cap.tier,
-            messages: s.messages.map((m) => ({
-              role: m.role,
-              content: m.content
-            })),
-            userText: userRequest,
-            videoDurationSeconds: s.videoMeta?.duration,
-            timelineClipCount: s.highlights.length,
-            briefing: s.lastBriefing
-              ? {
-                  sourceName: s.lastBriefing.sourceName,
-                  bestParts: s.lastBriefing.bestParts
-                }
-              : null
-          });
-
-          if (lf.handled) {
-            if (lf.kind === "action") {
-              // Execute the deterministic action through the SAME store
-              // paths the cloud handlers use. No cloud call, no scoring.
-              executeLocalFirstAction(lf.action, lf.message);
-              logSession.system(
-                "localfirst.action",
-                { tool: lf.action.tool, model: lf.model },
-                `Ran ${lf.action.tool} locally (${lf.model})`
-              );
-            } else {
-              pushMessage({ role: "assistant", content: lf.message });
-              setStatus("ready", undefined);
-              logSession.system(
-                "localfirst.handled",
-                { kind: lf.kind, model: lf.model },
-                `Answered locally (${lf.kind}, ${lf.model})`
-              );
-            }
-
-            setBusy(false);
-            return;
-          }
-
-          logSession.system(
-            "localfirst.fallthrough",
-            { reason: lf.reason },
-            `Local-first deferred to cloud: ${lf.reason}`
-          );
-        }
-      } catch (err) {
-        logSession.system(
-          "localfirst.failed",
-          { message: (err as Error).message },
-          `Local-first path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
-        );
-      }
-
+      // ---- Cloud planner ---------------------------------------------
+      // The browser WebLLM local-first router was removed; language/tool
+      // routing now happens server-side via /api/agent (OpenRouter →
+      // Gemini → Groq). The deterministic quick-shortcut gate above still
+      // handles high-confidence turns without a round-trip.
       try {
         setStatus("planning", "Talking to the planner");
         setProgress(0.05);
@@ -1847,7 +1682,6 @@ export default function Home() {
       videoMeta,
       videoHash,
       memory,
-      cap.tier,
       pushMessage,
       setStatus,
       setProgress,
@@ -1859,7 +1693,6 @@ export default function Home() {
       setPendingExecution,
       setUserTier,
       runPipeline,
-      executeLocalFirstAction,
       logSession
     ]
   );

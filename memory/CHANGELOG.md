@@ -17,6 +17,69 @@
 
 ---
 
+### 2026-06-11 — Removed browser WebLLM; cloud routing via server-side OpenRouter
+- **Change made:** Retired the in-browser WebLLM / WebGPU local language +
+  tool-routing path and replaced cloud language/tool routing with a
+  **server-side OpenRouter** provider (Gemini/Groq kept as fallbacks).
+  - **Removed:** the entire `lib/llm/*` (engine, chat, tools, localFirst,
+    grounding, prompt, types, index, `webllm.worker.ts`); the
+    `@mlc-ai/web-llm` dependency; `LOCAL_LLM` + `LOCAL_FIRST` config; the
+    `NEXT_PUBLIC_LOCAL_FIRST_EDITOR` flag + the editor's local-first gate +
+    `executeLocalFirstAction`; the CSP `raw.githubusercontent.com` entry
+    (only there for WebLLM model libs); and the one-time
+    `.github/workflows/apply-local-first-once.yml` (which re-injected the
+    WebLLM wiring). No more in-browser model download.
+  - **Added:** `lib/providers/openrouter.ts` — server-only,
+    OpenAI-compatible client (`openrouterJson`, `openrouterMultiImageJson`);
+    `Authorization: Bearer OPENROUTER_API_KEY`, `X-Title: Shorts Studio`,
+    optional `HTTP-Referer` (APP_URL / NEXT_PUBLIC_APP_URL); JSON-object mode
+    + `extractJsonObject` parse fallback. Plus `lib/providers/cloud.ts` — a
+    dispatcher (`cloudPlannerJson`, `cloudVisionJson`, `primaryProvider`)
+    that walks `CLOUD_PROVIDER_ORDER = ["openrouter","gemini","groq"]`, skips
+    providers with no key (Groq excluded from vision), and records each
+    provider's circuit success/failure. New `OPENROUTER` config block; new
+    env (`OPENROUTER_API_KEY`, `OPENROUTER_DEFAULT_MODEL=google/gemini-2.5-flash`,
+    `OPENROUTER_CHEAP_MODEL=google/gemini-2.5-flash-lite`,
+    `OPENROUTER_PREMIUM_MODEL=anthropic/claude-sonnet-4.5`,
+    `OPENROUTER_OSS_MODEL=qwen/qwen3-coder`, `APP_URL`); `hasOpenRouter()` +
+    `hasAnyVisionProvider()`; `Provider` circuit type gains `"openrouter"`.
+  - **Routes:** `/api/agent` planner JSON now goes through `cloudPlannerJson`
+    (OpenRouter→Gemini→Groq), preserving `normalizePlan` + every mode
+    (clarify/briefing/promote/extract/edit/merge/describe). `/api/agent/briefing`
+    and `/api/vision/clip` use `cloudVisionJson` (OpenRouter multimodal →
+    Gemini direct); the briefing retry/minimal-fallback logic is intact.
+- **Security (hard rules honoured):** the OpenRouter key is **server-only**
+  (`serverEnv.OPENROUTER_API_KEY`); there is **no** `NEXT_PUBLIC_OPENROUTER_API_KEY`;
+  verified the key name + `openrouter.ai` do **not** appear in the client
+  bundle (`.next/static`); providers never log the key, prompts, or base64
+  frames. Full video bytes still never leave the browser — only the
+  already-sampled frames go to the cloud vision routes (destination can now
+  be OpenRouter instead of Google directly).
+- **Honesty:** OpenRouter does NOT fully replace Gemini vision — it handles
+  vision only when the configured model is multimodal (the default
+  `google/gemini-2.5-flash` is); otherwise it falls back to direct Gemini.
+  No fake frame-tree/caption/vision data was added. The app is **no longer
+  offline / local-LLM** — language routing is cloud-only now.
+- **Kept (deterministic, non-model client paths):** structured briefing
+  follow-ups (`lib/briefing/followups.ts`, `hooks/useBriefingActions.ts`),
+  the grammar quick-shortcut gate (`lib/intent/*`), and promote/extract/reset
+  (via the cloud planner's modes + existing client handlers).
+- **Files affected:** `lib/providers/openrouter.ts` (new),
+  `lib/providers/cloud.ts` (new), `lib/config.ts`, `lib/env.ts`,
+  `lib/ratelimit/circuit.ts`, `app/api/agent/route.ts`,
+  `app/api/agent/briefing/route.ts`, `app/api/vision/clip/route.ts`,
+  `app/editor/page.tsx`, `package.json`, `package-lock.json`, `.env.example`,
+  deleted `lib/llm/*` + the apply-local-first workflow; `memory/*`.
+- **Reason:** WebLLM meant multi-GB browser downloads, WebGPU/device
+  instability, and poor universal support; a server-side OpenRouter API is
+  simpler, universal, and keeps keys off the browser.
+- **Validation:** `npm install` ✓ (removed 2 packages), `npm run typecheck` ✓,
+  `npm run build` ✓ (only the pre-existing `@huggingface/transformers`
+  `import.meta` warning; `/editor` bundle 47.8 → 47.2 kB). Live OpenRouter
+  calls + browser manual tests NOT run here (no key / browser in sandbox).
+
+---
+
 ### 2026-06-11 — Local-first high-tier model → Hermes-3-Llama-3.1-8B (agentic/tool-use)
 - **Change made:** Re-tiered the local WebLLM model choices in
   `lib/config.ts` (`LOCAL_LLM`) so the high tier prefers a model WebLLM

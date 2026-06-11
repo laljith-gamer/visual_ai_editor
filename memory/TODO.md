@@ -4,38 +4,38 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (local-first high-tier model → Hermes-3-Llama-3.1-8B)
+> Last updated: 2026-06-11 (removed browser WebLLM; server-side OpenRouter provider)
 
 ## High priority
 
-- [ ] **Feed REAL frame data into local `plan` / `describe`.** Let the
-      on-device router execute these using `lib/frame-tree/` +
-      `lib/vision/caption*` (+ `lib/vision-core/` scoring) instead of
-      deferring to cloud. Gated on building the sampled/captioned frame-tree
-      for the active source and passing its outline into `routeTurn` /
-      grounding. NEVER fake frame data — keep cloud fallback until it's real.
-- [ ] **Extend safe local actions to `edit`.** `promote`/`extract`/`reset`
-      now run locally behind the flag; map `ToolDecision.operation` onto the
-      existing `EditOperation` store actions (trim/drop/split) next, same
-      flag + confidence floor.
-- [ ] **Browser/WebGPU verification** of the flag-ON path (local router
-      executing promote/extract/reset + local chat). Needs a real GPU
-      browser; not possible in the sandbox.
-- [ ] **Redeploy** so the merged Phase 3 / 4.5 work reaches the running app.
+- [ ] **Validate OpenRouter end-to-end (real deployment).** With
+      `OPENROUTER_API_KEY` set: `/api/agent` returns valid planner JSON;
+      multimodal briefing / "describe" works (default
+      `google/gemini-2.5-flash`); briefing chips + promote/extract/reset
+      still work; and with the key unset / on failure it falls back to direct
+      Gemini/Groq. Confirm no browser model download and the key never
+      appears client-side.
+- [ ] **Browser/WebGPU + live-API verification.** The cloud chat/vision path
+      and on-device SigLIP/Whisper/captioning need a real GPU browser + real
+      API keys; not possible in the sandbox.
+- [ ] **Redeploy** so the OpenRouter migration reaches the running app. Set
+      `OPENROUTER_API_KEY` (and optionally `APP_URL`, `OPENROUTER_*_MODEL`)
+      in the deployment environment.
 
 ## Medium priority
 
-- [ ] Add a "download local model" opt-in UX (progress indicator) for WebLLM
-      and captioning.
+- [ ] Optionally route `/api/vision/frame` + `/api/vision/window` through the
+      `cloudVisionJson` dispatcher too (left out of the OpenRouter migration
+      to keep scope tight; they still call Gemini directly).
 - [ ] Optionally have `/api/agent/briefing` emit structured `BriefingFollowUp`
       actions directly (client already normalizes strings, so this is a
       quality bump, not a requirement).
 
 ## Low priority
 
-- [ ] Expand unit tests for deterministic, non-GPU logic (engine, frame-tree,
-      tool-decision validator, `normalizeBriefingFollowUps`,
-      synthesizeVaguePlan).
+- [ ] Expand unit tests for deterministic, non-GPU logic (frame-tree,
+      `normalizeBriefingFollowUps`, synthesizeVaguePlan, and the
+      `lib/providers/cloud.ts` provider-order selection).
 - [ ] Document device-tier expectations (which models run where).
 - [ ] **Phase 5 (maintainability) — continue ONE hook at a time.** First
       extraction done (`hooks/useBriefingActions.ts`). Remaining candidates
@@ -46,6 +46,17 @@
 
 ## Completed
 
+- [x] (2026-06-11) **Removed browser WebLLM; server-side OpenRouter provider.**
+      Deleted `lib/llm/*` + `@mlc-ai/web-llm` + `LOCAL_LLM`/`LOCAL_FIRST` +
+      `NEXT_PUBLIC_LOCAL_FIRST_EDITOR` + the editor's local-first gate +
+      `executeLocalFirstAction` + the apply-local-first workflow. Added
+      `lib/providers/openrouter.ts` (server-only) + `lib/providers/cloud.ts`
+      dispatcher (OpenRouter → Gemini → Groq); `/api/agent`,
+      `/api/agent/briefing`, `/api/vision/clip` route through it. Key is
+      server-only (no `NEXT_PUBLIC_OPENROUTER_API_KEY`, verified absent from
+      client bundle); no browser model download; deterministic client actions
+      kept; Gemini remains the vision fallback; no fake vision data.
+      `npm install`/`typecheck`/`build` ✓.
 - [x] (2026-06-11) **Local-first high-tier model → Hermes-3-Llama-3.1-8B.**
       `LOCAL_LLM` in `lib/config.ts` now uses Hermes-3-Llama-3.1-8B
       (`q4f16_1-MLC`) for the high tier (WebLLM function-calling/tool-use
