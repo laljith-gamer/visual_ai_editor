@@ -840,6 +840,78 @@ export interface BestPart {
   sourceId?: string;
 }
 
+/**
+ * v1.8.1 — Structured briefing follow-up action.
+ *
+ * The old model returned follow-ups as plain strings, so a button click
+ * became raw chat text and the planner had to RE-GUESS the user's intent
+ * from words every time ("Make a reel of these" → ?). That round-trip is
+ * exactly why briefing chips felt prototype-level and occasionally fell
+ * into a generic clarify loop.
+ *
+ * A `BriefingFollowUp` instead CARRIES the intent. The UI knows whether a
+ * chip should promote briefing parts, plan a topic, extract an exact
+ * range, or just send chat — so the deterministic path can run without
+ * asking the cloud planner to interpret a sentence.
+ *
+ * Backward compatibility: `BriefingResult.followUps` still accepts plain
+ * strings (the briefing API and older saved sessions emit those). They are
+ * normalized into this union client-side via
+ * `normalizeBriefingFollowUps()` before rendering — never with a brittle
+ * keyword table, just a small generic "use these moments" heuristic with a
+ * `plan_topic` default.
+ */
+export type BriefingFollowUp =
+  | {
+      /** Stable id for React keys + logging. */
+      id: string;
+      /** Button text shown to the user. */
+      label: string;
+      /** Lift the briefing's already-found best parts onto the timeline.
+       *  Deterministic — no cloud planner, no new vision call. */
+      kind: "promote";
+      /** Optional subset of best-part ids; omitted = all of them. */
+      partIds?: string[];
+      /** Optional total-duration budget to trim the promoted parts to. */
+      targetSeconds?: number;
+      /** Append (default) preserves existing clips; replace wipes first. */
+      op?: "append" | "replace";
+    }
+  | {
+      id: string;
+      label: string;
+      /** Build a highlight plan about a concrete subject the chip names.
+       *  Produces an EditPlan + pending execution WITHOUT asking the
+       *  planner to interpret raw text. */
+      kind: "plan_topic";
+      /** Which briefing/source this topic is grounded in. */
+      sourceId: string;
+      /** Short topic label (== label by default). */
+      topic: string;
+      /** The scenario prompt fed to the scorer. */
+      scenarioPrompt: string;
+      /** Signal-fusion weights; defaults to a semantic-heavy profile. */
+      signals?: { semantic: number; motion: number; saliency: number };
+    }
+  | {
+      id: string;
+      label: string;
+      /** Grab an EXACT time slice deterministically (no scoring/cloud). */
+      kind: "extract_range";
+      sourceId: string;
+      startSeconds: number;
+      endSeconds: number;
+    }
+  | {
+      id: string;
+      label: string;
+      /** Plain chat — send `text` through the normal assistant pipe. This
+       *  preserves the legacy "click chip → chat" behavior for anything we
+       *  can't map to a deterministic action. */
+      kind: "chat";
+      text: string;
+    };
+
 /** Structured response from POST /api/agent/briefing. */
 export interface BriefingResult {
   /** 2-3 sentence overall description. */
@@ -850,8 +922,13 @@ export interface BriefingResult {
   bestParts: BestPart[];
   /** Suggested next user actions, generated from the briefing content
    *  ("Make a 30s reel of these moments", "Show me clip 2", etc.).
-   *  Up to 4. The chat surface renders these as one-tap buttons. */
-  followUps: string[];
+   *  Up to 4. The chat surface renders these as one-tap buttons.
+   *
+   *  v1.8.1 — may be plain strings (legacy / current briefing API output)
+   *  OR structured `BriefingFollowUp` actions. Strings are normalized into
+   *  actions client-side before rendering; both shapes round-trip safely
+   *  through session persistence. */
+  followUps: Array<string | BriefingFollowUp>;
 }
 
 // ---------------------------------------------------------------------

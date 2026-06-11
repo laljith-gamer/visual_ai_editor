@@ -22,6 +22,7 @@ import { BriefingCard } from "./BriefingCard";
 import { logUser } from "@/lib/log/recorders";
 import type {
   BestPart,
+  BriefingFollowUp,
   ChatMessage,
   ClarifyQuestion,
   InferredField
@@ -33,6 +34,12 @@ interface Props {
   onOpenClips: () => void;
   /** Confirm the pending plan and start the analysis pipeline. */
   onRunPlan: () => void;
+  /** v1.8.1 — Execute a structured briefing follow-up action (promote /
+   *  plan_topic / extract_range) deterministically, without sending raw
+   *  text through the planner. `chat` actions are NOT routed here — they
+   *  go through the normal chat pipe (onSubmit) so typed chat and chip
+   *  chat behave identically. */
+  onBriefingAction: (action: BriefingFollowUp) => void;
   isBusy: boolean;
 }
 
@@ -71,6 +78,7 @@ export function AssistantPanel({
   onSubmit,
   onOpenClips,
   onRunPlan,
+  onBriefingAction,
   isBusy
 }: Props) {
   const messages = useEditorStore((s) => s.messages);
@@ -221,7 +229,17 @@ export function AssistantPanel({
                   <BriefingCard
                     bestParts={briefingAttachment.bestParts}
                     followUps={briefingAttachment.followUps}
-                    onPickFollowUp={(s) => void send(s, "quickreply")}
+                    sourceId={briefingAttachment.sourceId}
+                    onPickFollowUp={(action) => {
+                      // chat follow-ups go through the normal chat pipe so
+                      // typed chat and chip-chat are identical; every other
+                      // (deterministic) action is executed by the page.
+                      if (action.kind === "chat") {
+                        void send(action.text, "quickreply");
+                      } else {
+                        onBriefingAction(action);
+                      }
+                    }}
                     disabled={isBusy}
                   />
                 )}
@@ -362,20 +380,32 @@ export function AssistantPanel({
  * null if the shape doesn't match. Defensive about runtime types
  * because attachments survive session restore (IDB) and could be
  * partially populated by older code paths.
+ *
+ * v1.8.1 — follow-ups may now be plain strings (legacy / current API)
+ * OR structured BriefingFollowUp actions. We keep BOTH shapes here and
+ * let BriefingCard normalize them, so old saved sessions (string[]) and
+ * any future structured payloads both render. The source id is surfaced
+ * so legacy strings can be grounded into plan_topic / extract_range
+ * actions.
  */
 function readBriefingAttachment(
   raw: ChatMessage["attachment"]
-): { bestParts: BestPart[]; followUps: string[] } | null {
+): {
+  bestParts: BestPart[];
+  followUps: Array<string | BriefingFollowUp>;
+  sourceId?: string;
+} | null {
   if (!raw || typeof raw !== "object") return null;
   if (raw.mode !== "briefing") return null;
   const bp = Array.isArray(raw.bestParts) ? (raw.bestParts as BestPart[]) : [];
   const fu = Array.isArray(raw.followUps)
-    ? ((raw.followUps as unknown[]).filter(
-        (s): s is string => typeof s === "string"
-      ))
+    ? (raw.followUps as Array<string | BriefingFollowUp>).filter(
+        (f) => typeof f === "string" || (f && typeof f === "object")
+      )
     : [];
   if (bp.length === 0 && fu.length === 0) return null;
-  return { bestParts: bp, followUps: fu };
+  const sourceId = typeof raw.sourceId === "string" ? raw.sourceId : undefined;
+  return { bestParts: bp, followUps: fu, sourceId };
 }
 
 /** v1.7.5 — Read the optional `shortcut` attachment a message carries

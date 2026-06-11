@@ -17,7 +17,48 @@
 
 ---
 
-### 2026-06-11 - Editor syntax/typecheck fix
+### 2026-06-11 — Structured briefing follow-ups + safe local-first actions (Phase 3 complete, Phase 4.5)
+- **Change made:**
+  1. **Structured briefing follow-ups (Phase 3 — now done).** Replaced the
+     plain-string follow-up chips with an intent-carrying
+     `BriefingFollowUp` union (`promote` | `plan_topic` | `extract_range` |
+     `chat`). Briefing chips no longer round-trip through the cloud planner
+     as raw text, which is what caused the "what should the short be about?"
+     clarify loop. New pure normalizer `lib/briefing/followups.ts` upgrades
+     legacy/string follow-ups into actions (generic "use these moments"
+     heuristic → `promote`; otherwise `plan_topic` grounded in the briefing;
+     NO genre/keyword tables). `BriefingResult.followUps` now accepts
+     `Array<string | BriefingFollowUp>` (backward compatible with the
+     briefing API and old saved sessions). `BriefingCard` + `AssistantPanel`
+     dispatch structured actions; the editor runs them deterministically
+     (promote → `promoteBriefingParts`; plan_topic → client-side
+     `normalizePlan` + pending execution, never clarify; extract_range →
+     `buildExtractedHighlight`). `chat` still goes through the normal pipe.
+  2. **Phase 4.5 — safe deterministic local-first actions.** `localFirst.ts`
+     now executes a closed set of low-risk router decisions on-device behind
+     the flag: `promote`, `extract`, `reset` (each maps onto an existing
+     tested store path / pure builder, above `LOCAL_FIRST.minActionConfidence`).
+     `plan`/`moment`/`edit`/`merge`/`describe` and any low-confidence/missing-
+     data case still FALL THROUGH to the unchanged cloud planner (no faked
+     frame-tree/vision data). `chat` local handling is unchanged.
+- **Files affected:** `lib/types.ts` (BriefingFollowUp + BriefingResult),
+  `lib/briefing/followups.ts` (new), `lib/config.ts`
+  (`BRIEFING_FOLLOWUP`, `LOCAL_FIRST.minActionConfidence`),
+  `components/BriefingCard.tsx`, `components/AssistantPanel.tsx`,
+  `app/editor/page.tsx` (`handleBriefingAction`, `executeLocalFirstAction`,
+  local-first gate), `lib/llm/localFirst.ts`; `memory/*`.
+- **Reason:** Make briefing chips product-quality (carry intent, run
+  deterministically) and complete the safe slice of local-first action
+  execution without breaking the cloud flow.
+- **Validation:** `npm install` ✓, `npm run typecheck` ✓, `npm run build` ✓
+  (only a pre-existing `@huggingface/transformers` `import.meta` warning).
+  `npm run lint` is NOT separately configured in this repo (`next lint`
+  prompts for interactive setup; eslint deps exist but no config file) — the
+  build's own type+lint pass is green. Browser/WebGPU runtime (local router
+  executing actions) NOT verified — no GPU in sandbox; needs a real browser
+  with `NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true`. No CI workflow run.
+
+
 - **Change made:** Removed a duplicated quick-shortcut `catch` block in
   `app/editor/page.tsx` that caused TypeScript parser errors and cascade
   declaration errors.

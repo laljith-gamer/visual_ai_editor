@@ -533,5 +533,55 @@ export const LOCAL_FIRST = {
   /** Minimum router self-confidence required to answer a `chat` turn
    *  locally. Below this we defer to the cloud planner, which may do
    *  better. Conservative so a weak local reply never wins over cloud. */
-  minChatConfidence: 0.5
+  minChatConfidence: 0.5,
+  /** v1.8.1 — Minimum router self-confidence required to EXECUTE a safe
+   *  deterministic action (promote / extract / reset) locally. Set
+   *  higher than chat because an action mutates the timeline: when the
+   *  model isn't confident we defer to the cloud planner rather than
+   *  risk a wrong local edit. Plan/moment/edit/merge/describe always
+   *  defer regardless of confidence (cloud still owns them). */
+  minActionConfidence: 0.6
+} as const;
+
+// =====================================================================
+// Structured BRIEFING FOLLOW-UP normalization (lib/briefing/followups.ts).
+//
+// Legacy + current briefing API output is plain strings. We normalize
+// each string into a structured BriefingFollowUp so the chip carries
+// intent instead of forcing the planner to re-guess from text.
+//
+// This is intentionally NOT a genre/keyword table. It is a tiny, bounded
+// set of generic "use the moments I already found" phrasings. A string
+// that matches becomes a deterministic `promote`; everything else becomes
+// a `plan_topic` grounded in the briefing. The real intent-carrying
+// mechanism is the structured action — this heuristic only exists to
+// upgrade legacy strings without breaking old sessions.
+// =====================================================================
+
+export const BRIEFING_FOLLOWUP = {
+  /** Generic substrings that signal "lift the best parts I already found
+   *  onto the timeline" (a deterministic promote). Lowercased; matched as
+   *  case-insensitive substrings. Kept short and domain-agnostic — do NOT
+   *  grow this into a per-genre keyword table. */
+  promoteHints: [
+    "reel of these",
+    "reel of those",
+    "use these",
+    "use those",
+    "clip these",
+    "clip those",
+    "clip the best",
+    "use the best",
+    "these moments",
+    "those moments",
+    "highlight reel",
+    "add them",
+    "add these",
+    "add those"
+  ],
+  /** Default signal-fusion profile for a `plan_topic` chip. Semantic-heavy
+   *  because the chip names a concrete subject to look for. Mirrors
+   *  SIGNAL_DEFAULTS.scenarioHeavy; referenced by name there to avoid
+   *  drift. */
+  planTopicSignals: SIGNAL_DEFAULTS.scenarioHeavy
 } as const;
