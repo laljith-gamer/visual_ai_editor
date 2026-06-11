@@ -1,0 +1,40 @@
+name: CI
+
+# Production-hygiene gate: typecheck + build every PR to main and every
+# push to main. Lint is intentionally NOT run here — this repo has no
+# ESLint config and `next lint` prompts interactively, so it would hang CI.
+# WebGPU / local-model behavior still needs manual browser verification.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  typecheck-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build

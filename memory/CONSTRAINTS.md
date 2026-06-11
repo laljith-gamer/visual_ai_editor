@@ -41,6 +41,15 @@
 - **Respect the rate-limit / cost guards.** Don't remove or weaken the
   rate-limiting layers or the graceful-degradation paths.
 
+## Before merging a PR
+
+- **CI must pass.** `.github/workflows/ci.yml` runs `npm run typecheck` +
+  `npm run build` on every PR to `main`; don't merge red.
+- **WebGPU / local-model behavior is not covered by CI** — manual browser
+  testing (real GPU) is still required for anything touching
+  SigLIP/Whisper/WebLLM/captioning or the `NEXT_PUBLIC_LOCAL_FIRST_EDITOR`
+  path.
+
 ## Working-style rules for AI agents
 
 - **Never overwrite or delete user code without explicit permission.**

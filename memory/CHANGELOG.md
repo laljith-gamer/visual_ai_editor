@@ -17,6 +17,31 @@
 
 ---
 
+### 2026-06-11 — Add GitHub Actions CI + CHANGELOG formatting cleanup
+- **Change made:**
+  1. **CI workflow added** (`.github/workflows/ci.yml`). Runs on
+     `pull_request` targeting `main` and on `push` to `main`: Ubuntu latest,
+     Node 20 with npm cache, installs via `npm ci` (lockfile present, else
+     `npm install`), then `npm run typecheck` and `npm run build`. Lint is
+     intentionally NOT run — there is no ESLint config and `next lint` prompts
+     interactively, which would hang CI. So future merges are gated on
+     typecheck + build.
+  2. **CHANGELOG formatting cleanup.** Restored two `###` headings that had
+     been dropped by earlier chained edits (the "Structured briefing
+     follow-ups + safe local-first actions" and "Editor syntax/typecheck fix"
+     entries) and added the missing `---` separators, so each entry is again
+     readable as a discrete dated block. No meaning changed.
+- **Files affected:** `.github/workflows/ci.yml` (new), `memory/CHANGELOG.md`,
+  `memory/PROJECT_STATE.md`, `memory/TODO.md`, `memory/CONSTRAINTS.md`.
+- **Reason:** Production hygiene — automatically validate PRs, and keep the
+  memory handoff brain clean for future agents.
+- **Validation:** `npm install` ✓, `npm run typecheck` ✓, `npm run build` ✓
+  (only the pre-existing `@huggingface/transformers` `import.meta` warning).
+  CI workflow run status to be confirmed after the PR opens. Browser/WebGPU
+  runtime still NOT verified — manual browser testing required.
+
+---
+
 ### 2026-06-11 — Phase 4.5 sourceId polish + Phase 5 first hook extraction
 - **Change made:**
   1. **Phase 4.5 polish — briefing `plan_topic` actions preserve `sourceId`.**
@@ -52,7 +77,9 @@
   multi-source manual checks (plan locked to `sources:[briefingSourceId]`,
   Run analysis uses the intended source) still need a real browser. No CI run.
 
+---
 
+### 2026-06-11 — Structured briefing follow-ups + safe local-first actions
 - **Change made:**
   1. **Structured briefing follow-ups (Phase 3 — now done).** Replaced the
      plain-string follow-up chips with an intent-carrying
@@ -93,7 +120,9 @@
   executing actions) NOT verified — no GPU in sandbox; needs a real browser
   with `NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true`. No CI workflow run.
 
+---
 
+### 2026-06-11 — Editor syntax/typecheck fix
 - **Change made:** Removed a duplicated quick-shortcut `catch` block in
   `app/editor/page.tsx` that caused TypeScript parser errors and cascade
   declaration errors.
