@@ -17,6 +17,50 @@
 
 ---
 
+### 2026-06-11 — Self-healing IndexedDB (fix "object store was not found" crash)
+- **Root cause:** Two issues produced `NotFoundError: Failed to execute
+  'transaction' on 'IDBDatabase': One of the specified object stores was not
+  found.` (1) **DB-name collision** — `lib/audio/cache.ts` opened
+  `createStore("shorts-studio-cache", "transcripts")` while `lib/store/idb.ts`
+  opened the same DB name with store `"kv"`; idb-keyval only ever creates the
+  FIRST object store a DB sees, so whichever opened second crashed. (2)
+  **Stale/partial DBs** (old builds, failed upgrades, dev hot-reloads) where a
+  DB exists without the expected `kv` store. Both surfaced as a red
+  "Something went wrong" bubble.
+- **Fix:** Rewrote `lib/store/idb.ts` as a self-healing layer:
+    - Each logical store has its OWN database (one object store per DB):
+      `sessions` → `shorts-studio-sessions/kv`, `cache` →
+      `shorts-studio-cache/kv`, `logs` → `shorts-studio-logs/kv`,
+      `transcripts` → **`shorts-studio-transcripts/kv`** (NEW dedicated DB —
+      removes the collision). `lib/audio/cache.ts` now uses it.
+    - Lazy store creation (`stores` map). `withIdbRecovery(kind, op, fn)`
+      runs the op; on a missing-object-store error it DROPS the cached
+      (broken) store handle, deletes ONLY that database (`deleteDatabaseSafe`,
+      waits for real completion with a 2s safety timeout), recreates the
+      store fresh, and retries the op exactly once.
+    - Helpers: `isMissingObjectStoreError`, `deleteDatabaseSafe`,
+      `safeGet/safeSet/safeDel/safeKeys/safeUpdate`, `resetAllLocalDatabases`
+      (emergency dev util), and `friendlyStorageError` →
+      `STORAGE_CORRUPTED_MESSAGE`.
+    - The public `idbSessions` / `idbCache` / `idbLog` API shape is UNCHANGED
+      (now backed by the safe helpers), so `sessions.ts`, `cache.ts`, and
+      `log/store.ts` needed no edits.
+    - Editor + launch error sites now map a persistent storage-corruption
+      error to the clean message "Local browser storage was corrupted. Please
+      clear site data and reload." instead of the raw IDB exception.
+- **Scope/safety:** Only the AFFECTED DB is deleted (not all storage); video/
+  source state is untouched; recovery only `console.warn`s the DB name +
+  operation — never logs stored values, video bytes, base64 frames, prompts,
+  API keys, or transcript text.
+- **Emergency snippet (documented for support):**
+  `["shorts-studio-sessions","shorts-studio-cache","shorts-studio-logs","shorts-studio-transcripts"].forEach(n=>indexedDB.deleteDatabase(n)); location.reload();`
+- **Files affected:** `lib/store/idb.ts`, `lib/audio/cache.ts`,
+  `app/editor/page.tsx`, `app/launch/page.tsx`; `memory/*`.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓. Browser
+  corruption test still pending (no browser in sandbox).
+
+---
+
 ### 2026-06-11 — Dynamic duration: removed forced/default 30s (explicit-only)
 - **Change made:** Final clip length is now **explicit-only**. When the user
   does NOT name a duration, the app does not force or display 30s — selection

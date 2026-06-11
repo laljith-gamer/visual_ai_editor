@@ -30,6 +30,7 @@ import {
   savePredictions,
   trimCache
 } from "@/lib/store/cache";
+import { friendlyStorageError } from "@/lib/store/idb";
 import { sha1String } from "@/lib/util/hash";
 import { logAi, logSystem, logUser } from "@/lib/log/recorders";
 import { summarizeRecentActivity } from "@/lib/log/summarize";
@@ -453,7 +454,7 @@ export default function Home() {
         setStatus("ready", "Ready to render");
         setProgress(1);
       } catch (err) {
-        const msg = (err as Error).message;
+        const msg = friendlyStorageError(err) ?? (err as Error).message;
         pushMessage({
           role: "assistant",
           content: `Something went wrong: ${msg}`
@@ -1662,7 +1663,7 @@ export default function Home() {
           setProgress(0);
         }
       } catch (err) {
-        const msg = (err as Error).message;
+        const msg = friendlyStorageError(err) ?? (err as Error).message;
         pushMessage({
           role: "assistant",
           content: `Something went wrong: ${msg}`
@@ -1852,7 +1853,7 @@ export default function Home() {
         content: `Rendered ${(blob.size / 1024 / 1024).toFixed(1)}MB ${format} short.`
       });
     } catch (err) {
-      const msg = (err as Error).message;
+      const msg = friendlyStorageError(err) ?? (err as Error).message;
       pushMessage({
         role: "assistant",
         content: `Render failed: ${msg}`
