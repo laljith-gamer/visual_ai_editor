@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (added GitHub Actions CI + CHANGELOG cleanup)
+> Last updated: 2026-06-11 (briefing endpoint retry + fallback resilience fix)
 
 ---
 
@@ -65,6 +65,14 @@ text/JSON calls.
   `lib/vision/caption*`. These need REAL sampled/captioned frame data before
   the local router should execute `plan`/`describe` locally (deliberately
   deferred — see Next best step).
+- **Briefing endpoint is resilient to bad JSON (2026-06-11).**
+  `/api/agent/briefing` now retries ONCE with fewer frames + a stricter
+  compact prompt when the first Gemini response can't be parsed, and falls
+  back to a minimal 200 `BriefingResult` (overview + "Try a smaller window" /
+  "Pick the best parts for me" chips) if the retry also fails — so
+  "Describe what's in this video" no longer dead-ends on *"The video summary
+  came back incomplete…"*. A hard error is returned only when the first
+  Gemini call fails or the request is invalid.
 - **No open PRs blocking** at time of writing.
 
 > Update this section as PRs merge and features ship.

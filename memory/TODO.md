@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (added GitHub Actions CI + CHANGELOG cleanup)
+> Last updated: 2026-06-11 (briefing endpoint retry + fallback resilience fix)
 
 ## High priority
 
@@ -46,6 +46,11 @@
 
 ## Completed
 
+- [x] (2026-06-11) **Briefing endpoint resilience.** `/api/agent/briefing`
+      retries once with fewer frames + a stricter compact prompt when the
+      first Gemini response is unparseable, and degrades to a minimal 200
+      fallback `BriefingResult` instead of a dead-end error. Safe logging
+      (truncated model text, no base64/video). No UI/ffmpeg/scoring changes.
 - [x] (2026-06-11) **Add GitHub Actions CI** (`.github/workflows/ci.yml`).
       Runs `npm run typecheck` + `npm run build` on PRs to `main` and pushes
       to `main` (Ubuntu, Node 20, npm cache, `npm ci`). Lint intentionally
