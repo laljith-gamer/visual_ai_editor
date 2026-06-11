@@ -534,6 +534,72 @@ export default function Home() {
           `Shortcut path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
         );
       }
+      } catch (err) {
+        // Quick-match failures are benign; fall through to cloud.
+        // We log so the dev tester / activity drawer surface the issue.
+        logSession.system(
+          "intent.shortcut.failed",
+          { message: (err as Error).message, userRequest },
+          `Shortcut path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
+        );
+      }
+
+      // ---- v1.8.0 — Local-first gate (flag-gated, default OFF) --------
+      // When NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true, run the model-driven
+      // router on-device BEFORE the cloud planner. In this v1 we only
+      // ACT locally on `chat` turns.
+      try {
+        const { tryLocalFirst, isLocalFirstEnabled } = await import(
+          "@/lib/llm/localFirst"
+        );
+
+        if (isLocalFirstEnabled()) {
+          const s = useEditorStore.getState();
+
+          const lf = await tryLocalFirst({
+            tier: cap.tier,
+            messages: s.messages.map((m) => ({
+              role: m.role,
+              content: m.content
+            })),
+            userText: userRequest,
+            videoDurationSeconds: s.videoMeta?.duration,
+            timelineClipCount: s.highlights.length,
+            briefing: s.lastBriefing
+              ? {
+                  sourceName: s.lastBriefing.sourceName,
+                  bestParts: s.lastBriefing.bestParts
+                }
+              : null
+          });
+
+          if (lf.handled) {
+            pushMessage({ role: "assistant", content: lf.message });
+            setStatus("ready", undefined);
+
+            logSession.system(
+              "localfirst.handled",
+              { kind: lf.kind, model: lf.model },
+              `Answered locally (${lf.kind}, ${lf.model})`
+            );
+
+            setBusy(false);
+            return;
+          }
+
+          logSession.system(
+            "localfirst.fallthrough",
+            { reason: lf.reason },
+            `Local-first deferred to cloud: ${lf.reason}`
+          );
+        }
+      } catch (err) {
+        logSession.system(
+          "localfirst.failed",
+          { message: (err as Error).message },
+          `Local-first path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
+        );
+      }
 
       try {
         setStatus("planning", "Talking to the planner");
@@ -1677,6 +1743,7 @@ export default function Home() {
       videoMeta,
       videoHash,
       memory,
+      cap.tier,
       pushMessage,
       setStatus,
       setProgress,
