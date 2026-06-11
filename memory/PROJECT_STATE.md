@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (briefing endpoint retry + fallback resilience fix)
+> Last updated: 2026-06-11 (local-first high-tier model → Hermes-3-Llama-3.1-8B; prior: briefing retry/fallback, CI added)
 
 ---
 
@@ -49,6 +49,17 @@ text/JSON calls.
       frame-tree/vision data.
     - With the flag OFF or on any fall-through, the existing Gemini/Groq
       flow is byte-for-byte unchanged.
+- **Local WebLLM model tiers re-tiered for agentic/tool-use (2026-06-11).**
+  `LOCAL_LLM` in `lib/config.ts` now selects **Hermes-3-Llama-3.1-8B**
+  (`q4f16_1-MLC`) for the **high** tier — it is on WebLLM's official
+  `functionCallingModelIds` list, so the local tool router gets more reliable
+  JSON tool decisions. **Mid** = Qwen2.5-3B (the old high model), **low** =
+  Llama-3.2-1B (unchanged). An additive `roles` metadata block documents the
+  intent; the runtime tier→model selectors are unchanged. **Gemini is still
+  required** — it remains the cloud planner AND the **vision-briefing**
+  fallback. These local LLMs do language/tool routing only and do **not**
+  replace Gemini vision; Gemini cannot become optional until REAL local
+  frame-tree + caption grounding is wired (no fake vision data added).
 - **Structured briefing follow-ups are DONE (Phase 3).** Briefing chips now
   carry intent via a `BriefingFollowUp` union and run deterministically
   (promote/plan_topic/extract_range) or via chat — no more raw-text

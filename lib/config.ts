@@ -436,13 +436,32 @@ export const AUDIO = {
 // =====================================================================
 
 export const LOCAL_LLM = {
-  /** High tier — better reasoning, larger download (~1.5-2 GB). WebGPU
-   *  desktops with adequate VRAM. */
-  modelHigh: "Qwen2.5-3B-Instruct-q4f16_1-MLC",
-  /** Mid tier — strong small instruct model, ~1 GB. The default target. */
-  modelMid: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
-  /** Low tier — smallest viable instruct model, ~0.8 GB, for lower-VRAM
-   *  WebGPU devices. */
+  /** High tier — AGENTIC / TOOL-USE model.
+   *
+   *  Hermes-3-Llama-3.1-8B is chosen for the high tier because WebLLM
+   *  EXPLICITLY lists the Hermes family in its `functionCallingModelIds`
+   *  (verified against the prebuilt model_list). Hermes-3 is fine-tuned for
+   *  structured function-calling / tool-use, which is exactly what the local
+   *  model-driven tool router (lib/llm/tools.ts) depends on to emit reliable
+   *  JSON tool decisions. This makes the flag-gated local-first agentic path
+   *  meaningfully more dependable than a generic instruct model.
+   *
+   *  Cost/honesty: ~4.9 GB VRAM (q4f16_1) and a multi-GB first-run download —
+   *  so it is only offered on capable WebGPU desktops in the "high" tier.
+   *  Devices that can't run it degrade to the mid/low tier, and ultimately
+   *  to the cloud planner (unchanged). This model handles LANGUAGE/TOOL
+   *  routing only — it does NOT replace Gemini's vision briefing (see below). */
+  modelHigh: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",
+  /** Mid tier — FAST PLANNER fallback.
+   *
+   *  Qwen2.5-3B remains a strong mid-tier choice: solid instruct + JSON
+   *  behaviour at a fraction of the download/VRAM of Hermes-8B. Used when a
+   *  device can't comfortably run the 8B agentic model but still has WebGPU.
+   *  (This was the previous high-tier model — kept, just demoted a tier.) */
+  modelMid: "Qwen2.5-3B-Instruct-q4f16_1-MLC",
+  /** Low tier — TINY FALLBACK for lower-VRAM WebGPU devices (~0.8 GB).
+   *  Smallest viable instruct model; least reliable at free-form JSON, so the
+   *  deterministic engine is always preferred ahead of it. */
   modelLow: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
   /** Sampling — low temperature for stable, near-deterministic planning
    *  JSON. We also pass a fixed seed where supported. */
@@ -451,7 +470,26 @@ export const LOCAL_LLM = {
   seed: 7,
   /** Hard cap on output tokens for a planning turn. The planner JSON is
    *  small; this bounds latency and truncation risk. */
-  maxTokens: 768
+  maxTokens: 768,
+  /** Optional role metadata — names mirror the tier ids above. This is
+   *  documentation + a future allowlist hook ONLY; the runtime tier→model
+   *  selector in lib/llm/engine.ts (and the mirror in lib/llm/tools.ts) still
+   *  reads modelHigh/modelMid/modelLow directly, so adding this stays purely
+   *  additive and keeps the actual runtime simple.
+   *
+   *  VISION CAVEAT: none of these local LLMs replace Gemini's vision
+   *  briefing. Gemini remains the vision fallback until REAL local
+   *  frame-tree + caption grounding (lib/frame-tree, lib/vision/caption*,
+   *  lib/vision-core) is wired in. No fake frame/vision data is fed to the
+   *  local models to fake that capability. */
+  roles: {
+    /** Tool-use / agentic routing (on WebLLM's function-calling list). */
+    agenticToolModel: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",
+    /** Lighter, faster planner fallback when the 8B model is too heavy. */
+    fastPlannerModel: "Qwen2.5-3B-Instruct-q4f16_1-MLC",
+    /** Smallest fallback for low-VRAM WebGPU devices. */
+    tinyFallbackModel: "Llama-3.2-1B-Instruct-q4f16_1-MLC"
+  }
 } as const;
 
 

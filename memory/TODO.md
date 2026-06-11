@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (briefing endpoint retry + fallback resilience fix)
+> Last updated: 2026-06-11 (local-first high-tier model → Hermes-3-Llama-3.1-8B)
 
 ## High priority
 
@@ -46,6 +46,14 @@
 
 ## Completed
 
+- [x] (2026-06-11) **Local-first high-tier model → Hermes-3-Llama-3.1-8B.**
+      `LOCAL_LLM` in `lib/config.ts` now uses Hermes-3-Llama-3.1-8B
+      (`q4f16_1-MLC`) for the high tier (WebLLM function-calling/tool-use
+      model), Qwen2.5-3B for mid, Llama-3.2-1B for low; added additive
+      `roles` metadata. Gemini still required as cloud planner + vision
+      fallback; flag default still OFF; no cloud-flow change; no fake vision
+      data. Full Gemini-optional still needs real frame-tree/caption/vision-
+      core grounding.
 - [x] (2026-06-11) **Briefing endpoint resilience.** `/api/agent/briefing`
       retries once with fewer frames + a stricter compact prompt when the
       first Gemini response is unparseable, and degrades to a minimal 200
@@ -56,7 +64,6 @@
       to `main` (Ubuntu, Node 20, npm cache, `npm ci`). Lint intentionally
       excluded (no ESLint config; `next lint` is interactive). Browser/WebGPU
       verification stays manual.
-
 - [x] (2026-06-11) **Phase 4.5 polish — briefing `plan_topic` preserves
       `sourceId`.** Client-side plan now passes `sources:[action.sourceId]`
       into `normalizePlan`, so multi-source briefings stay grounded on the
