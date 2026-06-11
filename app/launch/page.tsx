@@ -16,6 +16,7 @@ import {
 } from "@/lib/util/uploadHandoff";
 import { probeVideo, sampleFrames } from "@/lib/pipeline/sample";
 import { sha256Blob } from "@/lib/util/hash";
+import { friendlyStorageError } from "@/lib/store/idb";
 import styles from "./launch.module.css";
 
 /** How many preview thumbnails the FrameStrip shows. */
@@ -290,7 +291,10 @@ export default function LaunchPage() {
         router.replace("/editor");
       } catch (err) {
         if (cancelled) return;
-        const msg = (err as Error).message || "Something went wrong.";
+        const msg =
+          friendlyStorageError(err) ||
+          (err as Error).message ||
+          "Something went wrong.";
         setError(msg);
         // Mark whichever step is currently active as errored.
         setSteps((prev) =>

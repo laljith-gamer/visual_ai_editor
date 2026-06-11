@@ -4,9 +4,20 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (dynamic duration — removed forced/default 30s; explicit-only)
+> Last updated: 2026-06-11 (self-healing IndexedDB — fixed "object store not found" crash)
 
 ## High priority
+
+- [ ] **Manual test — IndexedDB self-healing (browser).** (1) Load app so DBs
+      are created. (2) In DevTools → Application → IndexedDB, corrupt a DB
+      (delete the `kv` store, or temporarily rename `storeName` in code, load
+      once, restore). (3) Reload. Confirm: NO "Failed to execute 'transaction'
+      on 'IDBDatabase'" crash; the affected DB is deleted/recreated (one
+      `console.warn: Recovered IndexedDB store: <db> during <op>`);
+      sessions/cache/logging still work; no video/base64/API-key data in
+      logs; if recovery can't complete, the clean "Local browser storage was
+      corrupted…" message shows (not raw IDB text). Emergency reset:
+      `["shorts-studio-sessions","shorts-studio-cache","shorts-studio-logs","shorts-studio-transcripts"].forEach(n=>indexedDB.deleteDatabase(n));location.reload();`
 
 - [ ] **Manual test — dynamic duration (run after deploy).** Verify each case:
       1. "make best moments" → mode=plan, `userSpecifiedDuration=false`, no
@@ -60,6 +71,16 @@
       feature work; no big rewrite.
 
 ## Completed
+
+- [x] (2026-06-11) **Self-healing IndexedDB.** Fixed the "object store was not
+      found" crash: gave each idb store its own DB (transcripts moved to
+      `shorts-studio-transcripts`, removing the dbName collision with the
+      predictions cache) and added `withIdbRecovery` (delete only the affected
+      DB + retry once) in `lib/store/idb.ts`. Public `idbSessions/idbCache/
+      idbLog` API unchanged. Persistent failure shows a clean "clear site
+      data" message. Only affected DB cleared; no video/base64/key logging.
+      typecheck + build ✓. **Browser corruption test still pending** (no
+      browser in sandbox) — see manual case below.
 
 - [x] (2026-06-11) **Dynamic duration — removed forced/default 30s.** Length is
       explicit-only now: no user-named duration → quality-floor selection,

@@ -2,9 +2,16 @@
  * v1.7.3 — IDB cache for transcripts.
  *
  * Keyed by `sourceHash` (sha256 of the video bytes), value is the
- * full Transcript object. We use idb-keyval (already a dep) under a
- * dedicated namespace so transcripts don't collide with the existing
- * predictions cache or the session store.
+ * full Transcript object.
+ *
+ * v1.8.x — moved to its OWN database ("shorts-studio-transcripts") via the
+ * self-healing layer in lib/store/idb.ts. It previously shared the
+ * "shorts-studio-cache" database name with the predictions cache but used a
+ * different object store ("transcripts" vs "kv"). idb-keyval only creates
+ * the first object store a database ever sees, so whichever opened second
+ * hit "object store not found" and crashed the app. A dedicated database
+ * removes that collision entirely; safeGet/Set/Del add missing-store
+ * recovery on top.
  *
  * Cache invalidation:
  *   - Re-uploads of the same file hit by hash.
@@ -15,13 +22,8 @@
  *   - There is no time-based TTL. Transcripts are durable session
  *     artefacts; the user clears them by clearing the library.
  */
-import { createStore, get as idbGet, set as idbSet, del as idbDel } from "idb-keyval";
+import { safeGet, safeSet, safeDel } from "@/lib/store/idb";
 import type { Transcript } from "./types";
-
-// Dedicated IDB store so cache lifecycle stays isolated from the
-// predictions cache. Same database name as the rest of the app to
-// avoid creating a second IDB connection.
-const store = createStore("shorts-studio-cache", "transcripts");
 
 /** Read a transcript for the given hash + model. Returns null on
  *  miss or when the cached entry was produced by a different model. */
@@ -31,7 +33,7 @@ export async function getTranscript(
 ): Promise<Transcript | null> {
   if (!sourceHash) return null;
   try {
-    const cached = (await idbGet(sourceHash, store)) as Transcript | undefined;
+    const cached = await safeGet<Transcript>("transcripts", sourceHash);
     if (!cached) return null;
     if (expectedModel && cached.model !== expectedModel) return null;
     return cached;
@@ -46,7 +48,7 @@ export async function getTranscript(
 export async function saveTranscript(t: Transcript): Promise<void> {
   if (!t.sourceHash) return;
   try {
-    await idbSet(t.sourceHash, t, store);
+    await safeSet("transcripts", t.sourceHash, t);
   } catch {
     // Quota errors fall through silently; the user just re-transcribes
     // next visit. Better than crashing.
@@ -55,7 +57,7 @@ export async function saveTranscript(t: Transcript): Promise<void> {
 
 export async function clearTranscript(sourceHash: string): Promise<void> {
   try {
-    await idbDel(sourceHash, store);
+    await safeDel("transcripts", sourceHash);
   } catch {
     /* ignore */
   }
