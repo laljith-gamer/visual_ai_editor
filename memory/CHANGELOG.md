@@ -17,7 +17,36 @@
 
 ---
 
-### 2026-06-11 — Add GitHub Actions CI + CHANGELOG formatting cleanup
+### 2026-06-11 — Briefing endpoint: retry-once + minimal fallback (resilience fix)
+- **Change made:** Fixed the live bug where "Describe what's in this video"
+  could dead-end on *"The video summary came back incomplete…"* whenever
+  Gemini reached the endpoint but returned text `extractJsonObject()` couldn't
+  parse (truncated/wrapped JSON from thinking-heavy/overloaded models).
+  `app/api/agent/briefing/route.ts` now:
+  1. **Retries once** when the first parse fails — with **fewer frames**
+     (`selectRetryFrames`: first + last + evenly-spaced middle, capped at
+     `RETRY_FRAME_CAP = 8`) and a **stricter, compact prompt** (`STRICT_SYSTEM`:
+     JSON-only, overview ≤ 40 words, ≤ 3 best parts, ≤ 3 follow-ups) at a
+     higher output cap (`RETRY_MAX_OUTPUT_TOKENS = 3072`).
+  2. **Degrades to a minimal fallback `BriefingResult`** (HTTP 200, no `error`)
+     when the retry also can't be parsed OR the retry call throws — so the UI
+     renders a real briefing card (overview + "Try a smaller window" /
+     "Pick the best parts for me" chips) instead of only an error bubble.
+  3. **Hard error only** when the FIRST Gemini call fails or the request is
+     invalid (unchanged).
+  4. **Safe logging:** parse failures log the model text truncated to 300
+     chars + its length via `console.warn`; never image/base64 or video bytes.
+  - Extracted helpers: `selectRetryFrames`, `buildBriefingPrompt`,
+    `parseBriefingJson`, `framesToImages`, `fallbackBriefing`, and two log
+    helpers. No UI, ffmpeg/render/scoring, or Phase 5 changes. Video privacy
+    unchanged — only the already-sampled frames are sent; no new upload path.
+- **Files affected:** `app/api/agent/briefing/route.ts`, `memory/*`.
+- **Reason:** Make the briefing resilient to incomplete/non-JSON Gemini output.
+- **Validation:** `npm install` ✓, `npm run typecheck` ✓, `npm run build` ✓.
+  CI (typecheck + build) will run on the PR. Browser/WebGPU + live-Gemini
+  manual testing still required (no Gemini key / GPU in the build sandbox).
+
+
 - **Change made:**
   1. **CI workflow added** (`.github/workflows/ci.yml`). Runs on
      `pull_request` targeting `main` and on `push` to `main`: Ubuntu latest,
