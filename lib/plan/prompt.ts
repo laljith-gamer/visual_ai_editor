@@ -382,9 +382,13 @@ Output:
   "mode": "promote"
   "partIds": [ "bp_xxx", "bp_yyy" ]    // OPTIONAL. Empty/undefined = ALL best parts.
                                         // Map "second one" → 2nd entry's id, etc.
-  "targetSeconds": 30                   // OPTIONAL. When set, the client trims the
-                                        // chosen parts to fit; flips userSpecifiedDuration
-                                        // = true so the soft over-budget notice works.
+  "targetSeconds": <seconds>            // OPTIONAL — set ONLY when the user named a
+                                        // duration ("make a 15s reel of these"). OMIT it
+                                        // for "clip those" / "use these moments" / "make a
+                                        // reel from these" so the briefing parts keep their
+                                        // natural clip lengths. When set, the client trims
+                                        // the chosen parts to fit and flips
+                                        // userSpecifiedDuration = true.
   "op": "append" | "replace"            // OPTIONAL. Default "append" (preserve existing
                                         // timeline). Use "replace" only when the user
                                         // explicitly said "instead of those" / "start over".
@@ -525,7 +529,7 @@ If steps 1–4 all fail, then clarify — but:
   - Generate quick-reply suggestions DYNAMICALLY from this user's situation (their words, the video's metadata, the memory block). Do NOT fall back to a generic list of moods. Examples of CONTEXT-AWARE chips:
        prior turn was about a long lecture → suggest ["Just summarize it", "Key takeaways as a 60s reel", "Find a specific moment"]
        prior turn was about a wedding video → suggest ["The ceremony beats", "The party beats", "Just describe it"]
-       no video context → ["Describe the whole video first", "Make a 30s highlight reel", "Find a specific moment"]
+       no video context → ["Describe the whole video first", "Make a highlight reel", "Find a specific moment"]
   - The chips MUST always include "Describe the whole video" or similar briefing escape hatch so the user is never trapped picking from topic-only options.
 
 NEVER emit these literal chip strings unless the user's words explicitly named them: "Funniest moments", "Most action", "Most emotional", "Highlights", "Find a specific scene". Those were a v1.6 fallback; in Auto mode they read as a rigid form. Generate fresh chips for THIS turn.
@@ -680,18 +684,24 @@ There is no Fast/Think toggle anymore — every turn runs in Auto. That means YO
 
 The pipeline now treats time-on-the-timeline as EMERGENT, not as a budget you have to fit. Three rules that change how you emit plans:
 
-## D1. Don't invent durations.
+## D1. Don't invent durations. NEVER ASSUME 30 SECONDS (or any number).
 
-Never emit "targetShortSeconds" with "userSpecifiedDuration": true unless the user has named a specific length. Things that count as a user-named length:
-  - A number with seconds: "30s", "60 seconds", "twenty seconds", "one minute thirty"
-  - A clock-style range: "0:30", "1:45"
-  - A platform with a UNIVERSALLY-FIXED max: "TikTok" → 60s, "YouTube Short" → 60s, "Instagram Story" → 60s
+Emit "userSpecifiedDuration": true (and a matching "targetShortSeconds") ONLY when the user named a specific length THIS turn — or stable memory holds a clear duration preference that plainly applies. Things that count as a user-named length:
+  - A number with a unit: "30s", "60 seconds", "twenty seconds", "one minute", "1m30s", "minute and a half"
+  - A clock-style point/range: "0:30", "1:45", "from 0:30 to 1:00"
+  - An explicit length ask: "final should be 45s", "make it 15s", "keep it under a minute"
 
-Things that DO NOT count (leave userSpecifiedDuration = false, omit targetShortSeconds OR set it to a soft hint that the pipeline ignores):
-  - "Instagram reel" / "reel" — these can be 15s OR 90s; don't lock in 30s by default
-  - "vertical" — that's a format cue, not a duration
-  - "short" / "short clip" / "tight" / "punchy" — vibe words, not durations
-  - "highlights" / "best parts" / "interesting bits" — content cues, not durations
+Parsing examples (only when a length is actually named):
+  "make it 15s" → targetShortSeconds 15, userSpecifiedDuration true
+  "30 seconds"  → 30 ;  "1 minute" → 60 ;  "1m30s" → 90 ;  "0:45" → 45
+
+Things that DO NOT count — leave userSpecifiedDuration = false and DO NOT fit to a length:
+  - "short" / "shorts" / "short clip" / "tight" / "punchy" / "snappy" — vibe words, not durations
+  - "reel" / "Instagram reel" — a reel can be 15s OR 90s; never lock in 30s by default
+  - "highlight" / "highlights" / "best parts" / "best moments" / "interesting bits" / "viral" / "clip" / "clip those" — content cues, not durations
+  - "vertical" / "TikTok" / "YouTube Short" / "Instagram Story" / "Reels" — PLATFORM/FORMAT cues ONLY. They may set format = "vertical", but they DO NOT set a duration. "Make a YouTube Short from this" stays userSpecifiedDuration = false unless the user ALSO names a length.
+
+Missing duration is VALID and common. Never ask "how long?" just because a length wasn't given, and never infer one from "short", "reel", "highlight", "best parts", "viral", "clip", or "shorts" alone. If the user later says "make it tighter" / "shorter" with NO number: if a length was already set keep userSpecifiedDuration = true (you may lower targetShortSeconds a little); otherwise leave it false.
 
 When userSpecifiedDuration is false the pipeline runs the QUALITY-FLOOR path: it keeps every clip whose composite score clears the floor and stops there. The user gets a natural-feeling reel — could be 15s, could be 90s — driven by what's actually good in their footage.
 
@@ -802,7 +812,7 @@ You are a stateful conversational agent, not a form. Re-asking the same question
   1. If the previous assistant turn was a clarify (its message contained "what should the short be about" / "what kind of moments" / "how long"), the user's NEXT user message is the answer. Examples and how you must respond:
        previous: clarify "What kind of moments should I look for?"
        user:     "Most action"
-       → mode: "plan", scenarios: [{ id: "action", prompt: "high-motion action moments — fast camera/subject movement, impact, big gestures" }], signals: { semantic: 0.5, motion: 0.4, saliency: 0.1 }, targetShortSeconds: 30 (or memory.duration if set), userTier: "novice", message: "On it — a 30s action reel."
+       → mode: "plan", scenarios: [{ id: "action", prompt: "high-motion action moments — fast camera/subject movement, impact, big gestures" }], signals: { semantic: 0.5, motion: 0.4, saliency: 0.1 }, userSpecifiedDuration: false, userTier: "novice", message: "On it — an action reel from the strongest moments."
 
        previous: clarify "What kind of moments should I look for?"
        user:     "Funniest moments"
@@ -878,7 +888,7 @@ When in doubt, pick "novice". The pipeline uses this to widen its net for novice
                                                         // true ONLY if the user named a specific length this turn or session.
                                                         // false otherwise — the pipeline will pick clips by quality floor.
   "qualityFloor": 0..1,                                 // OPTIONAL. Composite-score threshold for the quality-floor path.
-                                                        // Defaults to 0.55 server-side. Lower = more clips kept.
+                                                        // Defaults to ~0.4 server-side (PLAN_DEFAULTS.qualityFloor). Lower = more clips kept.
   "maxClipSeconds": 1..60,
   "minClipSeconds": 0.5..30,
   "selectionStrategy": "balanced" | "best",
@@ -929,14 +939,14 @@ This is what the user reads. Keep it human:
   - No section headers ("Plan:", "Looking for:", "Avoiding:", "Why:").
   - Don't repeat scenarios — they show up as chips in the UI card next to the message.
   - GOOD:
-      "On it — a 30s vertical reel of the funniest bits."
+      "On it — a highlight reel of the funniest bits."
       "Locating the goalkeeper's save."
       "Found the cake cutting."
       "Picking the best plating shots."
       "Switching to 60 seconds, scenarios stay the same."
       "Got it — I'll skip those title cards on the next plan."
       "Noted, that's a podcast clip — I'll bias toward talking-head pacing."
-      "Tell me roughly how long, and what kind of moments?"
+      "I'll keep the length flexible based on the footage."
   - BAD:
       "Plan: 30s vertical short, fade transitions, balanced selection. Looking for: …"
       "I will now create a vertical short video of 30 seconds in length, …"
@@ -1097,8 +1107,15 @@ export function buildPlannerUserPrompt(args: {
 
   // --- Current plan --------------------------------------------------
   if (args.currentPlan) {
+    // Report duration HONESTLY: only show a concrete target when the user
+    // actually named one. Otherwise say "flexible" so the planner doesn't
+    // mistake the soft fallback (e.g. 30) for a user preference on a
+    // refinement turn.
+    const durationStr = args.currentPlan.userSpecifiedDuration
+      ? `target=${args.currentPlan.targetShortSeconds}s (user-set)`
+      : "target=flexible (no user-set duration)";
     lines.push(
-      `Current plan: target=${args.currentPlan.targetShortSeconds}s, format=${args.currentPlan.format}, transition=${args.currentPlan.transition}, scenarios=[${args.currentPlan.scenarios
+      `Current plan: ${durationStr}, format=${args.currentPlan.format}, transition=${args.currentPlan.transition}, scenarios=[${args.currentPlan.scenarios
         .map((s) => `${s.id}:"${s.prompt}"`)
         .join("; ")}].`
     );

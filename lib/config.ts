@@ -74,6 +74,12 @@ export const HIGHLIGHT_SCORING = {
  *  emit explicit values for at least scenarios — if those are missing
  *  we go to CLARIFY mode rather than substituting. */
 export const PLAN_DEFAULTS = {
+  /** v1.7.1 — SOFT, NON-ENFORCED fallback only. The pipeline NEVER fits to
+   *  this number unless `EditPlan.userSpecifiedDuration === true` (i.e. the
+   *  user explicitly named a length). When the user did NOT name a duration,
+   *  selection runs the quality-floor path and total length is emergent —
+   *  this value is just a placeholder the schema still requires. Do not
+   *  surface it as "30s" in the UI or assistant copy for no-duration plans. */
   targetShortSeconds: 30,
   maxClipSeconds: 8,
   minClipSeconds: 1.5,

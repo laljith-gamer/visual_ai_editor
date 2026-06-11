@@ -311,7 +311,12 @@ function freshState() {
 function memoryFromPlan(prev: SessionMemory, plan: EditPlan): SessionMemory {
   return {
     ...prev,
-    duration: plan.targetShortSeconds,
+    // v1.8.x — only persist a duration preference when the user actually
+    // named one. For no-duration plans `targetShortSeconds` is just the
+    // soft, non-enforced fallback (PLAN_DEFAULTS, e.g. 30) — persisting it
+    // would resurface a phantom "30s preference" in the planner's memory
+    // block on later turns. Keep the previous value (usually undefined).
+    duration: plan.userSpecifiedDuration ? plan.targetShortSeconds : prev.duration,
     format: plan.format,
     styles: Array.from(new Set([...(prev.styles || []), ...plan.styles])).slice(0, 8),
     skip: Array.from(new Set([...(prev.skip || []), ...plan.avoid])).slice(0, 8)

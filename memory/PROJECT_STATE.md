@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (CLOUD_PROVIDER_ORDER env toggle; provider circuit-open no longer blocks Gemini/Groq fallback)
+> Last updated: 2026-06-11 (dynamic duration — removed forced/default 30s; explicit-only)
 
 ---
 
