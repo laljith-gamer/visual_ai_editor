@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-10 (clarify briefing guard + synth narrowing)
+> Last updated: 2026-06-11 (editor syntax/typecheck fix)
 
 ---
 
@@ -23,6 +23,8 @@ text/JSON calls.
 ## 3. Current status
 
 - Version: **1.7.9** (see `package.json`).
+- Latest validation: `npm.cmd run typecheck` passes after removing a duplicated
+  quick-shortcut `catch` block in `app/editor/page.tsx`.
 - Core conversational editing pipeline is working: plan → sample → score →
   detect windows → verify → assemble → render.
 - Active line of work: **making the client local-first** (offline reasoning

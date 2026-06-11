@@ -17,6 +17,16 @@
 
 ---
 
+### 2026-06-11 - Editor syntax/typecheck fix
+- **Change made:** Removed a duplicated quick-shortcut `catch` block in
+  `app/editor/page.tsx` that caused TypeScript parser errors and cascade
+  declaration errors.
+- **Files affected:** `app/editor/page.tsx`, `memory/PROJECT_STATE.md`,
+  `memory/TODO.md`, `memory/CHANGELOG.md`.
+- **Reason:** Restore a clean `tsc --noEmit` check without changing editor
+  behavior.
+- **Validation:** `npm.cmd run typecheck` passes.
+
 ### 2026-06-10 — Clarify-branch briefing guard + narrowed plan synthesis
 - **Change made:** (Bug 1) The `mode === "clarify"` branch in
   `app/api/agent/route.ts` now also synthesizes a briefing-grounded plan

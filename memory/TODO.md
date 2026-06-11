@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-10 (clarify briefing guard)
+> Last updated: 2026-06-11 (editor syntax/typecheck fix)
 
 ## High priority
 
@@ -36,6 +36,8 @@
 
 ## Completed
 
+- [x] (2026-06-11) Removed a duplicated quick-shortcut `catch` block in
+      `app/editor/page.tsx` that broke TypeScript parsing; typecheck passes.
 - [x] (2026-06-10) Clarify-branch briefing guard + narrowed synthesizeVaguePlan
       (Bug 1 + Bug 2): the LLM's own `mode:"clarify"` now respects briefing
       context, and the fallback uses ONE grounded scenario instead of diluting

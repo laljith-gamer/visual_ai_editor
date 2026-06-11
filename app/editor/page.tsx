@@ -534,16 +534,6 @@ export default function Home() {
           `Shortcut path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
         );
       }
-      } catch (err) {
-        // Quick-match failures are benign; fall through to cloud.
-        // We log so the dev tester / activity drawer surface the issue.
-        logSession.system(
-          "intent.shortcut.failed",
-          { message: (err as Error).message, userRequest },
-          `Shortcut path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
-        );
-      }
-
       // ---- v1.8.0 — Local-first gate (flag-gated, default OFF) --------
       // When NEXT_PUBLIC_LOCAL_FIRST_EDITOR=true, run the model-driven
       // router on-device BEFORE the cloud planner. In this v1 we only
