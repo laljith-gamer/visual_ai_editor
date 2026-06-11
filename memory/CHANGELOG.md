@@ -17,6 +17,30 @@
 
 ---
 
+### 2026-06-11 — Add CLOUD_PROVIDER_ORDER env var to toggle/re-order providers
+- **Change made:** Added an optional **server-only** `CLOUD_PROVIDER_ORDER`
+  env var so you can toggle between providers (and set fallback order)
+  without code changes or removing API keys. Comma-separated provider names
+  (`openrouter | gemini | groq`); e.g. `CLOUD_PROVIDER_ORDER=gemini` forces
+  Gemini only, `=openrouter` forces OpenRouter only, `=gemini,openrouter`
+  prefers Gemini with OpenRouter fallback. Unknown/duplicate tokens are
+  ignored; unset → the config default (`openrouter,gemini,groq`).
+  - `lib/env.ts` — read `CLOUD_PROVIDER_ORDER` into `serverEnv` (server-only,
+    not `NEXT_PUBLIC_*`).
+  - `lib/providers/cloud.ts` — new `configuredOrder()` (env override →
+    config default, validated/deduped) feeds `providerOrder()`. A provider is
+    still only used if its key is set; Groq stays text-only (skipped for
+    vision); per-provider circuit recording unchanged.
+  - `.env.example` — documented the toggle with examples.
+- **Files affected:** `lib/env.ts`, `lib/providers/cloud.ts`, `.env.example`;
+  `memory/*`.
+- **Reason:** Let the operator switch between OpenRouter and Gemini (or pin a
+  single provider) at deploy time without editing code.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓. No browser WebLLM;
+  keys remain server-only; no new logging.
+
+---
+
 ### 2026-06-11 — Removed browser WebLLM; cloud routing via server-side OpenRouter
 - **Change made:** Retired the in-browser WebLLM / WebGPU local language +
   tool-routing path and replaced cloud language/tool routing with a

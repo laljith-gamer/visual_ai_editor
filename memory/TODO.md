@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (removed browser WebLLM; server-side OpenRouter provider)
+> Last updated: 2026-06-11 (added CLOUD_PROVIDER_ORDER env toggle for cloud providers)
 
 ## High priority
 
@@ -46,6 +46,11 @@
 
 ## Completed
 
+- [x] (2026-06-11) **Added `CLOUD_PROVIDER_ORDER` env toggle.** Server-only
+      comma-separated var (openrouter|gemini|groq) overrides the config
+      provider order so you can switch between OpenRouter and Gemini (or pin
+      one) without code changes. `lib/env.ts` + `configuredOrder()` in
+      `lib/providers/cloud.ts`; `.env.example` documented. typecheck + build ✓.
 - [x] (2026-06-11) **Removed browser WebLLM; server-side OpenRouter provider.**
       Deleted `lib/llm/*` + `@mlc-ai/web-llm` + `LOCAL_LLM`/`LOCAL_FIRST` +
       `NEXT_PUBLIC_LOCAL_FIRST_EDITOR` + the editor's local-first gate +

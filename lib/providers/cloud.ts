@@ -3,13 +3,17 @@
 //
 // SERVER-SIDE cloud provider DISPATCHER.
 //
-// Walks CLOUD_PROVIDER_ORDER (config) and uses the first provider whose
+// Walks the provider preference order and uses the first provider whose
 // key is configured, falling back to the next on failure. This is the
 // single place the app decides "which cloud model answers this turn":
 //
 //   OpenRouter (if OPENROUTER_API_KEY)
 //     → Gemini direct (if GEMINI_API_KEY)
 //       → Groq (text only; if GROQ_API_KEY)
+//
+// The order/default comes from CLOUD_PROVIDER_ORDER (config) but can be
+// overridden at runtime with the CLOUD_PROVIDER_ORDER env var (server-only)
+// to toggle/re-order providers without code changes (see configuredOrder).
 //
 // Why a dispatcher: the browser WebLLM path was removed, so language/tool
 // routing is now cloud-only. Keeping Gemini/Groq as fallbacks means an
@@ -57,7 +61,44 @@ function groqConfigured(): boolean {
   return Boolean(serverEnv.GROQ_API_KEY);
 }
 
-/** Providers available for this request, in preference order. Groq is
+/** All known provider names, used to validate the env override. */
+const VALID_PROVIDERS: readonly Provider[] = ["openrouter", "gemini", "groq"];
+
+/**
+ * The effective provider PREFERENCE ORDER (before availability filtering).
+ *
+ * Reads the optional `CLOUD_PROVIDER_ORDER` env var (server-only,
+ * comma-separated) so you can toggle/re-order providers WITHOUT code changes
+ * or removing API keys, e.g.:
+ *   CLOUD_PROVIDER_ORDER=gemini             → Gemini only
+ *   CLOUD_PROVIDER_ORDER=openrouter         → OpenRouter only
+ *   CLOUD_PROVIDER_ORDER=gemini,openrouter  → Gemini first, OpenRouter fallback
+ *
+ * Tokens are trimmed/lower-cased; unknown or duplicate names are ignored.
+ * When the env var is unset or yields nothing valid, the config default
+ * (CLOUD_PROVIDER_ORDER) is used.
+ */
+function configuredOrder(): readonly Provider[] {
+  const raw = serverEnv.CLOUD_PROVIDER_ORDER;
+  if (!raw) return CLOUD_PROVIDER_ORDER;
+
+  const seen = new Set<Provider>();
+  const parsed: Provider[] = [];
+  for (const token of raw.split(",")) {
+    const name = token.trim().toLowerCase();
+    if (
+      (VALID_PROVIDERS as readonly string[]).includes(name) &&
+      !seen.has(name as Provider)
+    ) {
+      seen.add(name as Provider);
+      parsed.push(name as Provider);
+    }
+  }
+  return parsed.length > 0 ? parsed : CLOUD_PROVIDER_ORDER;
+}
+
+/** Providers available for this request, in preference order. The order
+ *  comes from configuredOrder() (env override → config default). Groq is
  *  text-only, so it is excluded from vision requests. */
 function providerOrder(opts: { vision: boolean }): Provider[] {
   const available: Record<Provider, boolean> = {
@@ -65,7 +106,7 @@ function providerOrder(opts: { vision: boolean }): Provider[] {
     gemini: hasGemini(),
     groq: opts.vision ? false : groqConfigured()
   };
-  return CLOUD_PROVIDER_ORDER.filter(
+  return configuredOrder().filter(
     (p): p is Provider => available[p as Provider]
   );
 }
