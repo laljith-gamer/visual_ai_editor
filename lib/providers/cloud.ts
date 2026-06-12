@@ -5,34 +5,18 @@
 //
 // Walks the provider preference order and uses the first provider whose
 // key is configured, falling back to the next on failure. This is the
-// single place the app decides "which cloud model answers this turn":
+// single place the app decides "which cloud model answers this turn".
 //
-//   OpenRouter (if OPENROUTER_API_KEY)
-//     → Gemini direct (if GEMINI_API_KEY)
-//       → Groq (text only; if GROQ_API_KEY)
-//
-// The order/default comes from CLOUD_PROVIDER_ORDER (config) but can be
-// overridden at runtime with the CLOUD_PROVIDER_ORDER env var (server-only)
-// to toggle/re-order providers without code changes (see configuredOrder).
-//
-// Why a dispatcher: the browser WebLLM path was removed, so language/tool
-// routing is now cloud-only. Keeping Gemini/Groq as fallbacks means an
-// OpenRouter outage (or no OpenRouter key) degrades gracefully instead of
-// breaking the app.
-//
-// Circuit breaker (owned HERE, not at the route): before attempting, we
-// SKIP any provider whose circuit is open and move to the next configured
-// provider, then record success/failure on THAT provider's circuit. This is
-// what lets an OpenRouter outage (open circuit) fall back to Gemini/Groq
-// instead of the route returning 503 up front. Routes must therefore NOT do
-// a blocking provider-circuit pre-check (see lib/ratelimit/index.ts).
+// Default order remains OpenRouter → Gemini → Groq. Deployments can override
+// the order with CLOUD_PROVIDER_ORDER. A custom OpenAI-compatible provider is
+// also supported for non-OpenRouter gateways when explicitly configured.
 //
 // Privacy/security: providers themselves never log prompts/keys/images.
 // Full video bytes never leave the browser — vision calls carry only the
 // already-sampled frames the client chose to send.
 // =====================================================================
 
-import { hasGemini, hasOpenRouter, serverEnv } from "@/lib/env";
+import { hasCustomOpenAI, hasGemini, hasOpenRouter, serverEnv } from "@/lib/env";
 import {
   checkCircuit,
   recordFailure,
@@ -46,12 +30,19 @@ import {
   openrouterJson,
   openrouterMultiImageJson
 } from "@/lib/providers/openrouter";
+import {
+  customOpenaiJson,
+  customOpenaiMultiImageJson,
+  customOpenaiVisionEnabled
+} from "@/lib/providers/customOpenai";
+
+type CloudProvider = Provider | "custom_openai";
 
 export interface CloudJsonResult {
   /** Raw model text — caller parses with extractJsonObject(). */
   raw: string;
   /** Which provider actually produced the result. */
-  provider: Provider;
+  provider: CloudProvider;
   /** True when a non-primary provider answered (caller may surface a note). */
   usedFallback: boolean;
 }
@@ -69,89 +60,80 @@ function groqConfigured(): boolean {
 }
 
 /** All known provider names, used to validate the env override. */
-const VALID_PROVIDERS: readonly Provider[] = ["openrouter", "gemini", "groq"];
+const VALID_PROVIDERS: readonly CloudProvider[] = [
+  "openrouter",
+  "custom_openai",
+  "gemini",
+  "groq"
+];
+
+function defaultOrder(): readonly CloudProvider[] {
+  return CLOUD_PROVIDER_ORDER;
+}
 
 /**
  * The effective provider PREFERENCE ORDER (before availability filtering).
  *
- * Reads the optional `CLOUD_PROVIDER_ORDER` env var (server-only,
- * comma-separated) so you can toggle/re-order providers WITHOUT code changes
- * or removing API keys, e.g.:
- *   CLOUD_PROVIDER_ORDER=gemini             → Gemini only
- *   CLOUD_PROVIDER_ORDER=openrouter         → OpenRouter only
- *   CLOUD_PROVIDER_ORDER=gemini,openrouter  → Gemini first, OpenRouter fallback
- *
- * Tokens are trimmed/lower-cased; unknown or duplicate names are ignored.
- * When the env var is unset or yields nothing valid, the config default
- * (CLOUD_PROVIDER_ORDER) is used.
+ * Reads optional CLOUD_PROVIDER_ORDER (server-only, comma-separated), e.g.:
+ *   CLOUD_PROVIDER_ORDER=custom_openai        → custom provider only
+ *   CLOUD_PROVIDER_ORDER=custom_openai,gemini → custom first, Gemini fallback
+ *   CLOUD_PROVIDER_ORDER=gemini               → Gemini only
+ *   CLOUD_PROVIDER_ORDER=openrouter           → OpenRouter only
  */
-function configuredOrder(): readonly Provider[] {
+function configuredOrder(): readonly CloudProvider[] {
   const raw = serverEnv.CLOUD_PROVIDER_ORDER;
-  if (!raw) return CLOUD_PROVIDER_ORDER;
+  if (!raw) return defaultOrder();
 
-  const seen = new Set<Provider>();
-  const parsed: Provider[] = [];
+  const seen = new Set<CloudProvider>();
+  const parsed: CloudProvider[] = [];
   for (const token of raw.split(",")) {
     const name = token.trim().toLowerCase();
     if (
       (VALID_PROVIDERS as readonly string[]).includes(name) &&
-      !seen.has(name as Provider)
+      !seen.has(name as CloudProvider)
     ) {
-      seen.add(name as Provider);
-      parsed.push(name as Provider);
+      seen.add(name as CloudProvider);
+      parsed.push(name as CloudProvider);
     }
   }
-  return parsed.length > 0 ? parsed : CLOUD_PROVIDER_ORDER;
+  return parsed.length > 0 ? parsed : defaultOrder();
 }
 
-/** Providers available for this request, in preference order. The order
- *  comes from configuredOrder() (env override → config default). Groq is
- *  text-only, so it is excluded from vision requests. */
-function providerOrder(opts: { vision: boolean }): Provider[] {
-  const available: Record<Provider, boolean> = {
+/** Providers available for this request, in preference order. Groq is
+ *  text-only. Custom OpenAI-compatible vision is opt-in because not every
+ *  compatible gateway accepts image_url content. */
+function providerOrder(opts: { vision: boolean }): CloudProvider[] {
+  const available: Record<CloudProvider, boolean> = {
     openrouter: hasOpenRouter(),
+    custom_openai: hasCustomOpenAI() && (!opts.vision || customOpenaiVisionEnabled()),
     gemini: hasGemini(),
     groq: opts.vision ? false : groqConfigured()
   };
   return configuredOrder().filter(
-    (p): p is Provider => available[p as Provider]
+    (p): p is CloudProvider => available[p as CloudProvider]
   );
 }
 
 /** The provider the app prefers right now (first available in order). Used
- *  for fallback messaging. NOTE: this is NOT used to gate the request — the
- *  dispatcher attempts the full circuit-filtered order regardless, so a
- *  circuit-open primary never blocks the Gemini/Groq fallback. */
-export function primaryProvider(opts: { vision?: boolean } = {}): Provider {
+ *  for fallback messaging. */
+export function primaryProvider(opts: { vision?: boolean } = {}): CloudProvider {
   const order = providerOrder({ vision: opts.vision ?? false });
   return order[0] ?? "gemini";
 }
 
-/**
- * The configured provider order, filtered by circuit state: providers whose
- * circuit is OPEN are skipped so we don't waste a call on a known-down
- * provider and instead fall straight through to the next one.
- *
- * If EVERY configured provider's circuit is open, we return the full
- * configured order as a best-effort last resort (each attempt still records
- * success/failure, so a recovered provider closes its own circuit and the
- * system self-heals) rather than failing the request outright.
- *
- * Returns empty ONLY when no provider is configured for this request type.
- */
-async function attemptableOrder(opts: { vision: boolean }): Promise<Provider[]> {
+/** Returns configured providers after skipping open circuits when there is
+ *  more than one choice. The custom provider is recorded under its own key via
+ *  a string cast; the circuit store itself is string-keyed at runtime. */
+async function attemptableOrder(opts: { vision: boolean }): Promise<CloudProvider[]> {
   const configured = providerOrder(opts);
-  // Nothing to skip toward — return as-is (best-effort even if its circuit
-  // is open, since there is no alternative to fall back to).
   if (configured.length <= 1) return configured;
 
   const states = await Promise.all(
     configured.map(async (p) => {
       try {
-        const c = await checkCircuit(p);
+        const c = await checkCircuit(p as Provider);
         return { provider: p, closed: c.closed };
       } catch {
-        // If circuit state can't be read, treat the provider as attemptable.
         return { provider: p, closed: true };
       }
     })
@@ -160,11 +142,6 @@ async function attemptableOrder(opts: { vision: boolean }): Promise<Provider[]> 
   return closed.length > 0 ? closed : configured;
 }
 
-/**
- * Text JSON completion with provider fallback. Used by /api/agent for the
- * planner. Throws the LAST error only when every available provider fails,
- * so the caller's existing transient-error handling still works.
- */
 export async function cloudPlannerJson(
   system: string,
   user: string,
@@ -178,12 +155,11 @@ export async function cloudPlannerJson(
     const provider = order[i];
     try {
       const raw = await callText(provider, system, user, options);
-      await recordSuccess(provider).catch(() => {});
+      await recordSuccess(provider as Provider).catch(() => {});
       return { raw, provider, usedFallback: i > 0 };
     } catch (err) {
       lastErr = err;
-      await recordFailure(provider).catch(() => {});
-      // try the next provider in the chain
+      await recordFailure(provider as Provider).catch(() => {});
     }
   }
   throw lastErr instanceof Error
@@ -191,12 +167,6 @@ export async function cloudPlannerJson(
     : new Error(String(lastErr ?? "All chat providers failed"));
 }
 
-/**
- * Vision (multi-image) JSON completion with provider fallback. Used by the
- * briefing + clip routes. OpenRouter is used only when its configured model
- * is multimodal (the default is); otherwise it errors and we fall back to
- * direct Gemini. Throws the last error when every vision provider fails.
- */
 export async function cloudVisionJson(
   prompt: string,
   images: Array<{ base64: string; mimeType?: string }>,
@@ -210,11 +180,11 @@ export async function cloudVisionJson(
     const provider = order[i];
     try {
       const raw = await callVision(provider, prompt, images, options);
-      await recordSuccess(provider).catch(() => {});
+      await recordSuccess(provider as Provider).catch(() => {});
       return { raw, provider, usedFallback: i > 0 };
     } catch (err) {
       lastErr = err;
-      await recordFailure(provider).catch(() => {});
+      await recordFailure(provider as Provider).catch(() => {});
     }
   }
   throw lastErr instanceof Error
@@ -222,12 +192,8 @@ export async function cloudVisionJson(
     : new Error(String(lastErr ?? "All vision providers failed"));
 }
 
-// ---------------------------------------------------------------------
-// Per-provider adapters
-// ---------------------------------------------------------------------
-
 function callText(
-  provider: Provider,
+  provider: CloudProvider,
   system: string,
   user: string,
   options: TextOptions
@@ -235,6 +201,8 @@ function callText(
   switch (provider) {
     case "openrouter":
       return openrouterJson(system, user, { temperature: options.temperature });
+    case "custom_openai":
+      return customOpenaiJson(system, user, { temperature: options.temperature });
     case "gemini":
       return geminiJson(system, user, { temperature: options.temperature });
     case "groq":
@@ -243,7 +211,7 @@ function callText(
 }
 
 function callVision(
-  provider: Provider,
+  provider: CloudProvider,
   prompt: string,
   images: Array<{ base64: string; mimeType?: string }>,
   options: VisionOptions
@@ -254,14 +222,17 @@ function callVision(
         temperature: options.temperature,
         maxTokens: options.maxOutputTokens
       });
+    case "custom_openai":
+      return customOpenaiMultiImageJson(prompt, images, {
+        temperature: options.temperature,
+        maxTokens: options.maxOutputTokens
+      });
     case "gemini":
       return geminiMultiImageJson(prompt, images, {
         temperature: options.temperature,
         maxOutputTokens: options.maxOutputTokens
       });
     case "groq":
-      // Groq is text-only; providerOrder excludes it for vision. Guard
-      // anyway so the switch is exhaustive.
       throw new Error("Groq does not support vision input");
   }
 }
