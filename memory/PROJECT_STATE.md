@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (self-healing IndexedDB — fixed "object store not found" crash)
+> Last updated: 2026-06-11 (documented OpenRouter-only pin → openai/gpt-5.5-pro, no fallback)
 
 ---
 
