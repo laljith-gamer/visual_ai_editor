@@ -17,6 +17,37 @@
 
 ---
 
+### 2026-06-11 — Document OpenRouter-only pin (single model: openai/gpt-5.5-pro)
+- **Change made (config/docs only, no code logic change):** `.env.example`
+  now documents a "pin everything to OpenRouter + one model" setup:
+  `CLOUD_PROVIDER_ORDER=openrouter` and all four model slugs
+  (`OPENROUTER_DEFAULT_MODEL` / `CHEAP` / `PREMIUM` / `OSS`) set to
+  `openai/gpt-5.5-pro`. Added a note: this is for OpenRouter pinned to one
+  model with NO fallback. Comments show how to revert to the multi-provider
+  default (blank `CLOUD_PROVIDER_ORDER`, mixed model slugs).
+- **No code changes needed:** the dispatcher already supports this via env.
+  `configuredOrder()` parses `CLOUD_PROVIDER_ORDER` → `["openrouter"]`;
+  `providerOrder()` filters out gemini/groq; with a single provider
+  `attemptableOrder` returns `["openrouter"]`, so `cloudPlannerJson` /
+  `cloudVisionJson` try ONLY OpenRouter and rethrow on failure — **no
+  Gemini/Groq fallback**. All routes call the dispatcher with no model
+  override, so they use `OPENROUTER_DEFAULT_MODEL` (= `openai/gpt-5.5-pro`).
+- **Exact env the user sets OUTSIDE the repo** (.env.local / Vercel):
+  `OPENROUTER_API_KEY=<secret>`, `CLOUD_PROVIDER_ORDER=openrouter`,
+  `OPENROUTER_DEFAULT_MODEL=openai/gpt-5.5-pro` (+ CHEAP/PREMIUM/OSS same).
+- **Security (verified):** `OPENROUTER_API_KEY` is read server-side only
+  (`lib/env.ts`); there is NO `NEXT_PUBLIC_OPENROUTER_API_KEY`; the key is
+  not in `.env.example`, the client bundle, or logs; providers never log
+  prompts/base64 frames/keys; no browser WebLLM. Lib config defaults left
+  unchanged (multi-provider) so only this deployment's env pins it.
+- **Caveat:** this pins chat/planning (and vision IF `openai/gpt-5.5-pro` is
+  multimodal on OpenRouter). It does NOT change transcription — Whisper still
+  runs locally in-browser; no cloud transcription provider was added.
+- **Files affected:** `.env.example`; `memory/*`.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓.
+
+---
+
 ### 2026-06-11 — Self-healing IndexedDB (fix "object store was not found" crash)
 - **Root cause:** Two issues produced `NotFoundError: Failed to execute
   'transaction' on 'IDBDatabase': One of the specified object stores was not

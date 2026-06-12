@@ -4,7 +4,7 @@
 > items to **Completed** (and reflect notable ones in `CHANGELOG.md`).
 > Larger directional items live in `ROADMAP.md`.
 >
-> Last updated: 2026-06-11 (self-healing IndexedDB — fixed "object store not found" crash)
+> Last updated: 2026-06-11 (documented OpenRouter-only pin → openai/gpt-5.5-pro, no fallback)
 
 ## High priority
 
@@ -71,6 +71,14 @@
       feature work; no big rewrite.
 
 ## Completed
+
+- [x] (2026-06-11) **Documented OpenRouter-only single-model pin.**
+      `.env.example` now shows `CLOUD_PROVIDER_ORDER=openrouter` + all
+      `OPENROUTER_*_MODEL=openai/gpt-5.5-pro` (no real key). Verified the
+      dispatcher already enforces OpenRouter-only with NO Gemini/Groq fallback
+      when pinned, and that all routes use `OPENROUTER_DEFAULT_MODEL`. Key
+      stays server-side only; no code logic change. Transcription still local
+      Whisper (unchanged). typecheck + build ✓. Live key test is user-side.
 
 - [x] (2026-06-11) **Self-healing IndexedDB.** Fixed the "object store was not
       found" crash: gave each idb store its own DB (transcripts moved to
