@@ -319,6 +319,24 @@ a:hover {
   background: color-mix(in srgb, var(--info) 8%, transparent);
 }
 
+/* Spinner utility (used by AIModeBadge while local AI loads) -------- */
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
 /* Inputs ------------------------------------------------------------ */
 
 .input,

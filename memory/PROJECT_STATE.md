@@ -36,7 +36,16 @@ text/JSON calls.
 - Active line of work (2026-06-11): **removed the in-browser WebLLM
   local-first path** and moved language/tool routing **server-side to
   OpenRouter**, with Gemini/Groq kept as fallbacks. The app is **no longer
-  offline / local-LLM**, and there is no in-browser model download.
+  offline / local-LLM** as its PRIMARY path, and there is no in-browser model
+  download on the cloud path.
+- Update (2026-06-13): an **OPTIONAL, opt-in WebLLM local planner** was
+  re-introduced as a degraded **fallback only** (cloud → local → manual),
+  gated by `NEXT_PUBLIC_LOCAL_LLM_ENABLED` / `_AUTO_FALLBACK` /
+  `_DEFAULT_MODEL` (all OFF by default) + WebGPU. It is **text-only** (edit
+  planning; NO vision), **lazy-loaded** (never on page load), and fully
+  on-device. The cloud path remains primary and unchanged; the manual editor
+  works with AI fully off. See `lib/local-llm/*`, `components/AIModeBadge.tsx`,
+  and the tier-2 recovery in `handleAgent` (`app/editor/page.tsx`).
 - **Cloud model routing** goes through a provider dispatcher
   (`lib/providers/cloud.ts`) in the order **OpenRouter → Gemini → Groq**
   (`CLOUD_PROVIDER_ORDER`): the first provider with a configured key wins,
