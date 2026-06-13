@@ -459,7 +459,18 @@ export const OPENROUTER = {
   /** Open-source fallback. Override OPENROUTER_OSS_MODEL. */
   ossModel: "qwen/qwen3-coder",
   /** Default sampling temperature for planner / JSON turns. */
-  temperature: 0.4
+  temperature: 0.4,
+  /** Default max completion tokens for OpenRouter calls that don't pass an
+   *  explicit cap (e.g. the planner JSON turn). OpenRouter PRE-RESERVES
+   *  credits for the model's FULL completion window when max_tokens is
+   *  omitted — for a 65k-output model that means it prices the worst case at
+   *  65535 tokens and rejects low-credit accounts with HTTP 402 ("requires
+   *  more credits, or fewer max_tokens") before the request even runs. The
+   *  planner emits a small structured plan, so a few thousand tokens is
+   *  plenty and keeps the reserved budget affordable. Override with
+   *  OPENROUTER_MAX_TOKENS; callers that need more (e.g. vision briefing)
+   *  pass their own maxTokens, which always wins. */
+  maxTokens: 4096
 } as const;
 
 // Cloud provider PREFERENCE ORDER. The dispatcher (lib/providers/cloud.ts)
