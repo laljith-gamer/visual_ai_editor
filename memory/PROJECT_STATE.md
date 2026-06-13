@@ -96,6 +96,14 @@ text/JSON calls.
   (upload-first when no source). e.g. "i need a ingredient part alone for 1min"
   → 60s ingredient-only plan. This deterministic text parsing is a documented
   fallback-only exception to the "no keyword heuristics on the server" rule.
+  - **Extended (2026-06-13):** the same `deriveActionableIntent` now ALSO runs
+    in the `cloudPlannerJson` **catch** path, so a 504/503/timeout no longer
+    kills the turn (actionable prompts still produce a plan). It normalizes
+    typos (ingrdient→ingredient), drops looking/person stopwords, and emits
+    clean `scenarioLabels` so the "Looking for" list never echoes raw broken
+    text. Actionable direct-command plans set `autoRun` so the client runs the
+    pipeline immediately (no "Run analysis" click) when a video exists.
+    Covered by `npm run test:intent` (Node built-in runner, no new dep).
 - **Phase 5 has STARTED (one extraction only).** The briefing follow-up
   handler now lives in `hooks/useBriefingActions.ts` (behavior-identical);
   `app/editor/page.tsx` calls it. The remaining hook extractions

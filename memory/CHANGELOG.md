@@ -17,6 +17,45 @@
 
 ---
 
+### 2026-06-13 — Planner 504 fallback, auto-run, typo-aware intent, regression tests
+- **Change made:** Completed the agentic-clarify fix after runtime showed
+  "Planner returned 504" + a stale topic question + raw broken text echoed.
+  - **(A) Planner-failure fallback** (`app/api/agent/route.ts`): the
+    `cloudPlannerJson` catch now runs `deriveActionableIntent` BEFORE
+    returning an error. On 504/503/timeout/transient, if the prompt is
+    actionable it synthesizes a plan (mode "plan") and proceeds; with no video
+    it returns the upload-first message; only a truly non-actionable prompt
+    surfaces the transient error. A cloud outage no longer kills the turn.
+  - **(C) Smarter `deriveActionableIntent`** (`lib/plan/deriveIntent.ts`):
+    expanded stopwords (see/watch/look/catch/identify/what/he/she/they/…),
+    per-word typo normalization (ingrdient/ingrediant/ingradient → ingredient),
+    clean display-ready `scenarioLabels`, `format` defaults to "vertical",
+    added `needsAnalysis`. Module is now import-free (inlined duration bounds)
+    so it is unit-testable.
+  - **(E) Clean labels** (`synthesizeVaguePlan`): builds scenarios from the
+    intent's clean `scenarioLabels` (e.g. "ingredient-only moments",
+    "cooking moments") instead of echoing the user's raw broken text in the
+    "Looking for" list.
+  - **(D) Auto-run** (`lib/types.ts` `autoRun?`, `app/api/agent/route.ts`,
+    `app/editor/page.tsx`): the server sets `autoRun: true` on actionable
+    direct-command plans when a video source exists; the client then runs the
+    pipeline immediately instead of waiting for the "Run analysis" button (the
+    button remains the manual fallback for no-video / non-actionable plans).
+  - **(B) Static fallback** confirmed removed from all emit paths; only legacy
+    detectors/comments reference the old string. New dead-ends use the
+    context-aware `dynamicClarifyMessage`.
+  - **(F) Tests** (`lib/plan/deriveIntent.test.ts` + `npm run test:intent`):
+    Node built-in test runner (`--experimental-strip-types`, no new dep).
+    7 cases incl. the two spec prompts, typo fix, no-static-fallback, and
+    duration parsing. `tsconfig` excludes `**/*.test.ts`.
+- **Files affected:** `app/api/agent/route.ts`, `lib/plan/deriveIntent.ts`,
+  `lib/plan/deriveIntent.test.ts` (new), `lib/types.ts`, `app/editor/page.tsx`,
+  `package.json`, `tsconfig.json`.
+- **Reason:** Cloud-planner transient failures and imperfect prompts must
+  still produce action, never a dead-end question or raw-text echo. No WebLLM
+  changes. Verified `npm run typecheck`, `npm run build`, `npm run test:intent`
+  all pass.
+
 ### 2026-06-13 — Agentic clarify: interpret imperfect prompts, kill the static topic question
 - **Change made:** The planner no longer dead-ends on the static
   "I need a bit more before I can run the analysis — what should the short be
