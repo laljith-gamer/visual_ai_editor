@@ -18,9 +18,10 @@ export const serverEnv = {
   OPENROUTER_CHEAP_MODEL: readOptional("OPENROUTER_CHEAP_MODEL"),
   OPENROUTER_PREMIUM_MODEL: readOptional("OPENROUTER_PREMIUM_MODEL"),
   OPENROUTER_OSS_MODEL: readOptional("OPENROUTER_OSS_MODEL"),
-  // Optional cap on completion tokens reserved per OpenRouter call. When
-  // unset, OpenRouter pre-reserves the model's FULL output window, which can
-  // 402 low-credit accounts. Defaults to OPENROUTER.maxTokens in lib/config.ts.
+  // Optional ABSOLUTE ceiling on completion tokens reserved per OpenRouter
+  // call. When unset, OpenRouter would pre-reserve the model's FULL output
+  // window, which 402s low-credit accounts. Every request is hard-clamped to
+  // this. Defaults to OPENROUTER.hardMaxTokens (2048) in lib/config.ts.
   OPENROUTER_MAX_TOKENS: readOptional("OPENROUTER_MAX_TOKENS"),
   // --- Custom OpenAI-compatible provider (SERVER-ONLY). Use this for
   // gateways that expose /chat/completions but are not OpenRouter. Never use
