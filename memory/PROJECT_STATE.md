@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-11 (documented OpenRouter-only pin → openai/gpt-5.5-pro, no fallback)
+> Last updated: 2026-06-13 (added multi-source `compose`/montage mode — Option A)
 
 ---
 
@@ -33,6 +33,22 @@ text/JSON calls.
   verification is still manual and still required** — CI cannot exercise it.
 - Core conversational editing pipeline is working: plan → sample → score →
   detect windows → verify → assemble → render.
+- **Multi-source COMPOSE (montage) mode is DONE — Option A (2026-06-13).**
+  A new `compose` intent combines per-source semantic picks across MORE THAN
+  ONE upload into a fresh ordered montage ("combat in the first video and the
+  cutscene in the second, make it transition"). It is distinct from `merge`
+  (whole videos) and `plan` (one score-fused reel). Option A lays the montage
+  on the single shared `highlights` timeline via `setHighlights` (snapshots
+  the prior timeline → one-tap undo); uploads stay immutable; source order is
+  preserved unless shuffle/interleave is asked; the run is labelled
+  "AI Combined N". Per-source picks run the REAL `executeForSource` pipeline
+  (no faked vision). Transitions accept a rich vocabulary but map down to the
+  renderable none/fade/crossfade (the client says when it did). Pure logic in
+  `lib/plan/compose{Normalize,Resolve,Order,Transition,SubPlan}.ts`
+  (unit-tested via `npm run test:compose`); server broker in
+  `app/api/agent/route.ts`; client execution + planner `## compose` section.
+  **Option B (a true second timeline slot) is deferred** — see TODO. Browser/
+  GPU + live-API verification of the per-source run is still manual.
 - Active line of work (2026-06-11): **removed the in-browser WebLLM
   local-first path** and moved language/tool routing **server-side to
   OpenRouter**, with Gemini/Groq kept as fallbacks. The app is **no longer

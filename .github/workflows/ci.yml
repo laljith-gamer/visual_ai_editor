@@ -38,3 +38,30 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 22 is required for the built-in test runner's
+      # --experimental-strip-types flag used by the pure-logic unit tests
+      # (deriveIntent + compose resolvers). No test framework dependency.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Unit tests (intent + compose resolvers)
+        run: npm test

@@ -9,7 +9,9 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test:intent": "node --test --experimental-strip-types lib/plan/deriveIntent.test.ts"
+    "test:intent": "node --test --experimental-strip-types lib/plan/deriveIntent.test.ts",
+    "test:compose": "node --test --experimental-strip-types lib/plan/compose.test.ts",
+    "test": "node --test --experimental-strip-types lib/plan/deriveIntent.test.ts lib/plan/compose.test.ts"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",

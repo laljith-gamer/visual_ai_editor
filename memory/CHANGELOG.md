@@ -679,3 +679,57 @@
   the correct state. Documentation only — no application code changed.
 
 > Add new entries above this line as changes happen.
+
+
+### 2026-06-13 — Multi-source COMPOSE (montage) mode — Option A
+- **Change made:** New first-class agent mode `compose` for combining picked
+  moments from MORE THAN ONE uploaded video into a fresh ordered montage
+  ("combat in the first video and the cutscene in the second, make it
+  transition"). Distinct from `merge` (whole videos, no scoring) and `plan`
+  (one score-fused reel). **Option A (chosen with the user):** the montage is
+  built onto the single shared timeline via `setHighlights` (which snapshots
+  the prior timeline → one-tap `undo`); original uploads are never mutated;
+  source order is preserved unless the user asks shuffle/interleave; the run
+  carries a visible label ("AI Combined 1"). A true second timeline slot
+  (Option B) is deferred to a future timeline-architecture change.
+  - **Types** (`lib/types.ts`): added `"compose"` to `IntentMode`; new
+    `MultiSourceComposePlan` (+ `ComposeSourceRef`/`ComposeSourceSelection`/
+    `ComposeOrdering`/`ComposeTransition`/`ComposeRole` types) and a
+    `{ mode: "compose"; compose; autoRun? }` `AgentResponse` variant.
+  - **Server** (`app/api/agent/route.ts`): `resolveMode` accepts `"compose"`
+    + shape-detects `compose.sources`; new compose branch sanitises via
+    `normalizeComposePlan`, sets `autoRun` when a video exists, falls back to
+    a focused clarify when no usable picks parse.
+  - **Pure resolvers** (import-free, `import type` only, unit-tested):
+    `lib/plan/composeNormalize.ts` (defensive envelope clamp),
+    `composeResolve.ts` (first/second/active/selected/id/filename+semantic
+    hint → live library; ambiguous-fallback dedupe), `composeOrder.ts`
+    (source_order / user_mentioned_order / interleave / shuffle / story_arc /
+    energy_curve + `anchorFirst`; seeded `makeRng` for deterministic shuffle),
+    `composeTransition.ts` (auto per-boundary by topic + honest down-map of
+    glitch/whip/zoom/match_cut → renderable none/fade/crossfade).
+  - **Sub-plan** (`lib/plan/composeSubPlan.ts`, config-aware): turns each
+    source's `query` into a single-source `EditPlan` so picks run through the
+    REAL `executeForSource` pipeline (no faked vision).
+  - **Client** (`app/editor/page.tsx`): compose branch resolves sources, runs
+    per-source analysis, trims by clipCount/durationSeconds, orders, assigns
+    transitions, replaces the timeline, switches active source, and writes an
+    honest summary (incl. a note when a fancy transition was mapped down, and
+    when some named videos couldn't be matched).
+  - **Prompt** (`lib/plan/prompt.ts`): new `## compose` section (when to pick
+    compose vs merge vs plan; source-ref mapping; ordering/transition rules;
+    user's example prompts; output schema). Fixed stale "five modes" copy.
+  - **Tests/CI:** `lib/plan/compose.test.ts` (22 cases), `npm run test:compose`
+    + combined `npm test`; CI gains a Node 22 `unit-tests` job (the built-in
+    runner needs `--experimental-strip-types`).
+- **Files affected:** `lib/types.ts`, `app/api/agent/route.ts`,
+  `lib/plan/prompt.ts`, `app/editor/page.tsx`, `lib/plan/composeNormalize.ts`
+  (new), `composeResolve.ts` (new), `composeOrder.ts` (new),
+  `composeTransition.ts` (new), `composeSubPlan.ts` (new),
+  `lib/plan/compose.test.ts` (new), `package.json`, `.github/workflows/ci.yml`.
+- **Reason:** Users assigning different intents to different uploads needed a
+  real montage path instead of a single insert/merge. Verified: `npm install`,
+  `npm run typecheck`, `npm run build` all pass; `npm test` = 29 pass,
+  `npm run test:compose` = 22 pass. Browser/WebGPU + live-API runtime
+  verification of the per-source vision run is still MANUAL (sandbox has no GPU
+  or keys).

@@ -11,6 +11,7 @@ import {
   buildPlannerUserPrompt
 } from "@/lib/plan/prompt";
 import { normalizePlan, normalizePlanPatch } from "@/lib/plan/normalize";
+import { normalizeComposePlan } from "@/lib/plan/composeNormalize";
 import {
   deriveActionableIntent,
   actionableIntentMessage,
@@ -418,6 +419,61 @@ export async function POST(req: NextRequest) {
       ...(format ? { format } : {}),
       op,
       message: stringOr(parsed.message, "Merging the videos as-is."),
+      inferred,
+      warnings,
+      ...(quotaWarning ? { quotaWarning } : {})
+    });
+  }
+
+  // ---- COMPOSE (v1.8.0) ----------------------------------------------
+  // Multi-source montage. The user referenced clips from MORE THAN ONE
+  // uploaded video and asked to combine them ("combat in the first video
+  // and the cutscene in the second, make it transition"). Unlike `merge`
+  // (whole videos, no scoring) and `plan` (one fused reel across the
+  // selected library), compose keeps each source's pick SEPARATE and
+  // arranges them in a user-controlled order with transitions.
+  //
+  // The route only brokers + sanitises the envelope; the CLIENT resolves
+  // each source ref against the live library and runs the REAL per-source
+  // vision pipeline. No frames, scoring, or vision happen here.
+  if (mode === "compose") {
+    const compose = normalizeComposePlan(
+      parsed.compose && typeof parsed.compose === "object"
+        ? parsed.compose
+        : parsed
+    );
+    if (!compose) {
+      // The LLM tagged compose but didn't give usable per-source picks.
+      // Ask one focused question instead of crashing.
+      return NextResponse.json<AgentResponse>({
+        mode: "clarify",
+        message:
+          "Tell me which moments from which videos to combine \u2014 e.g. \u201ccombat from the first video and the cutscene from the second\u201d.",
+        questions: [
+          {
+            id: "compose_sources",
+            prompt: "Which videos and moments should I combine?",
+            suggestions: [
+              "Combat from the first, cutscene from the second",
+              "Intro from video 1, funny part from video 2",
+              "Just merge the whole videos"
+            ],
+            kind: "single-choice"
+          }
+        ],
+        warnings,
+        ...(quotaWarning ? { quotaWarning } : {})
+      });
+    }
+    const inferred = normalizeInferred(parsed.inferred);
+    return NextResponse.json<AgentResponse>({
+      mode: "compose",
+      compose,
+      ...(hasVideoSource(body) ? { autoRun: true } : {}),
+      message: stringOr(
+        parsed.message,
+        "Building a combined montage from your videos."
+      ),
       inferred,
       warnings,
       ...(quotaWarning ? { quotaWarning } : {})
@@ -879,10 +935,20 @@ function resolveMode(parsed: Record<string, unknown>): IntentMode {
     raw === "briefing" ||
     raw === "promote" ||
     raw === "merge" ||
+    raw === "compose" ||
     raw === "acknowledge" ||
     raw === "clarify"
   ) {
     return raw;
+  }
+  // v1.8.0 — compose envelopes carry a `compose.sources` array. Detect by
+  // shape when the mode field is missing/mistyped.
+  if (
+    parsed.compose &&
+    typeof parsed.compose === "object" &&
+    Array.isArray((parsed.compose as Record<string, unknown>).sources)
+  ) {
+    return "compose";
   }
   if (Array.isArray(parsed.operations) && parsed.operations.length > 0) {
     return "edit";
