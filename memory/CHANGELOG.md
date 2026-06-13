@@ -17,6 +17,41 @@
 
 ---
 
+### 2026-06-13 — Agentic clarify: interpret imperfect prompts, kill the static topic question
+- **Change made:** The planner no longer dead-ends on the static
+  "I need a bit more before I can run the analysis — what should the short be
+  about?" when the user already gave usable intent.
+  1. **Planner prompt** (`lib/plan/prompt.ts`): added a step-0 "interpret
+     imperfect/short prompts FIRST" rule to the clarify checklist. Broken
+     grammar is read, not rejected. A content focus, a duration
+     ("1min"/"1 min"/"one minute" → 60s + `userSpecifiedDuration`), or a scope
+     word ("only"/"alone"/"just") makes a turn actionable → emit plan/moment,
+     never a topic clarify. "only X" builds scenarios around X and pushes
+     everything else into `avoid`. Includes the worked "ingredient part alone
+     for 1min" example + the no-video upload-first message guidance.
+  2. **Deterministic safety net** (`lib/plan/deriveIntent.ts`, NEW):
+     `deriveActionableIntent(userText, ctx)` parses duration, content focus,
+     `only/alone` exclusivity, generic exclusions, and format; plus
+     `actionableIntentMessage(intent, hasVideo)` builds the dynamic reply
+     ("Got it — I'll look for ingredient-only moments and build a 60s short…"
+     / "Upload the video first, then I'll find the ingredient-only parts…").
+  3. **Agent route** (`app/api/agent/route.ts`): the plan/moment-fail branch
+     AND the direct `clarify` branch now consult `deriveActionableIntent`
+     before asking anything — when actionable they synthesize a grounded plan
+     (duration + focus + exclusions + format applied) and PROCEED. The old
+     static string is removed; the remaining dead-end uses a context-aware
+     `dynamicClarifyMessage(body)` (upload-first when no source).
+     `synthesizeVaguePlan` gained an `intent?` param to apply the parsed
+     duration/focus/avoid/format. New `hasVideoSource(body)` helper.
+- **Files affected:** `lib/plan/prompt.ts`, `lib/plan/deriveIntent.ts` (new),
+  `app/api/agent/route.ts`.
+- **Reason:** "i need a ingredient part alone for 1min" carries focus +
+  duration + scope; re-asking the topic read as broken. Prefer action over
+  questions; ask at most one context-aware question only when a required
+  decision is genuinely missing. Cloud provider routing (OpenRouter/Gemini/
+  custom) unchanged; no WebLLM. Verified `npm run typecheck` (pass) + spot-
+  checked the duration/focus parser on the spec's example prompts.
+
 ### 2026-06-13 — Optional WebLLM local-LLM fallback (text-only, opt-in)
 - **Change made:** Re-introduced an OPTIONAL in-browser WebLLM planner as a
   second-tier fallback in the provider router: **cloud (/api/agent) → local

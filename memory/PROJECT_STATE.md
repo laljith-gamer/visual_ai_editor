@@ -85,6 +85,17 @@ text/JSON calls.
   round-trip to the planner and no "what should the short be about?" loop.
   Multi-source safe: a `plan_topic` chip locks its plan to the briefing's
   `sourceId` so the run stays on the source that was briefed.
+- **Agentic clarify (2026-06-13).** Imperfect-but-clear prompts no longer
+  dead-end on the old static "what should the short be about?". The planner
+  prompt now interprets short/broken requests (a content focus, a parsed
+  duration, or an "only/alone" scope makes a turn actionable → plan, not
+  clarify). A deterministic safety net in `app/api/agent/route.ts` uses
+  `deriveActionableIntent` (`lib/plan/deriveIntent.ts`) + `synthesizeVaguePlan`
+  to PROCEED when the LLM fails, applying the parsed duration/focus/exclusions/
+  format; the only remaining clarify is a context-aware `dynamicClarifyMessage`
+  (upload-first when no source). e.g. "i need a ingredient part alone for 1min"
+  → 60s ingredient-only plan. This deterministic text parsing is a documented
+  fallback-only exception to the "no keyword heuristics on the server" rule.
 - **Phase 5 has STARTED (one extraction only).** The briefing follow-up
   handler now lives in `hooks/useBriefingActions.ts` (behavior-identical);
   `app/editor/page.tsx` calls it. The remaining hook extractions
