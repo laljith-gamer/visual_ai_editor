@@ -256,9 +256,11 @@ export const RATE_LIMITS = {
 export const SECURITY_HEADERS = {
   /** CSP must allow wasm + CDN scripts for ffmpeg + transformers.
    *  connect-src allows huggingface.co for transformers.js (SigLIP /
-   *  Whisper / captioning) model weights. (The raw.githubusercontent.com
-   *  entry for WebLLM model-lib .wasm was removed when the browser WebLLM
-   *  path was retired in favour of server-side OpenRouter.) */
+   *  Whisper / captioning) AND for the OPTIONAL WebLLM local-LLM fallback
+   *  model weights; raw.githubusercontent.com is re-allowed for WebLLM's
+   *  prebuilt model-library .wasm files (mlc-ai/binary-mlc-llm-libs).
+   *  WebLLM is lazy-loaded and opt-in (NEXT_PUBLIC_LOCAL_LLM_*); when the
+   *  feature is off nothing is fetched from these origins for it. */
   contentSecurityPolicy:
     "default-src 'self'; " +
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net; " +
@@ -266,7 +268,7 @@ export const SECURITY_HEADERS = {
     "img-src 'self' data: blob: https:; " +
     "font-src 'self' data:; " +
     "media-src 'self' blob:; " +
-    "connect-src 'self' https://*.googleapis.com https://*.groq.com https://huggingface.co https://*.huggingface.co https://unpkg.com https://cdn.jsdelivr.net; " +
+    "connect-src 'self' https://*.googleapis.com https://*.groq.com https://huggingface.co https://*.huggingface.co https://raw.githubusercontent.com https://unpkg.com https://cdn.jsdelivr.net; " +
     "worker-src 'self' blob:; " +
     "frame-ancestors 'none'; " +
     "base-uri 'self'; " +
