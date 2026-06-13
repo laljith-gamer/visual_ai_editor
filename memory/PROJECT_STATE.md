@@ -182,6 +182,12 @@ Upload video (stays in the browser)
   402 low-credit accounts; planner/text calls now default to
   `OPENROUTER.maxTokens` (4096, env `OPENROUTER_MAX_TOKENS`). If a turn ever
   truncates, raise that value.
+- **OpenRouter now retries transient overloads (2026-06-13).** The client
+  retries 429/5xx/network errors with backoff (`OPENROUTER.retryAttempts=3`,
+  `retryBaseDelayMs=600`), mirroring Gemini. This stops a brief "model
+  temporarily overloaded" from reaching the user when only one provider is
+  configured. Non-transient errors (incl. the 402 credit case) are not
+  retried.
 
 ## 7. Next best step
 

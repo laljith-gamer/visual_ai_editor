@@ -17,6 +17,25 @@
 
 ---
 
+### 2026-06-13 — Retry transient OpenRouter overloads (429/5xx/network)
+- **Change made:** The OpenRouter client now retries transient failures with
+  exponential backoff + jitter before giving up, mirroring the Gemini
+  provider's resilience. `createCompletion` was split into a retry loop +
+  `attemptCompletion` single-attempt; added `isRetryableError` (429/5xx,
+  "overloaded"/"temporarily"/rate-limit text, network) and a `sleep` helper.
+  New config `OPENROUTER.retryAttempts` (3) + `OPENROUTER.retryBaseDelayMs`
+  (600) in `lib/config.ts`.
+- **Files affected:** `lib/providers/openrouter.ts`, `lib/config.ts`.
+- **Reason:** With `CLOUD_PROVIDER_ORDER=openrouter` (single provider, no
+  Gemini fallback), a brief "model temporarily overloaded" (429/503) from
+  OpenRouter surfaced directly to the user as *"The vision model is
+  temporarily overloaded."* (briefing/clip routes) because OpenRouter had NO
+  retry — unlike the Gemini client. The retry transparently absorbs momentary
+  overloads/network blips for BOTH the planner and vision flows. Non-transient
+  errors (400/401/402/403) are deliberately not retried, so the earlier 402
+  credit fix isn't slowed down. Aborted requests are never retried. Verified
+  with `npm run typecheck` (pass).
+
 ### 2026-06-13 — Fix OpenRouter 402 "requires more credits, or fewer max_tokens" on the planner
 - **Change made:** OpenRouter calls now send a default `max_tokens` cap when
   the caller doesn't pass one. Added `OPENROUTER.maxTokens` (default **4096**)

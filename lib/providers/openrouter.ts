@@ -101,12 +101,69 @@ export interface OpenRouterOptions {
 }
 
 /**
- * Low-level completion. Returns the assistant message content string.
- * Throws on non-2xx with a message that includes the bracketed status so
- * the shared isTransientError() classifier can detect 429/5xx. Never logs
- * the prompt, images, or key.
+ * Heuristic: is this error worth retrying? Mirrors the Gemini classifier so
+ * a transient OpenRouter overload (HTTP 429/5xx) or network blip is retried
+ * rather than surfaced to the user. Errors thrown by attemptCompletion()
+ * include the bracketed status (e.g. "[503 ...]"), and network failures carry
+ * a recognisable message. Auth/quota/validation errors (400/401/402/403) are
+ * intentionally NOT matched, so we never burn retries on a request that can
+ * never succeed (e.g. the 402 "insufficient credits" case).
+ */
+function isRetryableError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? String(err);
+  if (/\[(?:429|500|502|503|504)\b/.test(msg)) return true;
+  if (/high demand|overloaded|temporarily|please try again|rate.?limit/i.test(msg))
+    return true;
+  if (/timeout|ETIMEDOUT|ECONNRESET|fetch failed|network/i.test(msg)) return true;
+  return false;
+}
+
+/** Sleep helper for backoff. */
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Low-level completion with transient-error retry. Returns the assistant
+ * message content string. Throws on non-2xx with a message that includes the
+ * bracketed status so the shared isTransientError() classifier can detect
+ * 429/5xx. Never logs the prompt, images, or key.
+ *
+ * Transient failures (overload/429/5xx/network) are retried with exponential
+ * backoff + jitter up to OPENROUTER.retryAttempts. This is what stops a brief
+ * "model temporarily overloaded" blip from reaching the user when there is no
+ * cross-provider fallback configured. An aborted request is never retried.
  */
 async function createCompletion(
+  messages: ChatMessage[],
+  opts: OpenRouterOptions
+): Promise<string> {
+  const attempts = Math.max(1, OPENROUTER.retryAttempts);
+  const baseDelay = OPENROUTER.retryBaseDelayMs;
+  let lastErr: unknown = null;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await attemptCompletion(messages, opts);
+    } catch (err) {
+      lastErr = err;
+      // Never retry a caller-cancelled request.
+      if (opts.signal?.aborted) throw err;
+      const isLastAttempt = attempt === attempts - 1;
+      if (isLastAttempt || !isRetryableError(err)) throw err;
+      const delay = baseDelay * 2 ** attempt + Math.random() * 200;
+      await sleep(delay);
+    }
+  }
+  // Unreachable (the loop either returns or throws), but satisfies the type.
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(String(lastErr ?? "OpenRouter request failed"));
+}
+
+/**
+ * A single OpenRouter request attempt (no retry). Split out of
+ * createCompletion so the retry loop can call it repeatedly.
+ */
+async function attemptCompletion(
   messages: ChatMessage[],
   opts: OpenRouterOptions
 ): Promise<string> {

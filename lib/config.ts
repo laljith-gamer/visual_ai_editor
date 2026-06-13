@@ -470,7 +470,18 @@ export const OPENROUTER = {
    *  plenty and keeps the reserved budget affordable. Override with
    *  OPENROUTER_MAX_TOKENS; callers that need more (e.g. vision briefing)
    *  pass their own maxTokens, which always wins. */
-  maxTokens: 4096
+  maxTokens: 4096,
+  /** Transient-error resilience for OpenRouter calls. The model is sometimes
+   *  "temporarily overloaded" (HTTP 429/5xx) or a network blip occurs; these
+   *  usually clear within a second or two. The client retries the SAME
+   *  request on transient errors with exponential backoff + jitter before
+   *  giving up, mirroring the Gemini provider. With CLOUD_PROVIDER_ORDER
+   *  pinned to a single provider (no cross-provider fallback), this retry is
+   *  what keeps a brief overload from surfacing to the user as an error.
+   *  Non-transient errors (e.g. 400/401/402/403) are NOT retried. */
+  retryAttempts: 3,
+  /** Base backoff in ms; delay grows as base * 2**attempt + jitter. */
+  retryBaseDelayMs: 600
 } as const;
 
 // Cloud provider PREFERENCE ORDER. The dispatcher (lib/providers/cloud.ts)
