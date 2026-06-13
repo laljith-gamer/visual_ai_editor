@@ -1575,13 +1575,26 @@ export default function Home() {
           const compose = data.compose;
           const composeStore = useEditorStore.getState();
           const allSources = composeStore.sources;
-          if (allSources.length === 0) {
+          // Compose needs at least two uploads in the library. If only one
+          // (or none) exists, ask for a second instead of dropping into a
+          // single-source plan or a generic topic question.
+          if (allSources.length < 2) {
+            const wantTwo = compose.sources
+              .slice(0, 2)
+              .map((s) => (s.query || "").trim())
+              .filter(Boolean);
+            const example =
+              wantTwo.length >= 2
+                ? `${wantTwo[0]} from the first and ${wantTwo[1]} from the second`
+                : "the right moments from each video";
             pushMessage({
               role: "assistant",
               content:
-                "Upload at least two videos first, then I can combine moments from them."
+                allSources.length === 0
+                  ? "Upload two videos first, then I\u2019ll combine moments from each into one montage."
+                  : `Upload or select a second video first, then I\u2019ll combine ${example}.`
             });
-            setStatus("idle", "Awaiting video");
+            setStatus(allSources.length === 0 ? "idle" : "ready", undefined);
             setProgress(0);
             return;
           }
@@ -1648,23 +1661,53 @@ export default function Home() {
               const subPlan = buildComposeSubPlan(selection, compose, i);
               const baseProgress = i / resolved.length;
               const slot = 1 / resolved.length;
-              const result = await executeForSource({
-                source: src,
-                plan: subPlan,
-                mode: "plan",
-                capTier: cap.tier,
-                userTier,
-                log: logSession,
-                progress: {
-                  setStatus: (s, detail) =>
-                    setStatus(
-                      s as Parameters<typeof setStatus>[0],
-                      `${detail ?? s} (${i + 1}/${resolved.length})`
-                    ),
-                  setProgress: (p) =>
-                    setProgress(Math.min(1, baseProgress + p * slot))
-                }
-              });
+              let result: Awaited<ReturnType<typeof executeForSource>>;
+              try {
+                result = await executeForSource({
+                  source: src,
+                  plan: subPlan,
+                  mode: "plan",
+                  capTier: cap.tier,
+                  userTier,
+                  log: logSession,
+                  progress: {
+                    setStatus: (s, detail) =>
+                      setStatus(
+                        s as Parameters<typeof setStatus>[0],
+                        `${detail ?? s} (${i + 1}/${resolved.length})`
+                      ),
+                    setProgress: (p) =>
+                      setProgress(Math.min(1, baseProgress + p * slot))
+                  }
+                });
+              } catch (srcErr) {
+                // One source failed to decode/analyze. ABORT the whole
+                // compose WITHOUT touching the timeline — we never partially
+                // replace it, so the user's previous montage/clips survive.
+                const m = (srcErr as Error)?.message || String(srcErr);
+                const ord = ["first", "second", "third", "fourth", "fifth"][i] ??
+                  `#${i + 1}`;
+                const decode = /decod|demux|codec|unsupported|moov|atom/i.test(m);
+                pushMessage({
+                  role: "assistant",
+                  content: decode
+                    ? `Couldn\u2019t decode the ${ord} video (\u201C${src.meta.name}\u201D) while building the combined montage. Try an H.264 MP4, or use a different upload. Your previous timeline was not changed.`
+                    : `Couldn\u2019t analyze the ${ord} video (\u201C${src.meta.name}\u201D) while building the montage \u2014 ${m}. Your previous timeline was not changed.`
+                });
+                setStatus("failed", `Compose failed on "${src.meta.name}"`);
+                setProgress(0);
+                logSession.system(
+                  "error.compose",
+                  {
+                    phase: "executeForSource",
+                    sourceId: src.id,
+                    sourceName: src.meta.name,
+                    message: m
+                  },
+                  `Compose ${decode ? "decode" : "analysis"} error on "${src.meta.name}": ${m.slice(0, 80)}`
+                );
+                return;
+              }
 
               // Take this source's best clips, then trim by clipCount /
               // durationSeconds if the user bounded the contribution.

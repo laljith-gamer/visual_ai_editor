@@ -102,7 +102,14 @@ const STOPWORDS = new Set([
   "scenes", "moment", "moments", "video", "vid", "footage", "film", "movie",
   "short", "shorts", "reel", "reels", "version", "thing", "things", "stuff",
   // duration units (numerics handled separately)
-  "sec", "secs", "second", "seconds", "min", "mins", "minute", "minutes"
+  "sec", "secs", "second", "seconds", "min", "mins", "minute", "minutes",
+  // v1.8.1 — multi-source / compose words must never become a subject
+  // label. (Compose is detected upstream by deriveComposeIntent; these are
+  // a belt-and-braces guard so even a stray fall-through can't produce
+  // "pick / first / transition moments".)
+  "pick", "picking", "picked", "first", "second", "third", "fourth", "fifth",
+  "upload", "uploads", "uploaded", "transition", "transitions", "merge",
+  "combine", "mix", "shuffle", "montage", "another"
 ]);
 
 /** Parse a duration in seconds from free text. Returns null when none stated. */

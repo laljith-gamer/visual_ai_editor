@@ -87,3 +87,22 @@ test("truly empty / no-focus input is not actionable", () => {
   assert.equal(i.actionable, false);
   assert.equal(i.rawFocus, null);
 });
+
+
+test("multi-source/compose words never become scenario labels (v1.8.1 stopwords)", () => {
+  // Even if a multi-source prompt slips through to the generic fallback, the
+  // labels must not contain pick/first/second/transition/video/upload.
+  const i = deriveActionableIntent(
+    "pick combat in the first video and the cutscene in the second and make it transition",
+    { hasVideo: true }
+  );
+  const banned = ["pick", "first", "second", "third", "transition", "video", "upload", "make"];
+  for (const label of i.scenarioLabels) {
+    for (const b of banned) {
+      assert.ok(
+        !label.split(/\s+/).includes(b),
+        `scenario label "${label}" leaked banned word "${b}"`
+      );
+    }
+  }
+});

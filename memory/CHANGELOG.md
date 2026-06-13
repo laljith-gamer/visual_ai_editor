@@ -17,7 +17,53 @@
 
 ---
 
-### 2026-06-13 — Planner 504 fallback, auto-run, typo-aware intent, regression tests
+### 2026-06-13 — Compose mode now actually SELECTED (deterministic multi-source detector, priority over generic fallback)
+- **Bug:** "pick combat in the first video and the cutscene in the second and
+  make it transition" never reached compose. The cloud planner mis-routed it
+  to a single-source plan and the generic `deriveActionableIntent` fallback
+  built junk scenarios ("pick / first / cutscene / transition moments"), then
+  the single-source run died with a vague "Decoding error".
+- **Fix:** added a deterministic, high-precision multi-source detector and
+  gave it PRIORITY over the generic fallback.
+  - **`lib/plan/composeIntent.ts` (new, import-free):** `deriveComposeIntent`
+    parses clauses → source refs ("first video"→0, "video 2"→1, "in the
+    second"→1, guarded against "first 30 seconds") + content topics
+    (stopword-stripped, so "combat"→"combat moments", "cutscene"→"cutscene
+    moments"). Tiers: A = ≥2 per-source picks (high conf, overrides cloud),
+    B = mix/combine + ≥2 topics (e.g. "mix combat and cutscene" → interleave),
+    C = ordering-only montage ("first … then shuffle the rest" → shuffle +
+    anchorFirst). Detects ordering + transition; builds a ready
+    `MultiSourceComposePlan` + clean message. Returns null on single-source/
+    merge/edit prompts (precision over recall).
+  - **`app/api/agent/route.ts`:** new priority order — (1) high-confidence
+    compose override right after parse, (2) cloud-planner compose, (3) normal
+    plan/edit/describe, (4) generic `deriveActionableIntent`, (5) clarify.
+    Compose is also checked BEFORE the generic fallback in the planner-failure
+    catch (504/timeout), the clarify branch, and the plan-fail branch, via the
+    shared `buildComposeResponse` helper.
+  - **`lib/plan/deriveIntent.ts`:** belt-and-braces — added pick/first/second/
+    third/fourth/upload/transition/merge/combine/mix/shuffle/montage/another to
+    STOPWORDS so the generic path can never emit those as labels.
+  - **`app/editor/page.tsx`:** compose branch now requires ≥2 library sources
+    (context-aware ask for a second video otherwise, never a generic topic
+    question); per-source `executeForSource` is wrapped so a decode/analysis
+    failure names the offending video + does NOT touch the timeline ("Couldn't
+    decode the second video … Your previous timeline was not changed.").
+  - **`lib/plan/prompt.ts`:** compose section already explicit; this change
+    makes selection deterministic regardless of planner behaviour.
+- **Tests:** `lib/plan/compose.test.ts` +9 (canonical prompt, anchorFirst
+  shuffle, mix→interleave, video-N picks, explicit fade, precision nulls,
+  findSourceIndex); `deriveIntent.test.ts` +1 (no junk labels). `npm run
+  test:compose` = 29 pass, `npm run test:intent` = 8 pass.
+- **Files affected:** `lib/plan/composeIntent.ts` (new), `app/api/agent/route.ts`,
+  `lib/plan/deriveIntent.ts`, `app/editor/page.tsx`, `lib/plan/compose.test.ts`,
+  `lib/plan/deriveIntent.test.ts`.
+- **Reason:** clear multi-source montage requests must deterministically reach
+  compose, never a single-source junk plan or a vague decode error. Verified
+  `npm run typecheck` + `npm run build` pass. Browser/WebGPU per-source vision
+  run still needs manual verification.
+
+
 - **Change made:** Completed the agentic-clarify fix after runtime showed
   "Planner returned 504" + a stale topic question + raw broken text echoed.
   - **(A) Planner-failure fallback** (`app/api/agent/route.ts`): the

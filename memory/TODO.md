@@ -8,6 +8,17 @@
 
 ## High priority
 
+- [ ] **Manual test — compose SELECTION + decode errors (browser, after deploy).**
+      With 2+ uploads: "pick combat in the first video and the cutscene in the
+      second and make it transition" → mode=compose (NOT a single-source plan,
+      NO "pick/first/transition moments" message), montage in source order
+      with transitions. "first video should start first then shuffle the rest"
+      → shuffle + anchorFirst. "mix combat and cutscene" → interleave. With
+      only ONE upload → context-aware "upload/select a second video" ask (never
+      "what should the short be about?"). Feed a non-H.264 / broken second
+      video → message names the second video + says the previous timeline was
+      not changed (timeline must be intact). Needs a real WebGPU browser + keys.
+
 - [ ] **Manual test — multi-source compose / montage (browser, run after deploy).**
       Upload 2+ videos. Try: (1) "pick combat in the first video and the
       cutscene in the second and make it transition" → mode=compose, a fresh
