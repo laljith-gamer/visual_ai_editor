@@ -17,6 +17,24 @@
 
 ---
 
+### 2026-06-13 — Fix OpenRouter 402 "requires more credits, or fewer max_tokens" on the planner
+- **Change made:** OpenRouter calls now send a default `max_tokens` cap when
+  the caller doesn't pass one. Added `OPENROUTER.maxTokens` (default **4096**)
+  in `lib/config.ts`, a `OPENROUTER_MAX_TOKENS` env override (`lib/env.ts` +
+  documented in `.env.example`), and a `defaultMaxTokens()` resolver in
+  `lib/providers/openrouter.ts` that `createCompletion` falls back to.
+- **Files affected:** `lib/config.ts`, `lib/env.ts`,
+  `lib/providers/openrouter.ts`, `.env.example`.
+- **Reason:** The planner (`cloudPlannerJson` → `openrouterJson`) never set
+  `max_tokens`. When omitted, OpenRouter PRE-RESERVES credits for the model's
+  full completion window (65535 tokens for the configured model), so
+  low-credit accounts were rejected with **HTTP 402** before the request ran
+  (*"requires more credits, or fewer max_tokens … requested up to 65535 …
+  can only afford 16000"*). The planner emits a small JSON plan, so a 4096
+  cap keeps the reserved budget affordable. Vision callers (e.g. briefing)
+  pass their own larger `maxTokens`, which still wins. Verified with
+  `npm install` + `npm run typecheck` (pass).
+
 ### 2026-06-11 — Document OpenRouter-only pin (single model: openai/gpt-5.5-pro)
 - **Change made (config/docs only, no code logic change):** `.env.example`
   now documents a "pin everything to OpenRouter + one model" setup:

@@ -64,6 +64,19 @@ export function ossModel(): string {
   return serverEnv.OPENROUTER_OSS_MODEL ?? OPENROUTER.ossModel;
 }
 
+/**
+ * Default completion-token cap for calls that don't pass an explicit
+ * maxTokens. Resolves the OPENROUTER_MAX_TOKENS env override → config
+ * default. Without a cap, OpenRouter reserves credits for the model's full
+ * output window and rejects low-credit accounts with HTTP 402. A positive,
+ * finite integer is required; anything else falls back to the config value.
+ */
+export function defaultMaxTokens(): number {
+  const raw = serverEnv.OPENROUTER_MAX_TOKENS;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : OPENROUTER.maxTokens;
+}
+
 // ---------------------------------------------------------------------
 // Message shapes (OpenAI-compatible)
 // ---------------------------------------------------------------------
@@ -104,6 +117,7 @@ async function createCompletion(
     temperature: opts.temperature ?? OPENROUTER.temperature
   };
   if (typeof opts.maxTokens === "number") body.max_tokens = opts.maxTokens;
+  else body.max_tokens = defaultMaxTokens();
   if (opts.jsonMode ?? true) body.response_format = { type: "json_object" };
 
   let res: Response;

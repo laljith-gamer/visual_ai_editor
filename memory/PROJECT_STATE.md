@@ -177,6 +177,11 @@ Upload video (stays in the browser)
   Typecheck + unit-level checks only go so far.
 - Sandbox/CI may have **no `node_modules` by default** — run `npm install`
   before trusting a typecheck (otherwise bare-import type errors are hidden).
+- **OpenRouter `max_tokens` is now capped (2026-06-13).** Omitting
+  `max_tokens` made OpenRouter reserve the model's full output window and
+  402 low-credit accounts; planner/text calls now default to
+  `OPENROUTER.maxTokens` (4096, env `OPENROUTER_MAX_TOKENS`). If a turn ever
+  truncates, raise that value.
 
 ## 7. Next best step
 
