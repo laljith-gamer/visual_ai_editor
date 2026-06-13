@@ -1780,6 +1780,15 @@ export default function Home() {
         } else if (cacheReusable) {
           setPendingExecution(false);
           await runPipeline(data.mode);
+        } else if (data.autoRun) {
+          // v1.9.x — The server flagged this as an actionable, direct-command
+          // plan (a clear request like "ingredient part alone for 1min" or
+          // "find funny moments") AND a video source exists, so we continue
+          // straight into the analysis pipeline instead of waiting for a
+          // "Run analysis" tap. The button still appears for non-actionable /
+          // no-video plans (the branch below).
+          setPendingExecution(false);
+          await runPipeline(data.mode);
         } else {
           setPendingExecution(true);
           setStatus("ready", "Plan ready \u2014 tap Run analysis to start.");

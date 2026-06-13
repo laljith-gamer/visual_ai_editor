@@ -146,6 +146,38 @@ export async function POST(req: NextRequest) {
     }
   } catch (e2) {
     const transient = isTransientError(e2);
+    // v1.9.x — A planner failure (504 / 503 / timeout / transient) must NOT
+    // automatically kill the turn. If the user's request is already
+    // actionable (a content focus, a duration, or an "only/alone" scope),
+    // run the deterministic intent fallback and PROCEED with a synthesized
+    // plan instead of dead-ending on an error. Only when the prompt is truly
+    // not actionable do we surface the transient planner error.
+    const intent = deriveActionableIntent(userText, {
+      hasVideo: hasVideoSource(body)
+    });
+    if (intent.actionable) {
+      const synth = synthesizeVaguePlan({
+        userText,
+        currentPlan: body.currentPlan ?? null,
+        memory: body.memory,
+        intent
+      });
+      return NextResponse.json<AgentResponse>({
+        mode: "plan",
+        plan: synth,
+        // Auto-run only when a source exists; otherwise the message asks for
+        // an upload and the client shows the plan pending.
+        ...(hasVideoSource(body) ? { autoRun: true } : {}),
+        message: actionableIntentMessage(intent, hasVideoSource(body)),
+        userTier: "novice",
+        inferred: [],
+        warnings: [
+          ...warnings,
+          "Cloud planner was momentarily unavailable \u2014 used a quick local interpretation of your request."
+        ],
+        ...(quotaWarning ? { quotaWarning } : {})
+      });
+    }
     return NextResponse.json<AgentResponse>(
       {
         mode: "error",
@@ -551,6 +583,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json<AgentResponse>({
         mode: "plan",
         plan: synth,
+        ...(hasVideoSource(body) ? { autoRun: true } : {}),
         message: actionableIntentMessage(clarifyIntent, hasVideoSource(body)),
         userTier: "novice",
         inferred: [],
@@ -658,6 +691,7 @@ export async function POST(req: NextRequest) {
           mode: "plan",
           plan: synth,
           ...(timelineOp ? { op: timelineOp } : {}),
+          ...(hasVideoSource(body) ? { autoRun: true } : {}),
           message: actionableIntentMessage(intent, hasVideoSource(body)),
           userTier: "novice",
           inferred: [],
@@ -688,6 +722,7 @@ export async function POST(req: NextRequest) {
         plan: buildResult.plan,
         planPatch: buildResult.planPatch,
         ...(timelineOp ? { op: timelineOp } : {}),
+        ...(hasVideoSource(body) ? { autoRun: true } : {}),
         momentDescription:
           typeof parsed.momentDescription === "string"
             ? parsed.momentDescription.slice(0, 400)
@@ -705,6 +740,7 @@ export async function POST(req: NextRequest) {
       plan: buildResult.plan,
       planPatch: buildResult.planPatch,
       ...(timelineOp ? { op: timelineOp } : {}),
+      ...(hasVideoSource(body) ? { autoRun: true } : {}),
       message: stringOr(parsed.message, "Plan ready."),
       userTier,
       inferred,
@@ -1462,25 +1498,36 @@ function synthesizeVaguePlan(args: {
       : args.userText;
   const text = baseText.trim().slice(0, 200);
   const useSemantic = text.length >= 3;
-  const id = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 24) || "topic";
 
-  // v1.7.13 (Bug 2 fix) — build ONE primary scenario grounded by, but not
-  // broadened by, the briefing. Previously every best-part label was added
-  // as a separate ~equal scenario, which diluted a specific request like
-  // "ingredient preparation clips" with unrelated parts (e.g. "final dish
-  // reveal", "chicken frying"). Instead we keep a single scenario whose
-  // prompt is the user's text plus a COMPACT context phrase distilled from
-  // the briefing labels. SigLIP still scores primarily against the user's
-  // intent; the context only nudges it toward this video's domain. This is
-  // generic (derived from briefing data, no genre/keyword table).
   const scenarios: Array<{ id: string; prompt: string; weight: number }> = [];
   const labelWeights: Record<string, number> = {};
+  const slug = (s: string, fallback: string) =>
+    s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 24) ||
+    fallback;
 
-  if (useSemantic) {
+  // v1.9.x — when an actionable intent provides CLEAN scenario labels
+  // ("ingredient-only moments", "cooking moments"), use those verbatim as the
+  // scenario prompts. This is what stops the UI's "Looking for" row from
+  // echoing the user's raw, broken text (e.g. "see what he cooking and catch
+  // ingrdient"). One scenario per label, evenly weighted.
+  if (args.intent && args.intent.scenarioLabels.length > 0) {
+    const labels = args.intent.scenarioLabels.slice(0, 4);
+    const w = +(1 / labels.length).toFixed(3);
+    labels.forEach((label, i) => {
+      const id = slug(label, `topic_${i}`);
+      scenarios.push({ id, prompt: label, weight: 1 });
+      labelWeights[id] = w;
+    });
+  } else if (useSemantic) {
+    // v1.7.13 (Bug 2 fix) — build ONE primary scenario grounded by, but not
+    // broadened by, the briefing. Previously every best-part label was added
+    // as a separate ~equal scenario, which diluted a specific request like
+    // "ingredient preparation clips" with unrelated parts. Instead we keep a
+    // single scenario whose prompt is the user's text plus a COMPACT context
+    // phrase distilled from the briefing labels. SigLIP still scores primarily
+    // against the user's intent; the context only nudges it toward this
+    // video's domain. Generic (derived from briefing data, no keyword table).
+    const id = slug(text, "topic");
     let prompt = text;
     const labels = (args.lastBriefing?.bestParts ?? [])
       .map((p) => (p.label ?? "").trim())

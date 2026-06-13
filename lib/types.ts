@@ -542,6 +542,12 @@ export type AgentResponse =
       op?: "append" | "replace";
       /** Conversational message to render in chat. */
       message: string;
+      /** v1.9.x — when true, the client runs the analysis pipeline
+       *  immediately instead of showing a "Run analysis" confirm button.
+       *  Set by the server for actionable, direct-command plans when a
+       *  video source exists. The Run button remains as a manual fallback
+       *  for non-actionable / no-video cases. */
+      autoRun?: boolean;
       /** v1.4.0 — user tier classified by the LLM from tone/vocabulary.
        *  Persisted client-side and forwarded into the pipeline so the
        *  same widen-or-narrow decision drives every selection step. */
@@ -565,6 +571,8 @@ export type AgentResponse =
       /** Verbatim moment description from the user. */
       momentDescription: string;
       message: string;
+      /** v1.9.x — auto-run the pipeline (see the plan variant). */
+      autoRun?: boolean;
       /** v1.4.0 — see plan branch. */
       userTier?: UserTier;
       inferred: InferredField[];
