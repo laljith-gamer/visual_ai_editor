@@ -13,6 +13,10 @@ import {
 import { normalizePlan, normalizePlanPatch } from "@/lib/plan/normalize";
 import { normalizeComposePlan } from "@/lib/plan/composeNormalize";
 import {
+  deriveComposeIntent,
+  type ComposeIntentResult
+} from "@/lib/plan/composeIntent";
+import {
   deriveActionableIntent,
   actionableIntentMessage,
   type ActionableIntent
@@ -147,6 +151,21 @@ export async function POST(req: NextRequest) {
     }
   } catch (e2) {
     const transient = isTransientError(e2);
+    // v1.8.1 — multi-source compose has priority even when the cloud planner
+    // is down. A 504/timeout must not drop "combat in the first video and
+    // cutscene in the second" to a single-source plan. Detect compose first.
+    const composeIntent = deriveComposeIntent(userText);
+    if (composeIntent) {
+      return buildComposeResponse(
+        composeIntent,
+        body,
+        [
+          ...warnings,
+          "Cloud planner was momentarily unavailable \u2014 used a quick local interpretation of your request."
+        ],
+        quotaWarning
+      );
+    }
     // v1.9.x — A planner failure (504 / 503 / timeout / transient) must NOT
     // automatically kill the turn. If the user's request is already
     // actionable (a content focus, a duration, or an "only/alone" scope),
@@ -225,6 +244,25 @@ export async function POST(req: NextRequest) {
     session.facts = newFacts;
     // Fire-and-forget; the response can ship before the save completes.
     void session.save().catch(() => {});
+  }
+
+  // ---- COMPOSE PRIORITY OVERRIDE (v1.8.1) ----------------------------
+  // Deterministic multi-source compose has PRIORITY over the cloud
+  // planner's own choice (priority #1). The runtime bug was that a clear
+  // request like "pick combat in the first video and the cutscene in the
+  // second and make it transition" got classified as a single-source plan
+  // and then the generic fallback built junk scenarios ("pick / first /
+  // transition moments"). When the user's text CLEARLY references picks
+  // from MORE THAN ONE source (high confidence) and the planner did not
+  // itself choose compose, we answer with compose here — before any
+  // single-source handling. Lower-confidence signals are handled only in
+  // the fallback sites below (planner failure / clarify / unusable plan),
+  // so a valid single-source plan is never hijacked.
+  if (mode !== "compose") {
+    const composeIntent = deriveComposeIntent(userText);
+    if (composeIntent && composeIntent.confidence === "high") {
+      return buildComposeResponse(composeIntent, body, warnings, quotaWarning);
+    }
   }
 
   // ---- ACKNOWLEDGE (v1.5.2) -----------------------------------------
@@ -569,6 +607,14 @@ export async function POST(req: NextRequest) {
 
   // ---- CLARIFY -------------------------------------------------------
   if (mode === "clarify") {
+    // v1.8.1 — multi-source compose takes priority over a clarify/vague-plan
+    // fallback. If the planner punted to clarify but the text clearly asks to
+    // combine picks from multiple sources, compose it instead of asking a
+    // generic topic question.
+    const composeIntent = deriveComposeIntent(userText);
+    if (composeIntent) {
+      return buildComposeResponse(composeIntent, body, warnings, quotaWarning);
+    }
     // v1.6.2 — anti-loop safety net. If the immediately-previous
     // assistant turn was ALSO a clarify (the LLM is stuck asking the
     // same thing twice despite the prompt rule), we treat the user's
@@ -675,6 +721,14 @@ export async function POST(req: NextRequest) {
       warnings
     });
     if (!buildResult.ok) {
+      // v1.8.1 — multi-source compose priority. The planner said plan/moment
+      // but produced no usable scenarios; if the text is a clear multi-source
+      // montage request, compose it instead of synthesizing a single-source
+      // plan from the raw words.
+      const composeIntent = deriveComposeIntent(userText);
+      if (composeIntent) {
+        return buildComposeResponse(composeIntent, body, warnings, quotaWarning);
+      }
       // v1.7.12 — deterministic safety net so product-critical UX does
       // not depend only on the LLM emitting a valid plan.
       //
@@ -1425,6 +1479,26 @@ function clarifyContext(body: AgentRequest): {
  */
 function hasVideoSource(body: AgentRequest): boolean {
   return Boolean(body.videoMeta) || (body.videoLibrary?.length ?? 0) > 0;
+}
+
+// v1.8.1 — build a compose-mode AgentResponse from a deterministic compose
+// intent. Shared by the priority override + every fallback site so the turn
+// never degrades to a single-source / junk plan for a multi-source request.
+function buildComposeResponse(
+  result: ComposeIntentResult,
+  body: AgentRequest,
+  warnings: string[],
+  quotaWarning: ReturnType<typeof buildQuotaWarning>
+): NextResponse<AgentResponse> {
+  return NextResponse.json<AgentResponse>({
+    mode: "compose",
+    compose: result.plan,
+    ...(hasVideoSource(body) ? { autoRun: true } : {}),
+    message: result.message,
+    inferred: [],
+    warnings,
+    ...(quotaWarning ? { quotaWarning } : {})
+  });
 }
 
 /**

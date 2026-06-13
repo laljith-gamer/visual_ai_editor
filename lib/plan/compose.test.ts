@@ -261,3 +261,86 @@ test("categorize: maps known topics", () => {
   assert.equal(categorizeQuery("funny moments"), "joke");
   assert.equal(categorizeQuery("anything"), "other");
 });
+
+
+// ---------------------------------------------------------------------
+// deriveComposeIntent — deterministic multi-source detection (v1.8.1)
+// ---------------------------------------------------------------------
+
+import { deriveComposeIntent, findSourceIndex } from "./composeIntent.ts";
+
+const JUNK = ["pick", "first", "second", "third", "transition", "video", "upload"];
+
+test("composeIntent: canonical combat/cutscene prompt → high-confidence compose", () => {
+  const r = deriveComposeIntent(
+    "pick combat in the first video and the cutscene in the second and make it transition"
+  );
+  assert.ok(r, "should detect compose");
+  assert.equal(r!.confidence, "high");
+  assert.equal(r!.plan.sources.length, 2);
+  assert.deepEqual(r!.plan.sources[0].sourceRef, { type: "index", index: 0 });
+  assert.equal(r!.plan.sources[0].query, "combat moments");
+  assert.deepEqual(r!.plan.sources[1].sourceRef, { type: "index", index: 1 });
+  assert.equal(r!.plan.sources[1].query, "cutscene moments");
+  assert.equal(r!.plan.ordering.type, "source_order");
+  assert.equal(r!.plan.transition.type, "auto");
+  assert.equal(r!.plan.needsAnalysis, true);
+  // No source/ordering/command word leaked into any query.
+  for (const s of r!.plan.sources) {
+    for (const j of JUNK) {
+      assert.ok(!s.query.split(/\s+/).includes(j), `query leaked "${j}": ${s.query}`);
+    }
+  }
+  // Message must not echo raw junk tokens as a topic.
+  assert.ok(!/\bpick moments\b|\btransition moments\b|\bfirst moments\b/.test(r!.message), r!.message);
+});
+
+test("composeIntent: 'first video should start first then shuffle the rest' → shuffle + anchorFirst", () => {
+  const r = deriveComposeIntent("first video should start first then shuffle the rest");
+  assert.ok(r);
+  assert.equal(r!.plan.ordering.type, "shuffle");
+  assert.equal(r!.plan.ordering.anchorFirst, true);
+  assert.equal(r!.confidence, "high");
+});
+
+test("composeIntent: 'mix combat and cutscene' → interleave compose", () => {
+  const r = deriveComposeIntent("mix combat and cutscene");
+  assert.ok(r);
+  assert.equal(r!.plan.ordering.type, "interleave");
+  assert.equal(r!.plan.sources.length, 2);
+  assert.equal(r!.plan.sources[0].query, "combat moments");
+  assert.equal(r!.plan.sources[1].query, "cutscene moments");
+});
+
+test("composeIntent: 'use video 1 for action and video 2 for jokes' → two picks", () => {
+  const r = deriveComposeIntent("use video 1 for action and video 2 for jokes, add transition");
+  assert.ok(r);
+  assert.equal(r!.confidence, "high");
+  assert.equal(r!.plan.sources[0].query, "action moments");
+  assert.equal(r!.plan.sources[1].query, "jokes moments");
+});
+
+test("composeIntent: explicit fade transition is captured", () => {
+  const r = deriveComposeIntent(
+    "combat from the first video and the cutscene from the second with a fade"
+  );
+  assert.ok(r);
+  assert.equal(r!.plan.transition.type, "fade");
+});
+
+test("composeIntent: precision — single-source / merge / edit prompts return null", () => {
+  assert.equal(deriveComposeIntent("make a 30s reel of dunks"), null);
+  assert.equal(deriveComposeIntent("trim the first 30 seconds"), null);
+  assert.equal(deriveComposeIntent("merge the two videos"), null);
+  assert.equal(deriveComposeIntent("find the funniest moment"), null);
+  assert.equal(deriveComposeIntent("combine the first and second video"), null); // no per-source topics → merge territory
+});
+
+test("findSourceIndex: ordinals, video N, bare ordinal; not time ranges", () => {
+  assert.equal(findSourceIndex("the first video"), 0);
+  assert.equal(findSourceIndex("second upload"), 1);
+  assert.equal(findSourceIndex("video 2"), 1);
+  assert.equal(findSourceIndex("the cutscene in the second"), 1);
+  assert.equal(findSourceIndex("trim the first 30 seconds"), null);
+  assert.equal(findSourceIndex("the best parts"), null);
+});

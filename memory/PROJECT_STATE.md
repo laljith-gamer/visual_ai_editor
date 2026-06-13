@@ -4,7 +4,7 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-13 (added multi-source `compose`/montage mode — Option A)
+> Last updated: 2026-06-13 (compose mode now deterministically SELECTED — multi-source detector with priority)
 
 ---
 
@@ -47,6 +47,16 @@ text/JSON calls.
   `lib/plan/compose{Normalize,Resolve,Order,Transition,SubPlan}.ts`
   (unit-tested via `npm run test:compose`); server broker in
   `app/api/agent/route.ts`; client execution + planner `## compose` section.
+  **Compose SELECTION is now deterministic (2026-06-13):** a high-precision
+  `deriveComposeIntent` (`lib/plan/composeIntent.ts`) detects multi-source
+  montage requests from the text and takes PRIORITY over the cloud planner +
+  the generic single-source fallback (order: explicit compose -> cloud
+  compose -> normal plan -> generic intent -> clarify), wired into a
+  priority-override plus the planner-failure/clarify/plan-fail sites. Fixed
+  the runtime bug where "combat in the first video and cutscene in the second"
+  fell into a junk single-source plan + vague "Decoding error". Client now
+  requires >=2 sources and reports per-source decode failures without touching
+  the timeline.
   **Option B (a true second timeline slot) is deferred** — see TODO. Browser/
   GPU + live-API verification of the per-source run is still manual.
 - Active line of work (2026-06-11): **removed the in-browser WebLLM
