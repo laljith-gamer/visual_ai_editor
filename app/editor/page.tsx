@@ -24,6 +24,16 @@ import {
   executeForSource,
   mergeAcrossSources
 } from "@/lib/pipeline/executePerSource";
+import { buildComposeSubPlan } from "@/lib/plan/composeSubPlan";
+import {
+  resolveComposeSources,
+  type ResolvableSource
+} from "@/lib/plan/composeResolve";
+import { orderComposedClips, makeRng } from "@/lib/plan/composeOrder";
+import {
+  resolveComposeTransition,
+  type RenderTransition
+} from "@/lib/plan/composeTransition";
 import { planSignaturePayload } from "@/lib/plan/normalize";
 import {
   getPredictions,
@@ -39,8 +49,11 @@ import { LOCAL_LLM } from "@/lib/local-llm/config";
 import type {
   AgentRequest,
   AgentResponse,
+  ComposeRole,
+  ComposeTransitionType,
   EditPlan,
   FrameScore,
+  Highlight,
   InferredField,
   IntentMode,
   VideoLibraryEntry
@@ -1544,6 +1557,271 @@ export default function Home() {
             `Merged ${chosen.length} source${chosen.length === 1 ? "" : "s"} (${totalSeconds.toFixed(1)}s)`,
             plannerMs
           );
+          return;
+        }
+
+        // ---- COMPOSE mode (v1.8.0) ----------------------------------------
+        // Multi-source montage. The user referenced clips from MORE THAN
+        // ONE uploaded video and asked to combine them ("combat in the
+        // first video and the cutscene in the second, make it
+        // transition"). We resolve each source ref against the live
+        // library, run the REAL per-source vision pipeline
+        // (executeForSource) for each, then assemble a FRESH ordered
+        // montage and lay it on the timeline via setHighlights — which
+        // snapshots the prior timeline so the user can undo. Original
+        // uploads are never mutated. (Option A: single shared timeline;
+        // a true second slot is a future architecture change.)
+        if (data.mode === "compose") {
+          const compose = data.compose;
+          const composeStore = useEditorStore.getState();
+          const allSources = composeStore.sources;
+          if (allSources.length === 0) {
+            pushMessage({
+              role: "assistant",
+              content:
+                "Upload at least two videos first, then I can combine moments from them."
+            });
+            setStatus("idle", "Awaiting video");
+            setProgress(0);
+            return;
+          }
+
+          const resolvable: ResolvableSource[] = allSources.map((s, i) => ({
+            id: s.id,
+            name: s.meta.name,
+            index: i,
+            selected: composeStore.selectedSourceIds.includes(s.id),
+            active: s.id === composeStore.activeSourceId
+          }));
+          const { resolved, unresolved } = resolveComposeSources(
+            compose.sources,
+            resolvable
+          );
+
+          if (resolved.length === 0) {
+            pushMessage({
+              role: "assistant",
+              content:
+                "I couldn't tell which uploads to combine. Try naming them \u2014 e.g. \u201cthe first video\u201d and \u201cthe second video\u201d."
+            });
+            setStatus(allSources.length > 0 ? "ready" : "idle", undefined);
+            setProgress(0);
+            return;
+          }
+
+          if (data.inferred && data.inferred.length > 0) {
+            setInferred(data.inferred);
+          }
+          setPendingClarify(null);
+          pushMessage({
+            role: "assistant",
+            content: data.message || "Building a combined montage."
+          });
+
+          const sourceById = new Map(allSources.map((s) => [s.id, s]));
+          setStatus("planning", "Composing montage\u2026");
+          setProgress(0.02);
+
+          // Each collected clip carries the OrderableClip fields directly
+          // (sourceOrder/userOrder/role + start/score from Highlight) plus
+          // the query/sourceId we need for transitions + provenance.
+          type ComposeClip = Highlight & {
+            sourceOrder: number;
+            userOrder?: number;
+            role?: ComposeRole;
+            query: string;
+          };
+          const collected: ComposeClip[] = [];
+          const perSource: Array<{
+            name: string;
+            sourceId: string;
+            count: number;
+          }> = [];
+          const userTier = composeStore.userTier;
+          const t0 = Date.now();
+
+          try {
+            for (let i = 0; i < resolved.length; i++) {
+              const { selection, source: rsrc } = resolved[i];
+              const src = sourceById.get(rsrc.id);
+              if (!src) continue;
+              const subPlan = buildComposeSubPlan(selection, compose, i);
+              const baseProgress = i / resolved.length;
+              const slot = 1 / resolved.length;
+              const result = await executeForSource({
+                source: src,
+                plan: subPlan,
+                mode: "plan",
+                capTier: cap.tier,
+                userTier,
+                log: logSession,
+                progress: {
+                  setStatus: (s, detail) =>
+                    setStatus(
+                      s as Parameters<typeof setStatus>[0],
+                      `${detail ?? s} (${i + 1}/${resolved.length})`
+                    ),
+                  setProgress: (p) =>
+                    setProgress(Math.min(1, baseProgress + p * slot))
+                }
+              });
+
+              // Take this source's best clips, then trim by clipCount /
+              // durationSeconds if the user bounded the contribution.
+              let clips = [...result.highlights].sort(
+                (a, b) => b.score - a.score
+              );
+              if (selection.clipCount && selection.clipCount > 0) {
+                clips = clips.slice(0, selection.clipCount);
+              }
+              if (selection.durationSeconds && selection.durationSeconds > 0) {
+                const budget = selection.durationSeconds;
+                let tot = 0;
+                const kept: typeof clips = [];
+                for (const c of clips) {
+                  if (tot >= budget) break;
+                  kept.push(c);
+                  tot += c.end - c.start;
+                }
+                clips = kept;
+              }
+              clips.sort((a, b) => a.start - b.start);
+              perSource.push({
+                name: src.meta.name,
+                sourceId: src.id,
+                count: clips.length
+              });
+              for (const c of clips) {
+                collected.push({
+                  ...c,
+                  sourceId: src.id,
+                  sourceOrder: i,
+                  userOrder: selection.order,
+                  role: selection.role,
+                  query: selection.query
+                });
+              }
+            }
+
+            if (collected.length === 0) {
+              pushMessage({
+                role: "assistant",
+                content:
+                  "I ran the analysis but couldn't find strong matches for what you asked. Try broader descriptions (e.g. \u201cfight scenes\u201d, \u201ctalking parts\u201d)."
+              });
+              setStatus("ready", "No strong matches");
+              setProgress(0);
+              return;
+            }
+
+            // Order the montage. Deterministic shuffle seed so the same
+            // run is reproducible within a session.
+            const seed = collected.length * 131 + resolved.length * 7 + 1;
+            const ordered = orderComposedClips(
+              collected,
+              compose.ordering,
+              makeRng(seed)
+            );
+
+            // Assign transitions per boundary (first clip never has an
+            // incoming transition). Track which intended types we had to
+            // map down so the summary can be honest about it.
+            const { newId } = await import("@/lib/util/id");
+            const intendedUsed = new Set<ComposeTransitionType>();
+            const finalClips: Highlight[] = ordered.map((c, i) => {
+              let render: RenderTransition = "none";
+              if (i > 0) {
+                const prev = ordered[i - 1];
+                const t = resolveComposeTransition(
+                  compose.transition,
+                  { query: prev.query, role: prev.role },
+                  { query: c.query, role: c.role }
+                );
+                render = t.render;
+                intendedUsed.add(t.intended);
+              }
+              return {
+                id: newId("clip"),
+                start: c.start,
+                end: c.end,
+                score: c.score,
+                reason: c.reason,
+                label: c.label ?? sourceById.get(c.sourceId ?? "")?.meta.name,
+                transition: render,
+                confidence: c.confidence,
+                sourceId: c.sourceId
+              };
+            });
+
+            // Replace the timeline with the montage. setHighlights snapshots
+            // the previous timeline, so "undo" restores it.
+            setHighlights(finalClips);
+            const firstSourceId = finalClips[0]?.sourceId;
+            if (firstSourceId && firstSourceId !== composeStore.activeSourceId) {
+              useEditorStore.getState().setActiveSource(firstSourceId);
+            }
+
+            const runLabel = compose.outputTarget.name || "AI Combined 1";
+            const total = finalClips.reduce(
+              (acc, h) => acc + (h.end - h.start),
+              0
+            );
+            const breakdown = perSource
+              .filter((s) => s.count > 0)
+              .map((s) => `${s.count} from \u201c${s.name}\u201d`)
+              .join(", ");
+            let summary = `Built ${runLabel} \u2014 a ${finalClips.length}-clip montage (${total.toFixed(1)}s): ${breakdown}. Tap \u201cRender\u201d to assemble. Say \u201cundo\u201d to restore your previous timeline.`;
+            // Honesty: if a non-renderable transition was requested, say
+            // what actually got rendered.
+            const fancy: ComposeTransitionType[] = [
+              "glitch",
+              "whip",
+              "zoom",
+              "match_cut"
+            ];
+            if (fancy.some((f) => intendedUsed.has(f))) {
+              summary +=
+                " (The editor renders cut, fade, and crossfade \u2014 I used the closest real transition for the fancier ones.)";
+            }
+            if (unresolved.length > 0) {
+              summary += ` I couldn't match ${unresolved.length} of the videos you mentioned \u2014 check the library names.`;
+            }
+            pushMessage({ role: "assistant", content: summary });
+
+            setStatus("ready", "Ready to render");
+            setProgress(1);
+            logSession.ai(
+              "compose.applied",
+              {
+                runLabel,
+                sourceCount: resolved.length,
+                clipCount: finalClips.length,
+                totalSeconds: round1(total),
+                ordering: compose.ordering.type,
+                anchorFirst: compose.ordering.anchorFirst ?? false,
+                transition: compose.transition.type,
+                perSource: perSource.map((s) => ({
+                  sourceId: s.sourceId,
+                  count: s.count
+                })),
+                unresolved: unresolved.length
+              },
+              `Composed ${finalClips.length} clip${finalClips.length === 1 ? "" : "s"} from ${resolved.length} source${resolved.length === 1 ? "" : "s"} (${total.toFixed(1)}s)`,
+              Date.now() - t0
+            );
+          } catch (err) {
+            const msg = friendlyStorageError(err) ?? (err as Error).message;
+            pushMessage({
+              role: "assistant",
+              content: `Something went wrong while composing: ${msg}`
+            });
+            setStatus("failed", msg);
+            logSession.system(
+              "error.unhandled",
+              { phase: "compose", message: msg },
+              `Unhandled error: ${msg.slice(0, 80)}`
+            );
+          }
           return;
         }
 

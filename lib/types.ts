@@ -354,6 +354,7 @@ export type IntentMode =
   | "briefing"
   | "promote"
   | "merge"
+  | "compose"
   | "acknowledge"
   | "clarify";
 
@@ -522,6 +523,139 @@ export interface AgentRequest {
   userTier?: UserTier;
 }
 
+// ---------------------------------------------------------------------
+// Multi-source compose (montage) — v1.8.0
+// ---------------------------------------------------------------------
+
+/**
+ * How a compose source selection points at a library source. The planner
+ * emits one of these per requested source; the CLIENT resolves it against
+ * the live library (where ids/order/active/selected are authoritative).
+ *
+ *   "id"            — exact VideoSource.id (preferred when the planner is
+ *                     confident from the library block).
+ *   "index"         — 0-based library position. "first video" → 0,
+ *                     "second video" → 1, "third" → 2.
+ *   "active"        — the source currently in the preview pane.
+ *   "selected"      — the (first) source ticked for AI use.
+ *   "filename_hint" — match `hint` against the source filename/title.
+ *   "semantic_hint" — match `hint` against filename + per-source notes
+ *                     ("the joke upload", "the gameplay one").
+ */
+export type ComposeSourceRefType =
+  | "active"
+  | "selected"
+  | "index"
+  | "id"
+  | "filename_hint"
+  | "semantic_hint";
+
+export interface ComposeSourceRef {
+  type: ComposeSourceRefType;
+  /** 0-based library index for type "index". */
+  index?: number;
+  /** VideoSource.id for type "id". */
+  sourceId?: string;
+  /** Free-text hint for filename_hint / semantic_hint. */
+  hint?: string;
+}
+
+/** The narrative role a source's clips play in the montage. Drives the
+ *  story_arc ordering and the dynamic transition selection. */
+export type ComposeRole =
+  | "main"
+  | "insert"
+  | "segment"
+  | "intro"
+  | "middle"
+  | "ending";
+
+/** One source's contribution to a compose montage: which source, what to
+ *  find in it, and how much of it to take. */
+export interface ComposeSourceSelection {
+  sourceRef: ComposeSourceRef;
+  /** What to look for in THIS source ("combat moments", "cutscene",
+   *  "the funny part", "ingredient shots"). Empty / "best"-style text
+   *  means "visually busiest moments" (semantic pass skipped). */
+  query: string;
+  role?: ComposeRole;
+  /** 0-based user-mentioned order ("first … then …"). Lower comes first
+   *  under the user_mentioned_order ordering. */
+  order?: number;
+  /** Max clips to take from this source. Optional. */
+  clipCount?: number;
+  /** Approximate seconds to take from this source. Optional. */
+  durationSeconds?: number;
+}
+
+/** How the per-source clips are arranged into the final montage. */
+export type ComposeOrderingType =
+  | "source_order"
+  | "user_mentioned_order"
+  | "interleave"
+  | "shuffle"
+  | "story_arc"
+  | "energy_curve";
+
+export interface ComposeOrdering {
+  type: ComposeOrderingType;
+  /** Pin the lead clip to the very front, then apply the ordering to the
+   *  rest ("first video should start first, then shuffle the rest"). */
+  anchorFirst?: boolean;
+}
+
+/**
+ * Transition vocabulary the planner may request. NOTE: the render worker
+ * only supports `none | fade | crossfade`. Richer types (glitch / whip /
+ * zoom / match_cut) are accepted for intent capture and mapped DOWN to the
+ * closest renderable transition by `resolveComposeTransition` — we never
+ * claim to render an effect we can't.
+ */
+export type ComposeTransitionType =
+  | "auto"
+  | "cut"
+  | "fade"
+  | "crossfade"
+  | "glitch"
+  | "whip"
+  | "zoom"
+  | "match_cut";
+
+export interface ComposeTransition {
+  type: ComposeTransitionType;
+  durationSeconds?: number;
+  /** Free-text rule for dynamic per-boundary selection. */
+  dynamicRule?: string;
+}
+
+/**
+ * v1.8.0 — A multi-source montage request. The user referenced clips from
+ * MORE THAN ONE uploaded video and asked to combine them ("combat in the
+ * first video and cutscene in the second, make it transition"). The client
+ * resolves each source, runs REAL per-source vision scoring, then assembles
+ * a fresh ordered montage onto the timeline. Original uploads are never
+ * mutated; the previous timeline is recoverable via undoTimeline.
+ */
+export interface MultiSourceComposePlan {
+  /** Where the assembled montage goes. Option A always targets the single
+   *  shared timeline (a fresh "AI Combined" run); the field is kept
+   *  explicit so a future true multi-slot mode can extend it. */
+  outputTarget: {
+    type: "new_timeline_slot";
+    /** Visible run label, e.g. "AI Combined 1" / "Combined Montage". */
+    name?: string;
+  };
+  sources: ComposeSourceSelection[];
+  ordering: ComposeOrdering;
+  transition: ComposeTransition;
+  /** Total montage length the user named, if any. */
+  targetSeconds?: number;
+  userSpecifiedDuration?: boolean;
+  /** True when per-source clip selection needs the vision pipeline (the
+   *  common case for semantic queries like "combat" / "jokes"). */
+  needsAnalysis: boolean;
+}
+
 /** Discriminated union returned by POST /api/agent. */
 export type AgentResponse =
   | {
@@ -670,6 +804,32 @@ export type AgentResponse =
       /** "replace" (default) wipes any existing timeline clips before
        *  laying down the merge. "append" preserves them. */
       op?: "replace" | "append";
+      message: string;
+      inferred: InferredField[];
+      warnings: string[];
+      quotaWarning?: { usage: number; limit: number; fraction: number };
+    }
+  | {
+      /** v1.8.0 — multi-source compose / montage. The user referenced
+       *  clips from MORE THAN ONE uploaded video and asked to combine
+       *  them ("combat in the first video and the cutscene in the
+       *  second, make it transition"; "intro from first, funny bit from
+       *  second, ending from third"). Distinct from `merge` (whole
+       *  videos, no scoring) and `plan` (one fused reel from the
+       *  selected library): compose keeps each source's pick SEPARATE,
+       *  then arranges them in a user-controlled ORDER with transitions.
+       *
+       *  The client resolves each source ref, runs the REAL per-source
+       *  vision pipeline (no faked frames), assembles a fresh ordered
+       *  montage, and lays it on the timeline via setHighlights — which
+       *  snapshots the prior timeline for one-tap undo. Original uploads
+       *  are never modified. */
+      mode: "compose";
+      compose: MultiSourceComposePlan;
+      /** v1.8.0 — run the per-source analysis immediately (the client
+       *  does this whenever sources resolve + a video exists; the flag is
+       *  informational, mirroring plan/moment). */
+      autoRun?: boolean;
       message: string;
       inferred: InferredField[];
       warnings: string[];

@@ -8,6 +8,27 @@
 
 ## High priority
 
+- [ ] **Manual test — multi-source compose / montage (browser, run after deploy).**
+      Upload 2+ videos. Try: (1) "pick combat in the first video and the
+      cutscene in the second and make it transition" → mode=compose, a fresh
+      montage on the timeline, source order (combat clips then cutscene
+      clips), transitions applied, prior timeline restorable via "undo".
+      (2) "first video should start first then shuffle the rest" → lead clip
+      pinned, rest shuffled. (3) "mix combat and cutscene" → interleaved.
+      (4) "intro from first, funny part from second, ending from third" →
+      3 sources, story-ish order. Confirm: original uploads untouched; the
+      assistant names the run ("AI Combined 1"); if a fancy transition
+      (glitch/whip) is asked, the summary admits it rendered the closest real
+      one; per-source picks come from the REAL vision pipeline (not faked).
+      NOTE: needs a real WebGPU browser + API keys — not verifiable in CI.
+
+- [ ] **(Future / Option B) True second timeline slot for compose.** Today
+      compose REPLACES the single shared timeline (undo-recoverable). A real
+      multi-slot model (montage coexisting beside the working reel) needs new
+      store state (`composedTimelines[]` or tagged groups) + `Timeline.tsx`,
+      render-worker, and session-persistence changes. Plan as its own
+      timeline-architecture task before building.
+
 - [ ] **Manual test — IndexedDB self-healing (browser).** (1) Load app so DBs
       are created. (2) In DevTools → Application → IndexedDB, corrupt a DB
       (delete the `kv` store, or temporarily rename `storeName` in code, load
