@@ -11,6 +11,11 @@ import {
   buildPlannerUserPrompt
 } from "@/lib/plan/prompt";
 import { normalizePlan, normalizePlanPatch } from "@/lib/plan/normalize";
+import {
+  deriveActionableIntent,
+  actionableIntentMessage,
+  type ActionableIntent
+} from "@/lib/plan/deriveIntent";
 import { mergePlan } from "@/lib/plan/merge";
 import { extractFacts } from "@/lib/memory/extract";
 import { decayFacts, mergeFacts } from "@/lib/memory/store";
@@ -528,6 +533,32 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // v1.9.x — Before asking anything, check whether the user's text is
+    // already actionable (content focus / duration / "only" scope). If so,
+    // PROCEED with a synthesized plan rather than asking for a topic the
+    // user effectively gave. This is what turns "i need a ingredient part
+    // alone for 1min" into a 60s ingredient-only plan instead of a clarify.
+    const clarifyIntent = deriveActionableIntent(userText, {
+      hasVideo: hasVideoSource(body)
+    });
+    if (clarifyIntent.actionable) {
+      const synth = synthesizeVaguePlan({
+        userText,
+        currentPlan: body.currentPlan ?? null,
+        memory: body.memory,
+        intent: clarifyIntent
+      });
+      return NextResponse.json<AgentResponse>({
+        mode: "plan",
+        plan: synth,
+        message: actionableIntentMessage(clarifyIntent, hasVideoSource(body)),
+        userTier: "novice",
+        inferred: [],
+        warnings,
+        ...(quotaWarning ? { quotaWarning } : {})
+      });
+    }
+
     const questions = normalizeClarifyQuestions(parsed.questions);
     if (questions.length === 0) {
       questions.push(
@@ -538,8 +569,8 @@ export async function POST(req: NextRequest) {
       mode: "clarify",
       message:
         typeof parsed.message === "string" && parsed.message.trim()
-          ? cleanMessage(parsed.message.trim()) || "I need a bit more to plan the cuts."
-          : "I need a bit more to plan the cuts.",
+          ? cleanMessage(parsed.message.trim()) || dynamicClarifyMessage(body)
+          : dynamicClarifyMessage(body),
       questions,
       warnings,
       ...(quotaWarning ? { quotaWarning } : {})
@@ -607,10 +638,36 @@ export async function POST(req: NextRequest) {
           ...(quotaWarning ? { quotaWarning } : {})
         });
       }
+
+      // v1.9.x — Agentic fallback: the LLM failed to emit a usable plan, but
+      // the user's text may already carry enough intent (a content focus,
+      // a duration, an "only/alone" scope). Derive it and PROCEED instead of
+      // dead-ending on the old static "what should the short be about?".
+      // Only when there's genuinely no actionable focus do we ask one
+      // context-aware question (built dynamically below).
+      const intent = deriveActionableIntent(userText, { hasVideo: hasVideoSource(body) });
+      if (intent.actionable) {
+        const synth = synthesizeVaguePlan({
+          userText,
+          currentPlan: body.currentPlan ?? null,
+          memory: body.memory,
+          intent
+        });
+        const timelineOp = normalizeTimelineOp(parsed.op);
+        return NextResponse.json<AgentResponse>({
+          mode: "plan",
+          plan: synth,
+          ...(timelineOp ? { op: timelineOp } : {}),
+          message: actionableIntentMessage(intent, hasVideoSource(body)),
+          userTier: "novice",
+          inferred: [],
+          warnings,
+          ...(quotaWarning ? { quotaWarning } : {})
+        });
+      }
       return NextResponse.json<AgentResponse>({
         mode: "clarify",
-        message:
-          "I need a bit more before I can run the analysis — what should the short be about?",
+        message: dynamicClarifyMessage(body),
         questions: missingFieldsToQuestions(buildResult.missing, body),
         warnings,
         ...(quotaWarning ? { quotaWarning } : {})
@@ -1259,6 +1316,28 @@ function clarifyContext(body: AgentRequest): {
   };
 }
 
+/**
+ * v1.9.x — True when the request carries at least one usable video source.
+ * The client sends `videoMeta` only when a video is loaded and
+ * `videoLibrary` only when sources exist, so either signals a source.
+ */
+function hasVideoSource(body: AgentRequest): boolean {
+  return Boolean(body.videoMeta) || (body.videoLibrary?.length ?? 0) > 0;
+}
+
+/**
+ * v1.9.x — Context-aware clarify message that REPLACES the old static
+ * "what should the short be about?" dead-end. It adapts to whether a video
+ * exists: with no source we ask only for an upload; with a source we invite
+ * a focus OR an explicit "best parts" without forcing a topic framing.
+ */
+function dynamicClarifyMessage(body: AgentRequest): string {
+  if (!hasVideoSource(body)) {
+    return "Upload a video first \u2014 then tell me what to feature (e.g. \u201Cingredient shots\u201D, \u201Cfunny bits\u201D) and I\u2019ll build the short.";
+  }
+  return "Tell me what to feature \u2014 a focus like \u201Cingredient-only shots\u201D or \u201Cfunny moments\u201D, or just say \u201Cbest parts\u201D and I\u2019ll pick the highlights.";
+}
+
 function stringOr(v: unknown, fallback: string): string {
   return typeof v === "string" && v.trim() ? cleanMessage(v.trim()) : fallback;
 }
@@ -1368,8 +1447,20 @@ function synthesizeVaguePlan(args: {
       why: string;
     }>;
   };
+  /** v1.9.x — derived actionable intent (duration / focus / exclusivity /
+   *  format) from imperfect user text. When present it grounds the scenario
+   *  on the focus phrase and applies the stated duration, format and
+   *  exclusion constraints — so a request like "ingredient part alone for
+   *  1min" yields a 60s, ingredient-only plan instead of a topic clarify. */
+  intent?: ActionableIntent;
 }): EditPlan {
-  const text = args.userText.trim().slice(0, 200);
+  // Prefer the derived focus phrase (e.g. "ingredient") as the scenario the
+  // pipeline scores against; fall back to the user's literal text.
+  const baseText =
+    args.intent?.rawFocus && args.intent.rawFocus.length >= 2
+      ? args.intent.rawFocus
+      : args.userText;
+  const text = baseText.trim().slice(0, 200);
   const useSemantic = text.length >= 3;
   const id = text
     .toLowerCase()
@@ -1413,6 +1504,7 @@ function synthesizeVaguePlan(args: {
     : { semantic: 0, motion: 0.6, saliency: 0.4 };
   void SIGNAL_DEFAULTS; // imported for future use; reserved.
   const target =
+    args.intent?.targetSeconds ??
     args.memory?.duration ??
     args.currentPlan?.targetShortSeconds ??
     PLAN_DEFAULTS.targetShortSeconds;
@@ -1420,9 +1512,19 @@ function synthesizeVaguePlan(args: {
   // to go on. Keeping userSpecifiedDuration false means the pipeline
   // will pick clips by quality floor instead of trimming to a 30s
   // budget the user never asked for.
+  // v1.9.x — a duration parsed from the user's text (intent) IS an explicit
+  // request, so it flips userSpecifiedDuration true and is enforced.
   const userSpecifiedDuration =
+    args.intent?.userSpecifiedDuration === true ||
     args.memory?.duration !== undefined ||
     args.currentPlan?.userSpecifiedDuration === true;
+  // Merge any derived exclusions with remembered skips (deduped).
+  const avoid = Array.from(
+    new Set([
+      ...(args.memory?.skip ?? []),
+      ...(args.intent?.negativeConstraints ?? [])
+    ])
+  ).slice(0, 8);
   return {
     scenarios,
     labelWeights,
@@ -1431,10 +1533,10 @@ function synthesizeVaguePlan(args: {
     maxClipSeconds: PLAN_DEFAULTS.maxClipSeconds,
     minClipSeconds: PLAN_DEFAULTS.minClipSeconds,
     selectionStrategy: PLAN_DEFAULTS.selectionStrategy,
-    format: args.memory?.format ?? PLAN_DEFAULTS.format,
+    format: args.intent?.format ?? args.memory?.format ?? PLAN_DEFAULTS.format,
     transition: PLAN_DEFAULTS.transition,
     styles: args.memory?.styles ?? [],
-    avoid: args.memory?.skip ?? [],
+    avoid,
     sampleEverySeconds: PLAN_DEFAULTS.sampleEverySeconds,
     inferenceWidth: PLAN_DEFAULTS.inferenceWidth,
     signals
