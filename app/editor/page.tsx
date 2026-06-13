@@ -35,6 +35,7 @@ import { sha1String } from "@/lib/util/hash";
 import { logAi, logSystem, logUser } from "@/lib/log/recorders";
 import { summarizeRecentActivity } from "@/lib/log/summarize";
 import { useBriefingActions } from "@/hooks/useBriefingActions";
+import { LOCAL_LLM } from "@/lib/local-llm/config";
 import type {
   AgentRequest,
   AgentResponse,
@@ -50,6 +51,18 @@ interface QuotaWarning {
   limit: number;
   fraction: number;
 }
+
+/**
+ * Result of the optional second-tier LOCAL WebLLM planner recovery
+ * (cloud → local → manual). "planned" carries a synthesized plan-mode
+ * response to continue with; "handled" means the local path already
+ * messaged the user (e.g. a vision ask it can't satisfy); "none" means
+ * fall back to surfacing the original cloud error.
+ */
+type LocalRecovery =
+  | { outcome: "planned"; response: Exclude<AgentResponse, { mode: "error" }> }
+  | { outcome: "handled" }
+  | { outcome: "none" };
 
 export default function Home() {
   const [clipsDrawerOpen, setClipsDrawerOpen] = useState(false);
@@ -541,6 +554,87 @@ export default function Home() {
       // routing now happens server-side via /api/agent (OpenRouter →
       // Gemini → Groq). The deterministic quick-shortcut gate above still
       // handles high-confidence turns without a round-trip.
+      //
+      // v1.9.x — an OPTIONAL on-device WebLLM planner is re-introduced as a
+      // SECOND-tier fallback (cloud → local → manual), gated behind
+      // NEXT_PUBLIC_LOCAL_LLM_* flags and WebGPU. It is text-only and never
+      // loads on page load — see lib/local-llm/*. This helper performs the
+      // local recovery attempt and is invoked only when the cloud call
+      // below fails.
+      const tryLocalPlannerRecovery = async (
+        req: string
+      ): Promise<LocalRecovery> => {
+        const { LOCAL_LLM } = await import("@/lib/local-llm/config");
+        if (!LOCAL_LLM.enabled || !LOCAL_LLM.autoFallback) {
+          return { outcome: "none" };
+        }
+        const { isWebGPUAvailable } = await import("@/lib/local-llm/webllm");
+        const { setLocalAIStatus } = await import("@/lib/local-llm/status");
+        // No WebGPU → fail gracefully; the manual editor keeps working.
+        if (!isWebGPUAvailable()) {
+          setLocalAIStatus({ mode: "manual", phase: "idle" });
+          return { outcome: "none" };
+        }
+        try {
+          setStatus("planning", "Cloud AI unavailable \u2014 trying local AI\u2026");
+          const { tryLocalPlannerFallback } = await import(
+            "@/lib/local-llm/localPlanner"
+          );
+          const local = await tryLocalPlannerFallback(req, {
+            videoDurationSeconds: videoMeta?.duration
+          });
+          if (local && local.kind === "plan") {
+            logSession.ai(
+              "local.planner.used",
+              { request: req.slice(0, 120) },
+              "Planned on-device with local AI (WebLLM)"
+            );
+            return {
+              outcome: "planned",
+              response: {
+                mode: "plan",
+                plan: local.plan,
+                message: local.message,
+                inferred: [],
+                warnings: [
+                  "Cloud AI was unavailable \u2014 planned locally on your device."
+                ]
+              }
+            };
+          }
+          if (local && local.kind === "unsupported") {
+            // Truthful: local AI can plan edits but cannot watch frames.
+            setLocalAIStatus({
+              mode: "manual",
+              phase: "ready",
+              text: "Local AI ready (text only)"
+            });
+            pushMessage({
+              role: "assistant",
+              content:
+                "Local AI is available for edit planning, but local video-frame vision is not enabled yet. I couldn't reach the cloud to analyse the footage \u2014 try again in a moment, or tell me what to clip and I'll plan it locally."
+            });
+            setStatus(
+              useEditorStore.getState().highlights.length > 0 ? "ready" : "idle",
+              undefined
+            );
+            setProgress(0);
+            return { outcome: "handled" };
+          }
+          // local === null → engine missing/failed/unparseable.
+          setLocalAIStatus({ mode: "manual", phase: "error", text: "Local AI unavailable" });
+          return { outcome: "none" };
+        } catch (err) {
+          setLocalAIStatus({ mode: "manual", phase: "error", text: "Local AI unavailable" });
+          logSession.system(
+            "local.planner.failed",
+            { message: (err as Error).message },
+            `Local planner failed: ${(err as Error).message.slice(0, 80)}`
+          );
+          return { outcome: "none" };
+        }
+      };
+
       try {
         setStatus("planning", "Talking to the planner");
         setProgress(0.05);
@@ -638,29 +732,52 @@ export default function Home() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(reqBody)
         });
-        const data = (await planResp.json().catch(() => ({}))) as AgentResponse;
+        let data = (await planResp.json().catch(() => ({}))) as AgentResponse;
         const plannerMs = Date.now() - t0;
 
         // ---- error mode ---------------------------------------------------
         if (!planResp.ok || data.mode === "error") {
-          const msg =
-            data.mode === "error" ? data.error : `Planner returned ${planResp.status}`;
-          pushMessage({ role: "assistant", content: msg });
-          setStatus("failed", msg);
-          setProgress(0);
-          if (planResp.status === 429 || planResp.status === 503) {
-            logSession.system(
-              "ratelimit.hit",
-              {
-                layer: "agent",
-                status: planResp.status,
-                retryAfterSeconds:
-                  data.mode === "error" ? data.retryAfterSeconds : undefined
-              },
-              `Rate-limited (${planResp.status})`
-            );
+          // ---- Provider router tier 2: optional LOCAL WebLLM planner -----
+          // The cloud planner failed (overload, quota, network, 402, etc.).
+          // When the local-LLM feature is enabled AND auto-fallback is on AND
+          // the browser has WebGPU, try to plan this turn entirely on-device.
+          // WebLLM is text-only — it can plan edits but cannot watch frames.
+          // Everything is lazy-loaded here so nothing touches page load.
+          const cloudErr =
+            data.mode === "error"
+              ? data.error
+              : `Planner returned ${planResp.status}`;
+          const cloudErrStatus = planResp.status;
+          const cloudRetryAfter =
+            data.mode === "error" ? data.retryAfterSeconds : undefined;
+
+          const localOutcome = await tryLocalPlannerRecovery(userRequest);
+          if (localOutcome.outcome === "planned") {
+            // Continue into the normal plan-handling path with the
+            // locally-produced plan. The in-browser pipeline runs unchanged.
+            data = localOutcome.response;
+          } else if (localOutcome.outcome === "handled") {
+            // The local path already pushed a truthful message (e.g. it was
+            // a vision/describe ask local AI can't satisfy).
+            return;
+          } else {
+            // No local recovery → surface the original cloud error.
+            pushMessage({ role: "assistant", content: cloudErr });
+            setStatus("failed", cloudErr);
+            setProgress(0);
+            if (cloudErrStatus === 429 || cloudErrStatus === 503) {
+              logSession.system(
+                "ratelimit.hit",
+                {
+                  layer: "agent",
+                  status: cloudErrStatus,
+                  retryAfterSeconds: cloudRetryAfter
+                },
+                `Rate-limited (${cloudErrStatus})`
+              );
+            }
+            return;
           }
-          return;
         }
 
         // ---- soft-tier quota banner --------------------------------------
@@ -961,11 +1078,14 @@ export default function Home() {
               transient?: boolean;
             };
             if (!resp.ok || json.error) {
+              const base =
+                json.error ||
+                "Couldn't analyze that clip right now \u2014 try again in a sec.";
               pushMessage({
                 role: "assistant",
-                content:
-                  json.error ||
-                  "Couldn't analyze that clip right now \u2014 try again in a sec."
+                content: LOCAL_LLM.enabled
+                  ? `${base} (Local AI can plan edits on-device, but it can't watch video frames yet.)`
+                  : base
               });
               setStatus(
                 storeState.highlights.length > 0 ? "ready" : "idle",
@@ -1144,11 +1264,14 @@ export default function Home() {
               transient?: boolean;
             };
             if (!resp.ok || json.error) {
+              const base =
+                json.error ||
+                "Couldn't analyse the video right now \u2014 try again in a sec.";
               pushMessage({
                 role: "assistant",
-                content:
-                  json.error ||
-                  "Couldn't analyse the video right now \u2014 try again in a sec."
+                content: LOCAL_LLM.enabled
+                  ? `${base} (Local AI is available for edit planning, but local video-frame vision is not enabled yet.)`
+                  : base
               });
               setStatus(
                 storeState.highlights.length > 0 ? "ready" : "idle",

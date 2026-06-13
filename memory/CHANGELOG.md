@@ -52,6 +52,48 @@
   custom) unchanged; no WebLLM. Verified `npm run typecheck` (pass) + spot-
   checked the duration/focus parser on the spec's example prompts.
 
+### 2026-06-13 — Optional WebLLM local-LLM fallback (text-only, opt-in)
+- **Change made:** Re-introduced an OPTIONAL in-browser WebLLM planner as a
+  second-tier fallback in the provider router: **cloud (/api/agent) → local
+  WebLLM text planner → manual**. It is OFF by default and gated by three
+  `NEXT_PUBLIC_LOCAL_LLM_*` flags + WebGPU.
+  - New dep: `@mlc-ai/web-llm@^0.2.84`.
+  - New modules under `lib/local-llm/`:
+    - `config.ts` — reads `NEXT_PUBLIC_LOCAL_LLM_ENABLED` /
+      `_AUTO_FALLBACK` / `_DEFAULT_MODEL` (default
+      `Llama-3.2-1B-Instruct-q4f32_1-MLC`).
+    - `status.ts` — tiny `useSyncExternalStore` pub/sub for the AI-mode
+      indicator (cloud/local/manual + load progress); no web-llm import.
+    - `webllm.ts` — lazy engine loader. `@mlc-ai/web-llm` is pulled in ONLY
+      via `await import()` (separate chunk, never on page load); WebGPU
+      checked up front; reports download/compile progress.
+    - `localPlanner.ts` — `tryLocalPlannerFallback()` runs a compact
+      text-only prompt → `extractJsonObject` → `normalizePlan`. Returns a
+      plan, or `{ kind: "unsupported" }` for vision/describe asks (truthful),
+      or null (→ manual).
+  - `components/AIModeBadge.tsx` — header pill showing Cloud / Local AI
+    loading NN% / Local AI / Manual. Wired into `AssistantPanel` header.
+  - `app/editor/page.tsx` — `handleAgent` cloud-error branch now attempts the
+    local recovery (lazy dynamic imports); on success it synthesizes a
+    `mode:"plan"` response and continues the EXISTING pipeline unchanged. The
+    describe/briefing cloud-vision failures append a truthful "local AI can't
+    watch frames yet" note when the feature is enabled.
+  - `lib/config.ts` CSP re-allows `raw.githubusercontent.com` (WebLLM model
+    libs); `huggingface.co` (weights) was already allowed.
+  - `.env.example` documents the three flags (all default false/off).
+- **Files affected:** `package.json`, `lib/local-llm/*`,
+  `components/AIModeBadge.tsx`, `components/AssistantPanel.tsx`,
+  `app/editor/page.tsx`, `app/globals.css` (spin util), `lib/config.ts`,
+  `.env.example`.
+- **Reason:** Graceful degradation when the cloud planner is unavailable,
+  WITHOUT re-coupling the app to the browser or breaking the manual editor.
+  Scoped hard: text edit-planning only (no vision), lazy/opt-in, on-device
+  (no API key, no NEXT_PUBLIC secret, no video upload).
+- **Verified:** `npm run typecheck` and `npm run build` both pass. `/editor`
+  first-load JS stayed at 159 kB — confirming web-llm is a lazy chunk, not in
+  the initial bundle. Runtime model download/inference needs a real WebGPU
+  browser (cannot be exercised in CI/sandbox).
+
 ### 2026-06-13 — Tighten OpenRouter max_tokens (tiered caps) + RE-APPLY transient retry
 - **Change made:**
   1. **Tiered max_tokens safety caps** replace the single 4096 default.
