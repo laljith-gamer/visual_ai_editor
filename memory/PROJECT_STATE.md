@@ -186,11 +186,22 @@ Upload video (stays in the browser)
   Typecheck + unit-level checks only go so far.
 - Sandbox/CI may have **no `node_modules` by default** — run `npm install`
   before trusting a typecheck (otherwise bare-import type errors are hidden).
-- **OpenRouter `max_tokens` is now capped (2026-06-13).** Omitting
-  `max_tokens` made OpenRouter reserve the model's full output window and
-  402 low-credit accounts; planner/text calls now default to
-  `OPENROUTER.maxTokens` (4096, env `OPENROUTER_MAX_TOKENS`). If a turn ever
-  truncates, raise that value.
+- **OpenRouter `max_tokens` has tiered safety caps (2026-06-13, tightened).**
+  Omitting `max_tokens` made OpenRouter reserve the model's full output window
+  and 402 low-credit accounts. `lib/config.ts` OPENROUTER now defines
+  `plannerMaxTokens` (1200), `visionMaxTokens` (1600) and an absolute
+  `hardMaxTokens` ceiling (2048, env `OPENROUTER_MAX_TOKENS`).
+  `attemptCompletion` ALWAYS clamps to the ceiling, so 65535 can never be sent
+  (even the briefing's 3072 retry clamps to 2048). Raise the env knob only if
+  a turn truncates.
+- **OpenRouter retries transient overloads (2026-06-13).** The client retries
+  429/5xx/network/"overloaded" errors with backoff
+  (`OPENROUTER.retryAttempts=3`, `retryBaseDelayMs=600`), mirroring Gemini.
+  This is the PRIMARY fix for the temporary "vision model is temporarily
+  overloaded" message; non-transient (incl. 402) and aborted requests are not
+  retried. NOTE: this retry was lost when PR #48 merged the token-cap commit
+  only (the retry commit landed post-merge); it was re-applied on
+  `feat/openrouter-token-caps`.
 
 ## 7. Next best step
 

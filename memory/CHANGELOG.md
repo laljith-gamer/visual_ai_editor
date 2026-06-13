@@ -59,6 +59,34 @@
   the initial bundle. Runtime model download/inference needs a real WebGPU
   browser (cannot be exercised in CI/sandbox).
 
+### 2026-06-13 — Tighten OpenRouter max_tokens (tiered caps) + RE-APPLY transient retry
+- **Change made:**
+  1. **Tiered max_tokens safety caps** replace the single 4096 default.
+     `lib/config.ts` OPENROUTER now has `plannerMaxTokens: 1200`,
+     `visionMaxTokens: 1600`, and an absolute `hardMaxTokens: 2048` ceiling.
+     `lib/providers/openrouter.ts` adds `hardMaxTokens()` (env
+     `OPENROUTER_MAX_TOKENS` → config ceiling) and `clampMaxTokens()`;
+     `attemptCompletion` ALWAYS clamps the final `max_tokens` to the ceiling,
+     so a giant value (e.g. the model's 65535 window) can NEVER be sent —
+     even the briefing's 3072 retry is clamped to 2048. `openrouterJson`
+     defaults to the planner cap, `openrouterMultiImageJson` to the vision cap
+     (via internal `fallbackMaxTokens`).
+  2. **Re-applied the transient-retry-with-backoff** that was lost: PR #48
+     merged at commit 76080a8 (token cap only); the retry commit (bc09dbe)
+     was pushed to that branch AFTER the merge and never landed on main.
+     `createCompletion` is again split into a retry loop + `attemptCompletion`
+     with `isRetryableError` (429/5xx/overload/network) + `sleep`, governed by
+     `OPENROUTER.retryAttempts` (3) / `retryBaseDelayMs` (600). Non-transient
+     errors (400/401/402/403) and aborted requests are NOT retried.
+- **Files affected:** `lib/config.ts`, `lib/providers/openrouter.ts`,
+  `lib/env.ts`, `.env.example`.
+- **Reason:** Harden against the 402 "requested up to 65535 tokens, but can
+  only afford 16000" error with a guaranteed hard clamp (the previous 4096
+  default was not a hard ceiling and vision callers could exceed it), and
+  restore the transient-overload retry that is the intended primary fix for
+  the temporary "vision model is temporarily overloaded" issue. Verified with
+  `npm run typecheck` (pass). No test runner exists in the repo.
+
 ### 2026-06-13 — Fix OpenRouter 402 "requires more credits, or fewer max_tokens" on the planner
 - **Change made:** OpenRouter calls now send a default `max_tokens` cap when
   the caller doesn't pass one. Added `OPENROUTER.maxTokens` (default **4096**)
