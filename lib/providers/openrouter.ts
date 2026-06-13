@@ -65,17 +65,61 @@ export function ossModel(): string {
 }
 
 /**
- * Default completion-token cap for calls that don't pass an explicit
- * maxTokens. Resolves the OPENROUTER_MAX_TOKENS env override → config
- * default. Without a cap, OpenRouter reserves credits for the model's full
- * output window and rejects low-credit accounts with HTTP 402. A positive,
- * finite integer is required; anything else falls back to the config value.
+ * The ABSOLUTE ceiling for any single OpenRouter request's max_tokens.
+ *
+ * Resolves the OPENROUTER_MAX_TOKENS env override → OPENROUTER.hardMaxTokens
+ * (2048). This is the one knob that can raise the cap, and it is a deliberate,
+ * server-only config value (never a client/NEXT_PUBLIC secret). Without a cap,
+ * OpenRouter reserves credits for the model's full output window and rejects
+ * low-credit accounts with HTTP 402. A positive, finite integer is required;
+ * anything else falls back to the config ceiling.
  */
-export function defaultMaxTokens(): number {
+export function hardMaxTokens(): number {
   const raw = serverEnv.OPENROUTER_MAX_TOKENS;
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : OPENROUTER.maxTokens;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : OPENROUTER.hardMaxTokens;
 }
+
+/**
+ * Clamp a requested max_tokens to the hard ceiling, applying a safe default
+ * when the caller didn't specify one. This GUARANTEES we never send a giant
+ * value (e.g. the model's 65535 window) to OpenRouter — the root cause of the
+ * 402 "requested up to 65535 tokens, but can only afford 16000" error.
+ *
+ * @param requested  explicit max_tokens from the caller (optional)
+ * @param fallback   call-type default when `requested` is absent
+ */
+function clampMaxTokens(requested: number | undefined, fallback: number): number {
+  const cap = hardMaxTokens();
+  const wanted =
+    typeof requested === "number" && Number.isFinite(requested) && requested > 0
+      ? requested
+      : fallback;
+  return Math.min(wanted, cap);
+}
+
+/**
+ * Heuristic: is this error worth retrying? Mirrors the Gemini classifier so
+ * a transient OpenRouter overload (HTTP 429/5xx) or network blip is retried
+ * rather than surfaced to the user. Errors thrown by attemptCompletion()
+ * include the bracketed status (e.g. "[503 ...]"), and network failures carry
+ * a recognisable message. Auth/quota/validation errors (400/401/402/403) are
+ * intentionally NOT matched, so we never burn retries on a request that can
+ * never succeed (e.g. the 402 "insufficient credits" case).
+ */
+function isRetryableError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? String(err);
+  if (/\[(?:429|500|502|503|504)\b/.test(msg)) return true;
+  if (/high demand|overloaded|temporarily|please try again|rate.?limit/i.test(msg))
+    return true;
+  if (/timeout|ETIMEDOUT|ECONNRESET|fetch failed|network/i.test(msg)) return true;
+  return false;
+}
+
+/** Sleep helper for backoff. */
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------
 // Message shapes (OpenAI-compatible)
@@ -98,15 +142,55 @@ export interface OpenRouterOptions {
   signal?: AbortSignal;
   /** Set false to omit response_format (some models reject json_object). */
   jsonMode?: boolean;
+  /** Call-type default for max_tokens when `maxTokens` is unset. Internal:
+   *  set by openrouterJson (planner) / openrouterMultiImageJson (vision).
+   *  Always clamped to the hard ceiling regardless. */
+  fallbackMaxTokens?: number;
 }
 
 /**
- * Low-level completion. Returns the assistant message content string.
- * Throws on non-2xx with a message that includes the bracketed status so
- * the shared isTransientError() classifier can detect 429/5xx. Never logs
- * the prompt, images, or key.
+ * Low-level completion with transient-error retry. Returns the assistant
+ * message content string. Throws on non-2xx with a message that includes the
+ * bracketed status so the shared isTransientError() classifier can detect
+ * 429/5xx. Never logs the prompt, images, or key.
+ *
+ * Transient failures (overload/429/5xx/network) are retried with exponential
+ * backoff + jitter up to OPENROUTER.retryAttempts. This is what stops a brief
+ * "model temporarily overloaded" blip from reaching the user when there is no
+ * cross-provider fallback configured. An aborted request is never retried.
  */
 async function createCompletion(
+  messages: ChatMessage[],
+  opts: OpenRouterOptions
+): Promise<string> {
+  const attempts = Math.max(1, OPENROUTER.retryAttempts);
+  const baseDelay = OPENROUTER.retryBaseDelayMs;
+  let lastErr: unknown = null;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await attemptCompletion(messages, opts);
+    } catch (err) {
+      lastErr = err;
+      // Never retry a caller-cancelled request.
+      if (opts.signal?.aborted) throw err;
+      const isLastAttempt = attempt === attempts - 1;
+      if (isLastAttempt || !isRetryableError(err)) throw err;
+      const delay = baseDelay * 2 ** attempt + Math.random() * 200;
+      await sleep(delay);
+    }
+  }
+  // Unreachable (the loop either returns or throws), but satisfies the type.
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(String(lastErr ?? "OpenRouter request failed"));
+}
+
+/**
+ * A single OpenRouter request attempt (no retry). Split out of
+ * createCompletion so the retry loop can call it repeatedly.
+ */
+async function attemptCompletion(
   messages: ChatMessage[],
   opts: OpenRouterOptions
 ): Promise<string> {
@@ -114,10 +198,15 @@ async function createCompletion(
   const body: Record<string, unknown> = {
     model,
     messages,
-    temperature: opts.temperature ?? OPENROUTER.temperature
+    temperature: opts.temperature ?? OPENROUTER.temperature,
+    // ALWAYS clamp: a caller may pass a large value, or none at all. Either
+    // way the request can never exceed the hard ceiling, so we never send
+    // 65535 and never 402 on a tight credit budget.
+    max_tokens: clampMaxTokens(
+      opts.maxTokens,
+      opts.fallbackMaxTokens ?? OPENROUTER.plannerMaxTokens
+    )
   };
-  if (typeof opts.maxTokens === "number") body.max_tokens = opts.maxTokens;
-  else body.max_tokens = defaultMaxTokens();
   if (opts.jsonMode ?? true) body.response_format = { type: "json_object" };
 
   let res: Response;
@@ -185,7 +274,9 @@ export async function openrouterJson(
       { role: "system", content: system },
       { role: "user", content: user }
     ],
-    options
+    // Planner/chat/edit-command JSON is small; default to the planner cap
+    // (still hard-clamped to the ceiling inside attemptCompletion).
+    { fallbackMaxTokens: OPENROUTER.plannerMaxTokens, ...options }
   );
 }
 
@@ -223,5 +314,10 @@ export async function openrouterMultiImageJson(
       }
     }))
   ];
-  return createCompletion([{ role: "user", content }], options);
+  // Vision/briefing JSON gets a little more headroom than the planner; still
+  // hard-clamped to the ceiling inside attemptCompletion.
+  return createCompletion([{ role: "user", content }], {
+    fallbackMaxTokens: OPENROUTER.visionMaxTokens,
+    ...options
+  });
 }

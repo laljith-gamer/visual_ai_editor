@@ -460,17 +460,37 @@ export const OPENROUTER = {
   ossModel: "qwen/qwen3-coder",
   /** Default sampling temperature for planner / JSON turns. */
   temperature: 0.4,
-  /** Default max completion tokens for OpenRouter calls that don't pass an
-   *  explicit cap (e.g. the planner JSON turn). OpenRouter PRE-RESERVES
-   *  credits for the model's FULL completion window when max_tokens is
-   *  omitted — for a 65k-output model that means it prices the worst case at
-   *  65535 tokens and rejects low-credit accounts with HTTP 402 ("requires
-   *  more credits, or fewer max_tokens") before the request even runs. The
-   *  planner emits a small structured plan, so a few thousand tokens is
-   *  plenty and keeps the reserved budget affordable. Override with
-   *  OPENROUTER_MAX_TOKENS; callers that need more (e.g. vision briefing)
-   *  pass their own maxTokens, which always wins. */
-  maxTokens: 4096
+  // ---- max_tokens safety caps ---------------------------------------
+  // OpenRouter PRE-RESERVES credits for the requested completion window. An
+  // uncapped request defaults to the model's FULL window (e.g. 65535), which
+  // 402s low-credit accounts ("requested up to 65535 tokens, but can only
+  // afford 16000"). We therefore (a) give every call-type a small default and
+  // (b) HARD-CLAMP every request to `hardMaxTokens` so 65535 can NEVER be
+  // sent. Our JSON outputs (a plan / a briefing) are small, so these are
+  // generous in practice.
+  /** Default cap for text planner / chat / edit-command JSON turns. */
+  plannerMaxTokens: 1200,
+  /** Default cap for vision / briefing JSON turns (a little more headroom). */
+  visionMaxTokens: 1600,
+  /** ABSOLUTE ceiling for ANY OpenRouter call. Every request's max_tokens is
+   *  clamped to this — callers asking for more (e.g. a 3072 briefing retry)
+   *  are silently reduced. Overridable ONLY via the OPENROUTER_MAX_TOKENS env
+   *  (a deliberate, safe internal config knob); when set it replaces this
+   *  ceiling. Keep this well below the model's full window so we never 402 on
+   *  a tight credit budget. */
+  hardMaxTokens: 2048,
+  // ---- transient-error resilience -----------------------------------
+  /** Transient-error resilience for OpenRouter calls. The model is sometimes
+   *  "temporarily overloaded" (HTTP 429/5xx) or a network blip occurs; these
+   *  usually clear within a second or two. The client retries the SAME
+   *  request on transient errors with exponential backoff + jitter before
+   *  giving up, mirroring the Gemini provider. With CLOUD_PROVIDER_ORDER
+   *  pinned to a single provider (no cross-provider fallback), this retry is
+   *  what keeps a brief overload from surfacing to the user as an error.
+   *  Non-transient errors (e.g. 400/401/402/403) are NOT retried. */
+  retryAttempts: 3,
+  /** Base backoff in ms; delay grows as base * 2**attempt + jitter. */
+  retryBaseDelayMs: 600
 } as const;
 
 // Cloud provider PREFERENCE ORDER. The dispatcher (lib/providers/cloud.ts)
