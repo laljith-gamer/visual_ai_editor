@@ -334,11 +334,14 @@
 }
 
 /* Final source-tab hover cleanup: keep only the compact pill border/text,
- * never draw a separate dark backing on hover or active state. */
+ * never draw a separate dark backing on hover or active state. This must win
+ * over the global polish layer's [class*="Timeline_tab"] button shadow. */
 .tab,
 .tab:hover,
+.tab:active,
 .tab.active {
-  background: transparent;
-  box-shadow: none;
-  transform: none;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
+  filter: none !important;
 }
