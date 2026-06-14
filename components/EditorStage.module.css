@@ -77,6 +77,24 @@
   text-align: center;
 }
 
+/* The second stage card is Timeline. Hide only that wrapper chrome so
+ * S1/S2/S3 tabs do not sit on a second dark rectangle behind them. */
+.stage > :global(.card:nth-of-type(2)) {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.stage > :global(.card:nth-of-type(2) > .card-header) {
+  padding: 0 0 var(--space-2);
+  border-bottom: 0;
+}
+
+.stage > :global(.card:nth-of-type(2) > .card-body) {
+  padding: 0;
+}
+
 @media (max-width: 560px) {
   .stage {
     padding-right: 0;
