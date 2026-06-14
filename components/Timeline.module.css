@@ -64,7 +64,7 @@
   top: 34px;
   height: 1px;
   pointer-events: none;
-  background: linear-gradient(90deg transparent, color-mix(in srgb, var(--accent) 42%, transparent), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 42%, transparent), transparent);
   opacity: 0.8;
 }
 
@@ -331,4 +331,14 @@
     min-width: 24px;
     padding-inline: 3px;
   }
+}
+
+/* Final source-tab hover cleanup: keep only the compact pill border/text,
+ * never draw a separate dark backing on hover or active state. */
+.tab,
+.tab:hover,
+.tab.active {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
 }
