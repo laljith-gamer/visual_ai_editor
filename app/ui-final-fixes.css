@@ -136,3 +136,25 @@
   content: none !important;
   display: none !important;
 }
+
+/* Timeline source switch buttons: keep S1/S2 as simple buttons only.
+   Remove every extra dark surface/hover plate from the broad polish layer. */
+[class*="Timeline_tab"],
+[class*="Timeline_tab"]:hover,
+[class*="Timeline_tab"]:active,
+[class*="Timeline_tab"]:focus,
+[class*="Timeline_tab"]:focus-visible,
+[class*="Timeline_tab"][class*="active"] {
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  transform: none !important;
+  filter: none !important;
+}
+
+[class*="Timeline_tab"]::before,
+[class*="Timeline_tab"]::after {
+  content: none !important;
+  display: none !important;
+}
