@@ -64,7 +64,7 @@
   top: 34px;
   height: 1px;
   pointer-events: none;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 42%, transparent), transparent);
+  background: linear-gradient(90deg transparent, color-mix(in srgb, var(--accent) 42%, transparent), transparent);
   opacity: 0.8;
 }
 
@@ -262,11 +262,18 @@
 }
 
 .tabs {
-  display: flex;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
   gap: 6px;
   flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
   margin-bottom: 2px;
   min-width: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
 }
 
 .tab {
@@ -294,7 +301,7 @@
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 58%, var(--line) 42%);
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-1));
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 12%, transparent), inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent);
 }
 .tabDot {
   width: 8px;
