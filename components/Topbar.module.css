@@ -56,7 +56,7 @@
   padding: 0 9px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
-  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-2));
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
