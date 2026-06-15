@@ -30,6 +30,7 @@
 
 import { serverEnv } from "@/lib/env";
 import { OPENROUTER } from "@/lib/config";
+import { recordAiUsage, type AiUsageKind } from "@/lib/ai/usage";
 
 /** Resolve the API key or throw a safe error (never logs the key). */
 function apiKey(): string {
@@ -132,6 +133,20 @@ type Content = string | Array<TextPart | ImagePart>;
 interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: Content;
+}
+
+interface OpenAiUsageEnvelope {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
+interface OpenAiCompletionEnvelope {
+  model?: string;
+  choices?: Array<{ message?: { content?: unknown } }>;
+  usage?: OpenAiUsageEnvelope;
 }
 
 export interface OpenRouterOptions {
@@ -243,16 +258,39 @@ async function attemptCompletion(
     );
   }
 
-  let data: { choices?: Array<{ message?: { content?: unknown } }> };
+  let data: OpenAiCompletionEnvelope;
   try {
-    data = await res.json();
+    data = (await res.json()) as OpenAiCompletionEnvelope;
   } catch (err) {
     throw new Error(
       `OpenRouter returned unparseable JSON envelope: ${(err as Error)?.message ?? "parse error"}`
     );
   }
   const content = data?.choices?.[0]?.message?.content;
+  recordAiUsage({
+    provider: "openrouter",
+    kind: completionKind(messages),
+    model: typeof data.model === "string" && data.model ? data.model : model,
+    apiKeyName: "OPENROUTER_API_KEY",
+    tokens: {
+      input: data.usage?.prompt_tokens ?? data.usage?.input_tokens,
+      output: data.usage?.completion_tokens ?? data.usage?.output_tokens,
+      total: data.usage?.total_tokens
+    }
+  });
   return typeof content === "string" ? content : "";
+}
+
+function completionKind(messages: ChatMessage[]): AiUsageKind {
+  for (const message of messages) {
+    if (
+      Array.isArray(message.content) &&
+      message.content.some((part) => part.type === "image_url")
+    ) {
+      return "vision";
+    }
+  }
+  return "planner";
 }
 
 // ---------------------------------------------------------------------
