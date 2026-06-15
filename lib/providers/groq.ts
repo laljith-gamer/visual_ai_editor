@@ -1,5 +1,6 @@
 import Groq from "groq-sdk";
 import { serverEnv } from "@/lib/env";
+import { recordAiUsage } from "@/lib/ai/usage";
 
 let cached: Groq | null = null;
 
@@ -27,6 +28,17 @@ export async function groqJson(
       { role: "system", content: system },
       { role: "user", content: user }
     ]
+  });
+  recordAiUsage({
+    provider: "groq",
+    kind: "planner",
+    model: completion.model ?? serverEnv.GROQ_MODEL,
+    apiKeyName: "GROQ_API_KEY",
+    tokens: {
+      input: completion.usage?.prompt_tokens,
+      output: completion.usage?.completion_tokens,
+      total: completion.usage?.total_tokens
+    }
   });
   return completion.choices[0]?.message?.content ?? "{}";
 }
