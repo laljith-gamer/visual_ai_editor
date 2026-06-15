@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI, type GenerativeModel } from "@google/generative-ai";
 import { serverEnv } from "@/lib/env";
+import { recordAiUsage, type AiUsageKind } from "@/lib/ai/usage";
 
 /**
  * Gemini wrapper with two layers of resilience:
@@ -109,6 +110,33 @@ async function withFallback<T>(
     : new Error(String(lastError ?? "Gemini request failed"));
 }
 
+interface GeminiUsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+}
+
+interface GeminiResultLike {
+  response?: {
+    usageMetadata?: GeminiUsageMetadata;
+  };
+}
+
+function recordGeminiUsage(kind: AiUsageKind, modelName: string, result: unknown): void {
+  const usage = (result as GeminiResultLike).response?.usageMetadata;
+  recordAiUsage({
+    provider: "gemini",
+    kind,
+    model: modelName,
+    apiKeyName: "GEMINI_API_KEY",
+    tokens: {
+      input: usage?.promptTokenCount,
+      output: usage?.candidatesTokenCount,
+      total: usage?.totalTokenCount
+    }
+  });
+}
+
 /** Text-only JSON call. */
 export async function geminiJson(
   system: string,
@@ -126,7 +154,9 @@ export async function geminiJson(
         responseMimeType: "application/json"
       }
     });
-    return result.response.text();
+    const text = result.response.text();
+    recordGeminiUsage("planner", modelName, result);
+    return text;
   });
 }
 
@@ -154,7 +184,9 @@ export async function geminiVisionJson(
         responseMimeType: "application/json"
       }
     });
-    return result.response.text();
+    const text = result.response.text();
+    recordGeminiUsage("vision", modelName, result);
+    return text;
   });
 }
 
@@ -214,6 +246,8 @@ export async function geminiMultiImageJson(
           : {})
       }
     });
-    return result.response.text();
+    const text = result.response.text();
+    recordGeminiUsage("vision", modelName, result);
+    return text;
   });
 }
