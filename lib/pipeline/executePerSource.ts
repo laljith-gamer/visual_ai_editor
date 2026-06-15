@@ -34,13 +34,14 @@ import { buildMomentHighlight } from "./moment";
 import { planSignaturePayload } from "@/lib/plan/normalize";
 import { sha1String } from "@/lib/util/hash";
 import { getPredictions, savePredictions, trimCache } from "@/lib/store/cache";
+import { PLAN_DEFAULTS } from "@/lib/config";
 
 /**
  * Production guardrail for the first-pass frame scorer.
  *
- * Keep this local to the per-source executor so the deploy-risk surface is tiny:
- * the sampler already supports a maxFrames option, and this helper simply makes
- * sure long videos are represented by a bounded, evenly spread coarse pass.
+ * The sampler already supports `maxFrames`; this executor uses it with an
+ * adaptive interval so long videos are represented by a bounded, evenly spread
+ * coarse pass instead of thousands of frames.
  */
 const SOURCE_ANALYSIS_MAX_FRAMES = 240;
 
@@ -381,36 +382,120 @@ function round2(n: number): number {
  *
  * v1.6.0 default policy ("time-fused"):
  *   1. Sort all candidates by composite score, descending.
- *   2. Keep greedily until the global duration budget is full.
- *   3. Sort final clips chronologically for a watchable output.
+ *   2. Greedily pick clips until total length reaches plan.targetShortSeconds.
+ *   3. Re-sort the final pick by source name + start time so the timeline
+ *      reads predictably.
  *
- * This keeps the selection simple and deterministic. A future "balanced"
- * global strategy can reserve slots per source when product requirements
- * demand equal representation.
+ * For "balanced" selection strategy we instead spread picks evenly:
+ *   - Walk each source's clips in time order
+ *   - Round-robin pick one from each source until budget exhausted
+ *
+ * MOMENT mode is a special case — the orchestrator passes pre-merged
+ * results and just wants the single best clip, so this function is a
+ * one-line winner-select.
  */
-export function mergeSourceHighlights(
-  results: Array<{ source: VideoSource; highlights: Highlight[] }>,
-  plan: EditPlan
-): Highlight[] {
-  const all = results.flatMap((r) =>
-    r.highlights.map((h) => ({
-      ...h,
-      sourceId: h.sourceId ?? r.source.id
-    }))
-  );
-  if (all.length === 0) return [];
+export function mergeAcrossSources(
+  perSource: ExecuteForSourceResult[],
+  plan: EditPlan,
+  mode: "plan" | "moment"
+): { highlights: Highlight[]; weakOnly: boolean; scoreMax: number } {
+  const all = perSource.flatMap((r) => r.highlights);
+  const scoreMax = perSource.reduce((acc, r) => Math.max(acc, r.scoreMax), 0);
+  const weakOnly =
+    perSource.length > 0 && perSource.every((r) => r.weakOnly || r.highlights.length === 0);
 
-  const sorted = [...all].sort((a, b) => b.score - a.score);
-  const selected: Highlight[] = [];
-  let total = 0;
-
-  for (const h of sorted) {
-    const dur = h.end - h.start;
-    if (total + dur > plan.targetShortSeconds && selected.length > 0) continue;
-    selected.push(h);
-    total += dur;
-    if (total >= plan.targetShortSeconds) break;
+  if (all.length === 0) {
+    return { highlights: [], weakOnly, scoreMax };
   }
 
-  return selected.sort((a, b) => a.start - b.start);
+  if (mode === "moment") {
+    // Single best clip across all sources.
+    const winner = [...all].sort((a, b) => b.score - a.score)[0];
+    return { highlights: [winner], weakOnly, scoreMax };
+  }
+
+  // v1.7.1 — Plan mode without an explicit user duration: skip budget
+  // enforcement entirely. Each per-source result already ran the
+  // quality-floor selection in buildHighlights; here we just collect
+  // them, dedupe across sources by overlap, and cap at the global
+  // unbudgeted limits. This is what makes "best parts" return a
+  // natural-feeling reel instead of a hard-trimmed 30s slice.
+  if (!plan.userSpecifiedDuration) {
+    // Sort globally by start so duplicate-overlap detection is stable.
+    const ranked = [...all].sort((a, b) => b.score - a.score);
+    const out: Highlight[] = [];
+    let total = 0;
+    for (const h of ranked) {
+      if (out.length >= PLAN_DEFAULTS.maxClipsWithoutBudget) break;
+      const dur = h.end - h.start;
+      if (total + dur > PLAN_DEFAULTS.maxTotalSecondsWithoutBudget) continue;
+      // Cross-source dedupe: drop a clip if another picked one
+      // already covers >50% of its time on the same source.
+      const overlap = out.find((x) => {
+        if ((x.sourceId ?? null) !== (h.sourceId ?? null)) return false;
+        const o = Math.max(0, Math.min(x.end, h.end) - Math.max(x.start, h.start));
+        return o / dur > 0.5;
+      });
+      if (overlap) continue;
+      out.push(h);
+      total += dur;
+    }
+    out.sort((a, b) => {
+      const sa = a.sourceId ?? "";
+      const sb = b.sourceId ?? "";
+      if (sa !== sb) return sa.localeCompare(sb);
+      return a.start - b.start;
+    });
+    return { highlights: out, weakOnly, scoreMax };
+  }
+
+  // ---------- Budgeted path (existing behaviour) ----------
+  const budget = plan.targetShortSeconds;
+  const sorted = [...all].sort((a, b) => b.score - a.score);
+
+  let chosen: Highlight[];
+  if (plan.selectionStrategy === "balanced") {
+    // Round-robin across sources by descending score.
+    const bySource = new Map<string, Highlight[]>();
+    for (const h of sorted) {
+      const k = h.sourceId ?? "_";
+      if (!bySource.has(k)) bySource.set(k, []);
+      bySource.get(k)!.push(h);
+    }
+    const queues = Array.from(bySource.values());
+    chosen = [];
+    let total = 0;
+    let any = true;
+    while (any && total < budget) {
+      any = false;
+      for (const q of queues) {
+        if (q.length === 0) continue;
+        const next = q.shift()!;
+        chosen.push(next);
+        total += next.end - next.start;
+        any = true;
+        if (total >= budget) break;
+      }
+    }
+  } else {
+    chosen = [];
+    let total = 0;
+    for (const h of sorted) {
+      if (total >= budget) break;
+      chosen.push(h);
+      total += h.end - h.start;
+    }
+  }
+
+  // Final visual order: group by source name (stable across renders),
+  // then by start time inside each source. Reads naturally on the
+  // timeline + plays in chronological chapters per source.
+  chosen.sort((a, b) => {
+    const sa = a.sourceId ?? "";
+    const sb = b.sourceId ?? "";
+    if (sa !== sb) return sa.localeCompare(sb);
+    return a.start - b.start;
+  });
+
+  return { highlights: chosen, weakOnly, scoreMax };
 }
