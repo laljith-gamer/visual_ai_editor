@@ -15,9 +15,11 @@ Do not try to read every frame from long footage. Use adaptive, capped, hierarch
 
 ## Code change shipped
 
-Commit `eb1f2762` updated `lib/pipeline/executePerSource.ts` so cache-miss sampling uses the configured frame cap and adapts the sampling interval for long videos.
+Commit `eb1f2762` updated `lib/pipeline/executePerSource.ts` so cache-miss sampling uses a frame cap and adapts the sampling interval for long videos.
 
-Before this change, a 1-second sample interval could produce thousands of frames on long videos. Now the pass is capped by `SAMPLE_DEFAULTS.maxFrames` and the interval widens when needed.
+The deploy for `eb1f2762` showed an error, so commit `6cf8877d` hardened the same patch by keeping the cap local to `executePerSource.ts` instead of importing broader config into this hot client pipeline file.
+
+Before this change, a 1-second sample interval could produce thousands of frames on long videos. Now the pass is capped and the interval widens when needed.
 
 ## Why this matters
 
@@ -36,4 +38,4 @@ Before this change, a 1-second sample interval could produce thousands of frames
 
 ## Validation status
 
-Source-inspected and pushed. Vercel status for the optimization commit was pending when this memory note was written.
+Source-inspected and pushed. Vercel status for commit `6cf8877d` was pending when this memory note was updated.
