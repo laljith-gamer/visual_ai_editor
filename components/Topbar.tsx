@@ -32,6 +32,34 @@ interface Props {
 
 type ThemeMode = "dark" | "light";
 
+interface AiUsageSnapshot {
+  totalCalls: number;
+  plannerCalls: number;
+  visionCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  byProvider: Record<
+    string,
+    {
+      calls: number;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+    }
+  >;
+  last: {
+    provider: string;
+    kind: "planner" | "vision";
+    model: string;
+    apiKeyName: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    at: number;
+  } | null;
+}
+
 const THEME_STORAGE_KEY = "shorts-studio.theme";
 
 export function Topbar({
@@ -48,6 +76,7 @@ export function Topbar({
   const newSession = useEditorStore((s) => s.newSession);
   const sessionId = useEditorStore((s) => s.sessionId);
   const [theme, setTheme] = useState<ThemeMode>("dark");
+  const [aiUsage, setAiUsage] = useState<AiUsageSnapshot | null>(null);
 
   // Make sure the activity log stays bound even on this lightweight component;
   // the read is cheap and ensures the singleton is initialized for the active session.
@@ -70,6 +99,30 @@ export function Topbar({
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof window.setInterval> | undefined;
+
+    const refreshUsage = async () => {
+      try {
+        const res = await fetch("/api/ai/usage", { cache: "no-store" });
+        if (!res.ok) return;
+        const snapshot = (await res.json()) as AiUsageSnapshot;
+        if (!cancelled) setAiUsage(snapshot);
+      } catch {
+        // Usage telemetry is informational only; never disturb the editor UI.
+      }
+    };
+
+    void refreshUsage();
+    timer = window.setInterval(() => void refreshUsage(), 5000);
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, []);
+
   const totalDuration = highlights.reduce(
     (acc, h) => acc + (h.end - h.start),
     0
@@ -85,9 +138,12 @@ export function Topbar({
         <div className={styles.brandMark}>
           <Sparkles size={18} />
         </div>
-        <div>
+        <div className={styles.brandCopy}>
           <p className="eyebrow">Universal Video Shorts Editor</p>
-          <h1>Shorts Studio</h1>
+          <div className={styles.brandTitleRow}>
+            <h1>Shorts Studio</h1>
+            <AiUsagePill usage={aiUsage} />
+          </div>
         </div>
       </div>
 
@@ -167,6 +223,74 @@ export function Topbar({
       </div>
     </header>
   );
+}
+
+function AiUsagePill({ usage }: { usage: AiUsageSnapshot | null }) {
+  const calls = usage?.totalCalls ?? 0;
+  const tokenText = usage && usage.totalTokens > 0
+    ? `${formatCompactNumber(usage.totalTokens)} tok`
+    : "tokens pending";
+  const last = usage?.last;
+  const label = last
+    ? `${last.provider} · ${shortModel(last.model)}`
+    : "no API call yet";
+  const title = usage
+    ? buildUsageTitle(usage)
+    : "AI usage metrics will appear after the server answers the first AI API call.";
+
+  return (
+    <span className={styles.aiUsagePill} title={title} aria-label={title}>
+      <span className={styles.aiUsageDot} aria-hidden />
+      <span className={styles.aiUsageText}>
+        AI {calls} call{calls === 1 ? "" : "s"} · {tokenText} · {label}
+      </span>
+    </span>
+  );
+}
+
+function buildUsageTitle(usage: AiUsageSnapshot): string {
+  const providerLines = Object.entries(usage.byProvider)
+    .sort((a, b) => b[1].calls - a[1].calls)
+    .map(
+      ([provider, bucket]) =>
+        `${provider}: ${bucket.calls} calls, ${formatNumber(bucket.totalTokens)} tokens`
+    );
+  const last = usage.last
+    ? [
+        `Last provider: ${usage.last.provider}`,
+        `Last model: ${usage.last.model}`,
+        `API key source: ${usage.last.apiKeyName} (secret value hidden)`,
+        `Last call type: ${usage.last.kind}`,
+        `Last tokens: ${formatNumber(usage.last.totalTokens ?? 0)} total (${formatNumber(usage.last.inputTokens ?? 0)} in / ${formatNumber(usage.last.outputTokens ?? 0)} out)`
+      ]
+    : ["Last provider: none yet", "API key source: none used yet"];
+
+  return [
+    "AI API usage metrics",
+    `Total calls: ${usage.totalCalls}`,
+    `Planner calls: ${usage.plannerCalls}`,
+    `Vision calls: ${usage.visionCalls}`,
+    `Total tokens: ${formatNumber(usage.totalTokens)} (${formatNumber(usage.inputTokens)} in / ${formatNumber(usage.outputTokens)} out)`,
+    ...last,
+    ...(providerLines.length > 0 ? ["", "By provider:", ...providerLines] : [])
+  ].join("\n");
+}
+
+function shortModel(model: string): string {
+  if (model.length <= 28) return model;
+  const parts = model.split("/");
+  const tail = parts[parts.length - 1] || model;
+  return tail.length <= 28 ? tail : `${tail.slice(0, 25)}…`;
+}
+
+function formatCompactNumber(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  return Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
+}
+
+function formatNumber(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  return Intl.NumberFormat().format(n);
 }
 
 function statusToClass(s: string): string {
