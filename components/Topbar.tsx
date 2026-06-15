@@ -101,7 +101,7 @@ export function Topbar({
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof window.setInterval> | undefined;
+    let timer: number | undefined;
 
     const refreshUsage = async () => {
       try {
@@ -115,11 +115,13 @@ export function Topbar({
     };
 
     void refreshUsage();
-    timer = window.setInterval(() => void refreshUsage(), 5000);
+    timer = window.setInterval(() => {
+      void refreshUsage();
+    }, 5000);
 
     return () => {
       cancelled = true;
-      if (timer) window.clearInterval(timer);
+      if (typeof timer === "number") window.clearInterval(timer);
     };
   }, []);
 
@@ -285,12 +287,19 @@ function shortModel(model: string): string {
 
 function formatCompactNumber(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
-  return Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
+  if (n >= 1_000_000) return `${round1(n / 1_000_000)}M`;
+  if (n >= 1_000) return `${round1(n / 1_000)}K`;
+  return String(Math.round(n));
 }
 
 function formatNumber(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
-  return Intl.NumberFormat().format(n);
+  const rounded = String(Math.round(n));
+  return rounded.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+function round1(n: number): string {
+  return n >= 10 ? String(Math.round(n)) : String(Math.round(n * 10) / 10);
 }
 
 function statusToClass(s: string): string {
