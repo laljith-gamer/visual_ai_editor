@@ -27,9 +27,13 @@ The meter does not show private values. It only shows the env/source name so the
 - `lib/providers/groq.ts`
 - `lib/providers/customOpenai.ts`
 
+## Follow-up deploy fix
+
+After Vercel showed failed Production deploys starting at the topbar usage-meter commit, `components/Topbar.tsx` was hardened in commit `80e66df0`: the interval handle type was simplified to a browser number and the compact/normal number formatters no longer rely on newer `Intl.NumberFormat` options. This keeps the UI change but reduces build-environment compatibility risk.
+
 ## Validation status
 
-Source-inspected in this connector session. Local install, typecheck, and build were not run from here. Browser/live provider verification is still required after deploy.
+Source-inspected in this connector session. Local install, typecheck, and build were not run from here. Browser/live provider verification is still required after deploy. The latest Vercel status checked for commit `80e66df0` was still pending at the time of this note.
 
 ## Limitation
 
