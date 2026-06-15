@@ -57,8 +57,6 @@ export interface AiUsageSnapshot {
 
 interface AiUsageState extends AiUsageSnapshot {}
 
-const GLOBAL_KEY = "__shortsStudioAiUsage";
-
 declare global {
   // eslint-disable-next-line no-var
   var __shortsStudioAiUsage: AiUsageState | undefined;
@@ -78,10 +76,9 @@ function initialState(): AiUsageState {
 }
 
 function state(): AiUsageState {
-  const existing = globalThis[GLOBAL_KEY as keyof typeof globalThis] as
-    | AiUsageState
-    | undefined;
-  if (existing) return existing;
+  if (globalThis.__shortsStudioAiUsage) {
+    return globalThis.__shortsStudioAiUsage;
+  }
   const created = initialState();
   globalThis.__shortsStudioAiUsage = created;
   return created;
