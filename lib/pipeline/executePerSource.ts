@@ -34,7 +34,15 @@ import { buildMomentHighlight } from "./moment";
 import { planSignaturePayload } from "@/lib/plan/normalize";
 import { sha1String } from "@/lib/util/hash";
 import { getPredictions, savePredictions, trimCache } from "@/lib/store/cache";
-import { SAMPLE_DEFAULTS } from "@/lib/config";
+
+/**
+ * Production guardrail for the first-pass frame scorer.
+ *
+ * Keep this local to the per-source executor so the deploy-risk surface is tiny:
+ * the sampler already supports a maxFrames option, and this helper simply makes
+ * sure long videos are represented by a bounded, evenly spread coarse pass.
+ */
+const SOURCE_ANALYSIS_MAX_FRAMES = 240;
 
 /** Activity-log fan-out passed in by the orchestrator. */
 export interface SourceLogger {
@@ -345,7 +353,7 @@ function computeAdaptiveSampling(
   maxFrames: number;
   adaptive: boolean;
 } {
-  const maxFrames = SAMPLE_DEFAULTS.maxFrames;
+  const maxFrames = SOURCE_ANALYSIS_MAX_FRAMES;
   const start = range ? Math.max(0, range.startSeconds) : 0;
   const end = range
     ? Math.max(start, Math.min(videoDuration, range.endSeconds))
