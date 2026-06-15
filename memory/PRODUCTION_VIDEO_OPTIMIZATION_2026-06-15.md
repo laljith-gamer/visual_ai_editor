@@ -17,7 +17,7 @@ Do not try to read every frame from long footage. Use adaptive, capped, hierarch
 
 Commit `eb1f2762` updated `lib/pipeline/executePerSource.ts` so cache-miss sampling uses a frame cap and adapts the sampling interval for long videos.
 
-The deploy for `eb1f2762` showed an error, so commit `6cf8877d` hardened the same patch by keeping the cap local to `executePerSource.ts` instead of importing broader config into this hot client pipeline file.
+The deploy for `eb1f2762` showed an error because the patch accidentally replaced the existing exported `mergeAcrossSources` function with `mergeSourceHighlights`. Commit `73842dbe` fixed that regression by restoring the original export while keeping the adaptive sampling change.
 
 Before this change, a 1-second sample interval could produce thousands of frames on long videos. Now the pass is capped and the interval widens when needed.
 
@@ -38,4 +38,4 @@ Before this change, a 1-second sample interval could produce thousands of frames
 
 ## Validation status
 
-Source-inspected and pushed. Vercel status for commit `6cf8877d` was pending when this memory note was updated.
+Source-inspected and pushed. Vercel returned success for commit `73842dbe`.
