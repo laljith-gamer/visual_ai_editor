@@ -14,6 +14,7 @@
 // =====================================================================
 
 import { serverEnv } from "@/lib/env";
+import { recordAiUsage, type AiUsageKind } from "@/lib/ai/usage";
 
 function apiKey(): string {
   const key = serverEnv.CUSTOM_OPENAI_API_KEY;
@@ -45,6 +46,20 @@ interface ChatMessage {
   content: Content;
 }
 
+interface OpenAiUsageEnvelope {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
+interface CustomOpenAIEnvelope {
+  model?: string;
+  choices?: Array<{ message?: { content?: unknown } }>;
+  usage?: OpenAiUsageEnvelope;
+}
+
 export interface CustomOpenAIOptions {
   temperature?: number;
   maxTokens?: number;
@@ -55,8 +70,9 @@ async function createCompletion(
   messages: ChatMessage[],
   opts: CustomOpenAIOptions = {}
 ): Promise<string> {
+  const requestedModel = model();
   const body: Record<string, unknown> = {
-    model: model(),
+    model: requestedModel,
     messages,
     temperature: opts.temperature ?? 0.25
   };
@@ -97,16 +113,39 @@ async function createCompletion(
     );
   }
 
-  let data: { choices?: Array<{ message?: { content?: unknown } }> };
+  let data: CustomOpenAIEnvelope;
   try {
-    data = await res.json();
+    data = (await res.json()) as CustomOpenAIEnvelope;
   } catch (err) {
     throw new Error(
       `Custom OpenAI returned unparseable JSON envelope: ${(err as Error)?.message ?? "parse error"}`
     );
   }
   const content = data?.choices?.[0]?.message?.content;
+  recordAiUsage({
+    provider: "custom_openai",
+    kind: completionKind(messages),
+    model: typeof data.model === "string" && data.model ? data.model : requestedModel,
+    apiKeyName: "CUSTOM_OPENAI_API_KEY",
+    tokens: {
+      input: data.usage?.prompt_tokens ?? data.usage?.input_tokens,
+      output: data.usage?.completion_tokens ?? data.usage?.output_tokens,
+      total: data.usage?.total_tokens
+    }
+  });
   return typeof content === "string" ? content : "";
+}
+
+function completionKind(messages: ChatMessage[]): AiUsageKind {
+  for (const message of messages) {
+    if (
+      Array.isArray(message.content) &&
+      message.content.some((part) => part.type === "image_url")
+    ) {
+      return "vision";
+    }
+  }
+  return "planner";
 }
 
 export async function customOpenaiJson(
