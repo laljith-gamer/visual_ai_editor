@@ -13,6 +13,7 @@ import { useEditorStore } from "@/hooks/useEditorStore";
 import { useActivityLog } from "@/hooks/useActivityLog";
 import { logUser } from "@/lib/log/recorders";
 import { formatTime } from "@/lib/util/time";
+import type { ActivityEvent } from "@/lib/types";
 import { ModeBadge } from "./ModeBadge";
 import styles from "./Topbar.module.css";
 
@@ -60,6 +61,14 @@ interface AiUsageSnapshot {
   } | null;
 }
 
+interface LocalAiUsage {
+  ops: number;
+  framesSampled: number;
+  framesScored: number;
+  lastKind?: string;
+  lastTier?: string;
+}
+
 const THEME_STORAGE_KEY = "shorts-studio.theme";
 
 export function Topbar({
@@ -80,7 +89,8 @@ export function Topbar({
 
   // Make sure the activity log stays bound even on this lightweight component;
   // the read is cheap and ensures the singleton is initialized for the active session.
-  useActivityLog(sessionId);
+  const activityEvents = useActivityLog(sessionId);
+  const localAiUsage = summarizeLocalAiUsage(activityEvents);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -144,7 +154,7 @@ export function Topbar({
           <p className="eyebrow">Universal Video Shorts Editor</p>
           <div className={styles.brandTitleRow}>
             <h1>Shorts Studio</h1>
-            <AiUsagePill usage={aiUsage} />
+            <AiUsagePill usage={aiUsage} localUsage={localAiUsage} />
           </div>
         </div>
       </div>
@@ -227,55 +237,118 @@ export function Topbar({
   );
 }
 
-function AiUsagePill({ usage }: { usage: AiUsageSnapshot | null }) {
+function AiUsagePill({
+  usage,
+  localUsage
+}: {
+  usage: AiUsageSnapshot | null;
+  localUsage: LocalAiUsage;
+}) {
   const calls = usage?.totalCalls ?? 0;
-  const tokenText = usage && usage.totalTokens > 0
-    ? `${formatCompactNumber(usage.totalTokens)} tok`
-    : "tokens pending";
+  const tokenText = calls > 0
+    ? usage && usage.totalTokens > 0
+      ? `${formatCompactNumber(usage.totalTokens)} tok`
+      : "tokens n/a"
+    : "0 tok";
   const last = usage?.last;
-  const label = last
+  const apiLabel = last
     ? `${last.provider} · ${shortModel(last.model)}`
     : "no API call yet";
-  const title = usage
-    ? buildUsageTitle(usage)
-    : "AI usage metrics will appear after the server answers the first AI API call.";
+  const localText = localUsage.ops > 0
+    ? ` · Local ${formatCompactNumber(localUsage.ops)} ops`
+    : "";
+  const title = buildUsageTitle(usage, localUsage);
 
   return (
     <span className={styles.aiUsagePill} title={title} aria-label={title}>
       <span className={styles.aiUsageDot} aria-hidden />
       <span className={styles.aiUsageText}>
-        AI {calls} call{calls === 1 ? "" : "s"} · {tokenText} · {label}
+        API {calls} call{calls === 1 ? "" : "s"} · {tokenText}{localText} · {apiLabel}
       </span>
     </span>
   );
 }
 
-function buildUsageTitle(usage: AiUsageSnapshot): string {
-  const providerLines = Object.entries(usage.byProvider)
+function buildUsageTitle(
+  usage: AiUsageSnapshot | null,
+  localUsage: LocalAiUsage
+): string {
+  const providerLines = Object.entries(usage?.byProvider ?? {})
     .sort((a, b) => b[1].calls - a[1].calls)
     .map(
       ([provider, bucket]) =>
         `${provider}: ${bucket.calls} calls, ${formatNumber(bucket.totalTokens)} tokens`
     );
-  const last = usage.last
+  const last = usage?.last
     ? [
-        `Last provider: ${usage.last.provider}`,
-        `Last model: ${usage.last.model}`,
+        `Last API provider: ${usage.last.provider}`,
+        `Last API model: ${usage.last.model}`,
         `API key source: ${usage.last.apiKeyName} (secret value hidden)`,
-        `Last call type: ${usage.last.kind}`,
-        `Last tokens: ${formatNumber(usage.last.totalTokens ?? 0)} total (${formatNumber(usage.last.inputTokens ?? 0)} in / ${formatNumber(usage.last.outputTokens ?? 0)} out)`
+        `Last API call type: ${usage.last.kind}`,
+        `Last API tokens: ${formatNumber(usage.last.totalTokens ?? 0)} total (${formatNumber(usage.last.inputTokens ?? 0)} in / ${formatNumber(usage.last.outputTokens ?? 0)} out)`
       ]
-    : ["Last provider: none yet", "API key source: none used yet"];
+    : ["Last API provider: none yet", "API key source: none used yet"];
 
   return [
-    "AI API usage metrics",
-    `Total calls: ${usage.totalCalls}`,
-    `Planner calls: ${usage.plannerCalls}`,
-    `Vision calls: ${usage.visionCalls}`,
-    `Total tokens: ${formatNumber(usage.totalTokens)} (${formatNumber(usage.inputTokens)} in / ${formatNumber(usage.outputTokens)} out)`,
+    "Server AI API usage",
+    `API calls: ${usage?.totalCalls ?? 0}`,
+    `Planner API calls: ${usage?.plannerCalls ?? 0}`,
+    `Vision API calls: ${usage?.visionCalls ?? 0}`,
+    `API tokens: ${formatNumber(usage?.totalTokens ?? 0)} (${formatNumber(usage?.inputTokens ?? 0)} in / ${formatNumber(usage?.outputTokens ?? 0)} out)`,
     ...last,
-    ...(providerLines.length > 0 ? ["", "By provider:", ...providerLines] : [])
+    "",
+    "Local/session AI activity",
+    `Ops: ${localUsage.ops}`,
+    `Frames sampled: ${formatNumber(localUsage.framesSampled)}`,
+    `Frames scored: ${formatNumber(localUsage.framesScored)}`,
+    `Last local/session op: ${localUsage.lastKind ?? "none"}`,
+    `Last local/session tier: ${localUsage.lastTier ?? "none"}`,
+    "Local/browser work uses no server API key.",
+    ...(providerLines.length > 0 ? ["", "By API provider:", ...providerLines] : [])
   ].join("\n");
+}
+
+function summarizeLocalAiUsage(events: ActivityEvent[]): LocalAiUsage {
+  let ops = 0;
+  let framesSampled = 0;
+  let framesScored = 0;
+  let lastKind: string | undefined;
+  let lastTier: string | undefined;
+
+  for (const event of events) {
+    if (event.actor !== "ai") continue;
+    const multiplier = event.count ?? 1;
+    ops += multiplier;
+    lastKind = event.kind;
+
+    const payloadCount = numericPayload(event.payload, "count") ?? 0;
+    if (event.kind === "frames.sampled") {
+      framesSampled += payloadCount * multiplier;
+    }
+    if (event.kind === "frames.scored") {
+      framesScored += payloadCount * multiplier;
+      const tier = stringPayload(event.payload, "tier");
+      if (tier) lastTier = tier;
+    }
+  }
+
+  return { ops, framesSampled, framesScored, lastKind, lastTier };
+}
+
+function numericPayload(
+  payload: Record<string, unknown>,
+  key: string
+): number | undefined {
+  const value = payload[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringPayload(
+  payload: Record<string, unknown>,
+  key: string
+): string | undefined {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function shortModel(model: string): string {
