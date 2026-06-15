@@ -1,0 +1,13 @@
+import { NextResponse } from "next/server";
+import { getAiUsageSnapshot } from "@/lib/ai/usage";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  return NextResponse.json(getAiUsageSnapshot(), {
+    headers: {
+      "Cache-Control": "no-store"
+    }
+  });
+}
