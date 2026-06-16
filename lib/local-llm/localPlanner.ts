@@ -142,9 +142,12 @@ function isLocalVisionRequest(userRequest: string): boolean {
 
 function quickOfflinePlan(userRequest: string): LocalPlanResult {
   const text = userRequest.toLowerCase();
+  const asksWhy = /\bwhy\b.*\b(pick|picked|choose|chosen|select|selected)\b/.test(text) ||
+    /\bwhy\b.*\bclips?\b/.test(text);
   const wantsBest =
     /\b(best parts?|best moments?|highlights?)\b/.test(text) ||
-    /\b(pick|choose|find).*\bbest\b/.test(text);
+    /\b(pick|choose|find).*\bbest\b/.test(text) ||
+    asksWhy;
   if (!wantsBest) return null;
 
   const norm = normalizePlan({
@@ -160,6 +163,8 @@ function quickOfflinePlan(userRequest: string): LocalPlanResult {
   return {
     kind: "plan",
     plan: norm.plan,
-    message: "I’ll pick the best parts locally using motion and saliency."
+    message: asksWhy
+      ? "Those clips were picked by local scoring because they ranked higher for motion and visual saliency. Detailed scene reasons need the video-memory tree wiring next."
+      : "I’ll pick the best parts locally using motion and saliency."
   };
 }
