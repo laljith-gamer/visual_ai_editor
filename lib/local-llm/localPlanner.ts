@@ -148,7 +148,9 @@ function quickOfflinePlan(userRequest: string): LocalPlanResult {
     /\b(best parts?|best moments?|highlights?)\b/.test(text) ||
     /\b(pick|choose|find).*\bbest\b/.test(text) ||
     asksWhy;
-  if (!wantsBest) return null;
+  const wantsVertical = /\b(vertical|reels?|shorts?|tiktok|9:16)\b/.test(text) &&
+    /\b(make|create|turn|convert|build)\b/.test(text);
+  if (!wantsBest && !wantsVertical) return null;
 
   const norm = normalizePlan({
     scenarios: [],
@@ -165,6 +167,8 @@ function quickOfflinePlan(userRequest: string): LocalPlanResult {
     plan: norm.plan,
     message: asksWhy
       ? "Those clips were picked by local scoring because they ranked higher for motion and visual saliency. Detailed scene reasons need the video-memory tree wiring next."
-      : "I’ll pick the best parts locally using motion and saliency."
+      : wantsVertical
+        ? "I’ll make a vertical reel locally using the best motion and saliency moments."
+        : "I’ll pick the best parts locally using motion and saliency."
   };
 }
