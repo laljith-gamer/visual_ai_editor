@@ -8,6 +8,7 @@ Use offline/local AI first.
 - Full video analysis may continue for up to 5 minutes.
 - Goal is production-level local/offline video editing assistance with privacy.
 - Prioritize fast response, stronger memory capability, and higher accuracy.
+- Must support both a single uploaded video and multiple uploaded videos.
 
 ## Product contract
 
@@ -18,6 +19,7 @@ Use offline/local AI first.
 5. Never claim the offline LLM saw frames directly; it reads the local video index.
 6. Preserve memory across turns, sessions, and re-analysis using video-hash keyed indexes.
 7. Improve accuracy by combining tree memory, graph links, retrieval, confidence, and user feedback.
+8. Build one memory tree per video/source, then combine relevant nodes for multi-video planner context.
 
 ## Architecture
 
@@ -35,6 +37,7 @@ Use the offline text planner first. Inputs:
 - current timeline/context
 - persistent session memory
 - prior tree-summary nodes for the same video hash
+- all selected source memories when multiple videos are uploaded
 
 Output:
 
@@ -134,3 +137,18 @@ Train the offline text planner first. It should learn:
 Use Web Workers for long-running local analysis. Persist index/cache by video hash. Keep UI responsive with cancellable/resumable jobs and progress text.
 
 Memory capability should be treated as a first-class feature, not only a log. The app should remember what it already understood about a video and reuse that tree/index for later chats.
+
+## Implementation status
+
+2026-06-16 foundation shipped:
+
+- Added a dedicated `shorts-studio-video-memory` IndexedDB store via `lib/store/idb.ts`.
+- Added `lib/video-memory/types.ts` for the persistent memory tree schema.
+- Added `lib/video-memory/build.ts` to convert an existing `FrameTree` into persistent video memory.
+- Added `lib/video-memory/query.ts` for deterministic retrieval and compact planner context.
+- Added `lib/video-memory/store.ts` for video-hash keyed persistence and feedback updates.
+- Added `lib/video-memory/index.ts` public exports.
+- Added multi-video retrieval context helper so a single upload and multiple uploads are both first-class.
+- Vercel deployment succeeded for the TypeScript fix commit `54e782ba`.
+
+This is foundation-only. It does not yet wire memory into the live editor analysis flow.
