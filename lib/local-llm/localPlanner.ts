@@ -90,6 +90,9 @@ export async function tryLocalPlannerFallback(
     return { kind: "unsupported", reason: "vision" };
   }
 
+  const quick = quickOfflinePlan(userRequest);
+  if (quick) return quick;
+
   if (!isWebGPUAvailable()) return null;
 
   let raw: string;
@@ -135,4 +138,28 @@ function isLocalVisionRequest(userRequest: string): boolean {
     /\b(video|clip|frame|footage|scene|screen)\b/.test(text)
   ) || /what('| i)?s in (this|the) (video|clip|footage)/.test(text) ||
     /what happens? in (this|the) (video|clip|footage)/.test(text);
+}
+
+function quickOfflinePlan(userRequest: string): LocalPlanResult {
+  const text = userRequest.toLowerCase();
+  const wantsBest =
+    /\b(best parts?|best moments?|highlights?)\b/.test(text) ||
+    /\b(pick|choose|find).*\bbest\b/.test(text);
+  if (!wantsBest) return null;
+
+  const norm = normalizePlan({
+    scenarios: [],
+    signals: { semantic: 0, motion: 0.6, saliency: 0.4 },
+    selectionStrategy: "best",
+    format: "vertical",
+    transition: "none",
+    userSpecifiedDuration: false,
+    rationale: "Offline quick plan using motion and saliency."
+  });
+  if (!norm.plan) return null;
+  return {
+    kind: "plan",
+    plan: norm.plan,
+    message: "I’ll pick the best parts locally using motion and saliency."
+  };
 }
