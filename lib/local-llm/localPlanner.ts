@@ -6,16 +6,14 @@
 //
 //     cloud planner (/api/agent)  →  LOCAL WebLLM planner  →  manual
 //
-// It runs ONLY when the cloud planner has failed and the feature is
-// enabled (see lib/local-llm/config.ts). It produces a small EditPlan
-// (same shape the cloud planner emits) which is then run through the
-// existing client pipeline — the in-browser scoring/render path is
-// unchanged.
+// It produces a small EditPlan (same shape the cloud planner emits) which is
+// then run through the existing client pipeline — the in-browser scoring/render
+// path is unchanged.
 //
-// VISION HONESTY: a small on-device text model cannot look at video
-// frames. When the user's request is really a "describe / what's in the
-// video" ask, the model is told to return { "mode": "unsupported" } and
-// the caller shows a truthful message instead of faking a plan.
+// VISION HONESTY: a small on-device text model cannot look at video frames.
+// When the user's request is really a "describe / what's in the video" ask,
+// return { kind: "unsupported" } before loading WebLLM so local-only mode shows
+// a truthful message instead of the raw cloud-disabled provider error.
 // =====================================================================
 
 import type { EditPlan } from "@/lib/types";
@@ -88,6 +86,10 @@ export async function tryLocalPlannerFallback(
   userRequest: string,
   ctx: { videoDurationSeconds?: number } = {}
 ): Promise<LocalPlanResult> {
+  if (isLocalVisionRequest(userRequest)) {
+    return { kind: "unsupported", reason: "vision" };
+  }
+
   if (!isWebGPUAvailable()) return null;
 
   let raw: string;
@@ -121,7 +123,16 @@ export async function tryLocalPlannerFallback(
   const message =
     typeof parsed.message === "string" && parsed.message.trim()
       ? parsed.message.trim().slice(0, 200)
-      : "Cloud AI was unavailable, so I planned this on your device. Heads up \u2014 local AI can't watch the video frames yet.";
+      : "Cloud AI was unavailable, so I planned this on your device. Heads up — local AI can't watch the video frames yet.";
 
   return { kind: "plan", plan: norm.plan, message };
+}
+
+function isLocalVisionRequest(userRequest: string): boolean {
+  const text = userRequest.toLowerCase();
+  return (
+    /\b(describe|watch|see|identify|recognize|detect|analyse|analyze)\b/.test(text) &&
+    /\b(video|clip|frame|footage|scene|screen)\b/.test(text)
+  ) || /what('| i)?s in (this|the) (video|clip|footage)/.test(text) ||
+    /what happens? in (this|the) (video|clip|footage)/.test(text);
 }
