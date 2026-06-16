@@ -21,8 +21,9 @@
 // the store, and retry the operation exactly once.
 //
 // PRIVACY: recovery only ever console.warn's the DB name + operation name.
-// It NEVER logs stored values (sessions, predictions, logs, transcripts),
-// video bytes, base64 frames, prompts, API keys, or transcript text.
+// It NEVER logs stored values (sessions, predictions, logs, transcripts,
+// video-tree memory), video bytes, base64 frames, prompts, API keys, or
+// transcript text.
 // =====================================================================
 
 import {
@@ -37,7 +38,7 @@ import {
 
 /** Logical stores. Each maps to its OWN database (one object store per DB)
  *  so they can be deleted/recovered independently and never collide. */
-export type IdbKind = "sessions" | "cache" | "logs" | "transcripts";
+export type IdbKind = "sessions" | "cache" | "logs" | "transcripts" | "videoMemory";
 
 interface DbSpec {
   dbName: string;
@@ -52,7 +53,8 @@ const DB_SPECS: Record<IdbKind, DbSpec> = {
   sessions: { dbName: "shorts-studio-sessions", storeName: "kv" },
   cache: { dbName: "shorts-studio-cache", storeName: "kv" },
   logs: { dbName: "shorts-studio-logs", storeName: "kv" },
-  transcripts: { dbName: "shorts-studio-transcripts", storeName: "kv" }
+  transcripts: { dbName: "shorts-studio-transcripts", storeName: "kv" },
+  videoMemory: { dbName: "shorts-studio-video-memory", storeName: "kv" }
 };
 
 /** All database names this app owns (for the emergency reset util). */
@@ -218,6 +220,7 @@ export function safeUpdate<T>(
  *   indexedDB.deleteDatabase("shorts-studio-cache");
  *   indexedDB.deleteDatabase("shorts-studio-logs");
  *   indexedDB.deleteDatabase("shorts-studio-transcripts");
+ *   indexedDB.deleteDatabase("shorts-studio-video-memory");
  *   location.reload();
  */
 export async function resetAllLocalDatabases(): Promise<void> {
@@ -249,4 +252,11 @@ export const idbLog = {
   set: <T>(key: string, value: T) => safeSet<T>("logs", key, value),
   del: (key: string) => safeDel("logs", key),
   keys: () => safeKeys("logs")
+};
+
+export const idbVideoMemory = {
+  get: <T>(key: string) => safeGet<T>("videoMemory", key),
+  set: <T>(key: string, value: T) => safeSet<T>("videoMemory", key, value),
+  del: (key: string) => safeDel("videoMemory", key),
+  keys: () => safeKeys("videoMemory")
 };
