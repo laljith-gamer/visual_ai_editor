@@ -6,6 +6,9 @@ function readOptional(name: string): string | undefined {
 }
 
 export const serverEnv = {
+  // Current local-only build: cloud model providers are disabled unless this
+  // is explicitly set to false/0/off in the deployment environment.
+  DISABLE_CLOUD_AI: readOptional("DISABLE_CLOUD_AI"),
   GEMINI_API_KEY: readOptional("GEMINI_API_KEY"),
   GEMINI_MODEL: readOptional("GEMINI_MODEL") ?? "gemini-2.5-flash",
   GROQ_API_KEY: readOptional("GROQ_API_KEY"),
@@ -46,7 +49,15 @@ export const serverEnv = {
   ADMIN_TOKEN: readOptional("ADMIN_TOKEN")
 };
 
+export function cloudAiDisabled(): boolean {
+  const value = serverEnv.DISABLE_CLOUD_AI;
+  if (!value) return true;
+  const normalized = value.trim().toLowerCase();
+  return normalized !== "false" && normalized !== "0" && normalized !== "off";
+}
+
 export function hasAnyChatProvider(): boolean {
+  if (cloudAiDisabled()) return false;
   return Boolean(
     serverEnv.OPENROUTER_API_KEY ||
       serverEnv.CUSTOM_OPENAI_API_KEY ||
@@ -57,18 +68,18 @@ export function hasAnyChatProvider(): boolean {
 
 /** True when an OpenRouter API key is configured (server-side only). */
 export function hasOpenRouter(): boolean {
-  return Boolean(serverEnv.OPENROUTER_API_KEY);
+  return !cloudAiDisabled() && Boolean(serverEnv.OPENROUTER_API_KEY);
 }
 
 /** True when a custom OpenAI-compatible provider is configured. */
 export function hasCustomOpenAI(): boolean {
-  return Boolean(
+  return !cloudAiDisabled() && Boolean(
     serverEnv.CUSTOM_OPENAI_API_KEY && serverEnv.CUSTOM_OPENAI_BASE_URL
   );
 }
 
 export function hasGemini(): boolean {
-  return Boolean(serverEnv.GEMINI_API_KEY);
+  return !cloudAiDisabled() && Boolean(serverEnv.GEMINI_API_KEY);
 }
 
 /** True when a vision-capable cloud provider is configured. OpenRouter
@@ -76,6 +87,7 @@ export function hasGemini(): boolean {
  *  Gemini also qualifies. Custom OpenAI-compatible providers qualify only when
  *  CUSTOM_OPENAI_ENABLE_VISION=true. Groq is text-only and does not count. */
 export function hasAnyVisionProvider(): boolean {
+  if (cloudAiDisabled()) return false;
   return Boolean(
     serverEnv.OPENROUTER_API_KEY ||
       (hasCustomOpenAI() &&
