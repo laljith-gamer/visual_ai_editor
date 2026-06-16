@@ -57,7 +57,11 @@ export function cloudAiDisabled(): boolean {
 }
 
 export function hasAnyChatProvider(): boolean {
-  if (cloudAiDisabled()) return false;
+  // Local-only mode still has deterministic planner fallbacks in /api/agent.
+  // Returning true here prevents the route from 503-ing before it can parse
+  // the request and synthesize a local plan. Actual cloud provider checks
+  // below remain false while cloudAiDisabled() is true.
+  if (cloudAiDisabled()) return true;
   return Boolean(
     serverEnv.OPENROUTER_API_KEY ||
       serverEnv.CUSTOM_OPENAI_API_KEY ||
