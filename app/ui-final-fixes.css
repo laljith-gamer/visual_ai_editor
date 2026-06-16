@@ -158,3 +158,31 @@
   content: none !important;
   display: none !important;
 }
+
+/* Smart Chat header: remove duplicated status pills and prevent the AUTO tag
+   from crowding/overlapping the Local AI pill. Keep one clean status button. */
+[class*="AssistantPanel_autoTag"] {
+  display: none !important;
+}
+
+[class*="AssistantPanel_header"] {
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+[class*="AssistantPanel_title"] {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  margin-right: 0 !important;
+}
+
+[class*="AssistantPanel_header"] > div:last-child {
+  flex: 0 0 auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+[class*="AssistantPanel_header"] > div:last-child > .pill[title^="Local-only mode"] {
+  display: none !important;
+}
