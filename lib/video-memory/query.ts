@@ -39,7 +39,7 @@ export function getNodePath(
   nodeId: string
 ): VideoMemoryNode[] {
   const path: VideoMemoryNode[] = [];
-  let current = index.nodes[nodeId];
+  let current: VideoMemoryNode | undefined = index.nodes[nodeId];
   while (current) {
     path.unshift(current);
     current = current.parentId ? index.nodes[current.parentId] : undefined;
