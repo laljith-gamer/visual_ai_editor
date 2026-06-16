@@ -1,7 +1,7 @@
 import type { FrameScore, PredictionsCacheEntry } from "@/lib/types";
 import { idbCache } from "./idb";
 import { CACHE } from "@/lib/config";
-import { buildFrameTree } from "@/lib/frame-tree";
+import { buildFrameTree, type FrameInput } from "@/lib/frame-tree";
 import {
   buildVideoMemoryFromFrameTree,
   saveVideoMemory
@@ -33,12 +33,21 @@ async function saveVideoMemoryFromPredictions(
 ): Promise<void> {
   if (entry.frames.length === 0) return;
   const duration = inferDuration(entry.frames, entry.sampleEverySeconds);
-  const frameTree = buildFrameTree(entry.frames, { duration });
+  const treeFrames = entry.frames.map(toFrameInput);
+  const frameTree = buildFrameTree(treeFrames, { duration });
   const videoMemory = buildVideoMemoryFromFrameTree(frameTree, {
     videoHash: entry.videoHash,
     duration
   });
   await saveVideoMemory(videoMemory);
+}
+
+function toFrameInput(frame: FrameScore): FrameInput {
+  return {
+    t: frame.t,
+    motion: frame.motion ?? 0,
+    saliency: frame.saliency ?? frame.score ?? 0
+  };
 }
 
 function inferDuration(frames: FrameScore[], sampleEverySeconds: number): number {
