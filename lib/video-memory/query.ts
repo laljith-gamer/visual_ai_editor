@@ -3,6 +3,7 @@
 //
 // Fast local retrieval helpers for video-tree memory. These are intentionally
 // deterministic and cheap: lexical/tag scoring now, embedding rerank later.
+// Supports both one-video and multi-video planner context.
 // =====================================================================
 
 import type {
@@ -13,6 +14,7 @@ import type {
 } from "@/lib/video-memory/types";
 
 const DEFAULT_LIMIT = 8;
+const DEFAULT_MULTI_LIMIT = 12;
 
 export function rankVideoMemoryNodes(
   index: VideoMemoryIndex,
@@ -57,15 +59,55 @@ export function compactVideoMemoryForPlanner(
   });
 
   const lines = [
-    `Video memory: ${index.videoName ?? index.videoHash.slice(0, 12)} (${formatTime(0)}-${formatTime(index.duration)})`,
+    `Video memory: ${videoLabel(index)} (${formatTime(0)}-${formatTime(index.duration)})`,
+    `Source: ${index.sourceId ?? "unknown"}`,
     `Tree: ${index.stats.chapterCount} chapters, ${index.stats.sceneCount} scenes, ${index.stats.shotCount} shots`,
     "Relevant nodes:"
   ];
 
   for (const { node, score, reasons } of ranked) {
-    lines.push(
-      `- ${node.id} [${node.kind}] ${formatTime(node.start)}-${formatTime(node.end)} score=${round2(score)} tags=${node.tags.join(",") || "none"} summary=${node.summary}${reasons.length > 0 ? ` reasons=${reasons.join(",")}` : ""}`
-    );
+    lines.push(formatRankedLine(index, node, score, reasons));
+  }
+
+  return lines.join("\n");
+}
+
+export function compactVideoMemoriesForPlanner(
+  indexes: VideoMemoryIndex[],
+  query = "",
+  options: VideoMemoryQueryOptions & { perVideoLimit?: number; totalLimit?: number } = {}
+): string {
+  if (indexes.length === 0) return "Video memory: none yet";
+  if (indexes.length === 1) return compactVideoMemoryForPlanner(indexes[0], query, options);
+
+  const perVideoLimit = Math.max(1, options.perVideoLimit ?? 4);
+  const totalLimit = Math.max(1, options.totalLimit ?? DEFAULT_MULTI_LIMIT);
+  const ranked = indexes.flatMap((index, videoIndex) =>
+    rankVideoMemoryNodes(index, query, {
+      limit: perVideoLimit,
+      includeKinds: options.includeKinds ?? ["chapter", "scene", "shot"],
+      minConfidence: options.minConfidence
+    }).map((entry) => ({ ...entry, index, videoIndex }))
+  );
+
+  ranked.sort(
+    (a, b) =>
+      b.score - a.score ||
+      a.videoIndex - b.videoIndex ||
+      a.node.start - b.node.start
+  );
+
+  const lines = [
+    `Video memories: ${indexes.length} sources`,
+    ...indexes.map(
+      (index, i) =>
+        `Source ${i + 1}: ${videoLabel(index)} duration=${formatTime(index.duration)} chapters=${index.stats.chapterCount} scenes=${index.stats.sceneCount}`
+    ),
+    "Relevant cross-video nodes:"
+  ];
+
+  for (const { index, node, score, reasons, videoIndex } of ranked.slice(0, totalLimit)) {
+    lines.push(`- source=${videoIndex + 1} ${formatRankedLine(index, node, score, reasons)}`);
   }
 
   return lines.join("\n");
@@ -105,6 +147,19 @@ function scoreNode(node: VideoMemoryNode, terms: string[]): RankedVideoMemoryNod
   if (rejectedPenalty > 0) reasons.push("rejected-before");
 
   return { node, score: round2(Math.max(0, score)), reasons: unique(reasons) };
+}
+
+function formatRankedLine(
+  index: VideoMemoryIndex,
+  node: VideoMemoryNode,
+  score: number,
+  reasons: string[]
+): string {
+  return `${index.sourceId ?? "source"}:${node.id} [${node.kind}] ${formatTime(node.start)}-${formatTime(node.end)} score=${round2(score)} tags=${node.tags.join(",") || "none"} summary=${node.summary}${reasons.length > 0 ? ` reasons=${reasons.join(",")}` : ""}`;
+}
+
+function videoLabel(index: VideoMemoryIndex): string {
+  return index.videoName ?? index.sourceId ?? index.videoHash.slice(0, 12);
 }
 
 function tokenize(text: string): string[] {
