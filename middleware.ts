@@ -22,6 +22,16 @@ export const config = {
   ]
 };
 
+const LOCAL_MODEL_CONNECT_SRC =
+  "https://*.xethub.hf.co https://*.cdn.hf.co https://cdn-lfs.hf.co https://*.hf.co";
+
+function contentSecurityPolicy(): string {
+  return SECURITY_HEADERS.contentSecurityPolicy.replace(
+    "https://unpkg.com https://cdn.jsdelivr.net;",
+    `https://unpkg.com https://cdn.jsdelivr.net ${LOCAL_MODEL_CONNECT_SRC};`
+  );
+}
+
 export async function middleware(req: NextRequest): Promise<NextResponse> {
   const url = new URL(req.url);
   const pathname = url.pathname;
@@ -66,7 +76,7 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
   res.headers.set("Cross-Origin-Resource-Policy", "cross-origin");
   // Security
   res.headers.set("Strict-Transport-Security", SECURITY_HEADERS.hsts);
-  res.headers.set("Content-Security-Policy", SECURITY_HEADERS.contentSecurityPolicy);
+  res.headers.set("Content-Security-Policy", contentSecurityPolicy());
   res.headers.set("Permissions-Policy", SECURITY_HEADERS.permissionsPolicy);
   res.headers.set("Referrer-Policy", SECURITY_HEADERS.referrerPolicy);
   res.headers.set("X-Frame-Options", SECURITY_HEADERS.xFrameOptions);
