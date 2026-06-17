@@ -152,14 +152,20 @@ function quickOfflinePlan(userRequest: string): LocalPlanResult {
     /\b(make|create|turn|convert|build)\b/.test(text);
   if (!wantsBest && !wantsVertical) return null;
 
+  const focus = extractFocus(userRequest);
+  const hasFocus = Boolean(focus);
   const norm = normalizePlan({
-    scenarios: [],
-    signals: { semantic: 0, motion: 0.6, saliency: 0.4 },
+    scenarios: hasFocus ? [{ prompt: `${focus} moments` }] : [],
+    signals: hasFocus
+      ? { semantic: 0.55, motion: 0.25, saliency: 0.2 }
+      : { semantic: 0, motion: 0.6, saliency: 0.4 },
     selectionStrategy: "best",
     format: "vertical",
     transition: "none",
     userSpecifiedDuration: false,
-    rationale: "Offline quick plan using motion and saliency."
+    rationale: hasFocus
+      ? `Offline quick plan preserving the user's requested focus: ${focus}.`
+      : "Offline quick plan using motion and saliency."
   });
   if (!norm.plan) return null;
   return {
@@ -167,8 +173,21 @@ function quickOfflinePlan(userRequest: string): LocalPlanResult {
     plan: norm.plan,
     message: asksWhy
       ? "Those clips were picked by local scoring because they ranked higher for motion and visual saliency. Detailed scene reasons need the video-memory tree wiring next."
-      : wantsVertical
-        ? "I’ll make a vertical reel locally using the best motion and saliency moments."
-        : "I’ll pick the best parts locally using motion and saliency."
+      : hasFocus
+        ? `I’ll pick the best ${focus} moments locally.`
+        : wantsVertical
+          ? "I’ll make a vertical reel locally using the best motion and saliency moments."
+          : "I’ll pick the best parts locally using motion and saliency."
   };
+}
+
+function extractFocus(userRequest: string): string | null {
+  const text = userRequest
+    .toLowerCase()
+    .replace(/\b(pick|choose|find|make|create|turn|convert|build|give|get|clip|clips?)\b/g, " ")
+    .replace(/\b(best|parts?|moments?|highlights?|video|footage|shorts?|reels?|tiktok|vertical|for|me|please|alone|only)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text || text.length < 3) return null;
+  return text.slice(0, 80);
 }
