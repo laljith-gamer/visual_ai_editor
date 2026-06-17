@@ -2,7 +2,7 @@
 
 > **Read this first.** This folder is the handoff brain for the repo. A fresh AI/helper session should read this file before making changes, then follow the reading order below.
 >
-> Last organized: **2026-06-17** — memory-folder organization only. No UI, backend, workflow, or application-code files were changed for this organization pass.
+> Last organized: **2026-06-17** — runtime console fix note indexed after browser scoring warning cleanup.
 
 ---
 
@@ -68,6 +68,12 @@ These files are snapshots. They explain how the project reached the current stat
 | `OFFLINE_VIDEO_UNDERSTANDING_STEP1_2026-06-16.md` | Step 1: scored frames → FrameTree → VideoMemoryIndex persistence. |
 | `LOCAL_MODEL_CSP_AND_TREE_MEMORY_2026-06-16.md` | Local model CSP fixes and tree-memory wiring state. |
 | `LOCAL_ONLY_UI_AND_CSP_FIXES_2026-06-16.md` | Local-only UI badge, CSP, and deterministic fallback fixes. |
+
+### Runtime / deployment diagnostics
+
+| File | Use when you need |
+|------|-------------------|
+| `RUNTIME_CONSOLE_FIXES_2026-06-17.md` | DevTools/runtime warning triage: manifest 401, Canvas2D readback hint, SigLIP dtype warning. |
 
 ### Training / future model direction
 
