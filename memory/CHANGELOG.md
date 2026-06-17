@@ -17,7 +17,22 @@
 
 ---
 
-### 2026-06-19 — PR 57: production tool reliability (issue #57)
+### 2026-06-19 — PR 58: per-boundary transition foundation (small)
+- **Change made:** Added the per-boundary transition MODEL + honest
+  mapping (no render/UI change). `lib/config.ts` `TRANSITIONS` guardrails;
+  `lib/transitions/types.ts` (`TransitionType`, `RenderableTransition`,
+  `BoundaryTransition`, duration default/clamp); `lib/transitions/map.ts`
+  (`mapTransition` exact-vs-down-mapped + honest `note`, `toRenderable`,
+  `describeMappedDowns`). glitch/whip/match_cut + dip_to_black/slide/zoom
+  map down and are flagged not-exact (never claimed rendered).
+- **Files affected:** `lib/config.ts`, `lib/transitions/types.ts`,
+  `lib/transitions/map.ts` (+ `map.test.ts`), `package.json`, `memory/*`.
+- **Reason:** Issue #57 PR 58 foundation — production needs per-boundary
+  transitions; capture the model + honest mapping first, keep it small and
+  low-risk. Render worker + picker UI + chat wiring are the follow-up.
+- **Validation:** typecheck ✓, build ✓, `npm test` = 119 pass / 0 fail.
+
+---
 - **Change made:** Reliable export/download + a render-vs-export split in
   the fast command router.
   - New `lib/util/download.ts`: pure `safeTitleSegment` / `exportTimestamp`

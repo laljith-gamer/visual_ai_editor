@@ -707,3 +707,22 @@ export const STORAGE_BUDGET = {
    *  silently consuming the cache. */
   modelDownloadWarnBytes: 80 * MB
 } as const;
+
+
+
+// =====================================================================
+// Per-boundary transitions (lib/transitions/*) — PR 58 foundation.
+//
+// Centralized, documented duration guardrails (allowed by CONSTRAINTS:
+// "transition duration defaults if centralized and documented"). The
+// render worker currently implements only none/fade/crossfade; richer
+// types are captured for intent and mapped DOWN honestly (see
+// lib/transitions/map.ts). Render + UI wiring is a follow-up.
+// =====================================================================
+
+export const TRANSITIONS = {
+  /** Default transition duration (seconds) when a boundary doesn't name one. */
+  defaultDurationSeconds: 0.4,
+  /** Hard cap so a transition can't eat a short clip. */
+  maxDurationSeconds: 1.0
+} as const;

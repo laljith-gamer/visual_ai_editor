@@ -39,6 +39,17 @@ verified, not rebuilt.
   — needs a real browser. PR 58 (transition foundation) is separate. See
   `memory/PR57_PRODUCTION_TOOL_RELIABILITY_2026-06-19.md`.
 
+## 0. Also (2026-06-19) — PR 58 transition foundation (small)
+
+Per-boundary transition MODEL only (no render/UI change yet). `TRANSITIONS`
+config guardrails + `lib/transitions/{types,map}.ts`: `TransitionType`
+(cut/fade/crossfade/dip_to_black/slide/zoom/glitch/whip/match_cut),
+`RenderableTransition` (none/fade/crossfade), `BoundaryTransition`, and an
+honest `mapTransition` (exact for cut/fade/crossfade; everything else
+mapped down with a note — glitch/whip/match_cut never claimed rendered).
+7 mapping tests (→ 119 pass). Render worker + picker UI + chat commands are
+the larger follow-up. See `memory/PR58_TRANSITION_FOUNDATION_2026-06-19.md`.
+
 ---
 
 ## 0. Latest change (2026-06-18) — offline fast-editor pass

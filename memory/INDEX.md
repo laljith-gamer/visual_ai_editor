@@ -84,6 +84,7 @@ These files are snapshots. They explain how the project reached the current stat
 | `AGENTIC_INTENT_LAYER_2026-06-17.md` | Deterministic agent: natural-command parsing (`lib/intent`), agent memory + reinforcement (`lib/agent-memory`), timeline ops (`lib/timeline`), orchestrator + concept/OCR resolution (`lib/agent`, `lib/ocr`), and how it's wired before the cloud planner. |
 | `OFFLINE_FAST_EDITOR_2026-06-18.md` | Offline fast-editor pass: fast control-command routing (`lib/intent/fastCommands`), store redo, agent-memory IndexedDB persistence (`lib/agent-memory/persistence`, `getRelevantMemory`), storage budget+manager (`lib/storage/*`), and explicit transcription errors. |
 | `PR57_PRODUCTION_TOOL_RELIABILITY_2026-06-19.md` | Issue #57 PR 57: reliable export/download (`lib/util/download`, `hooks/useExport`, deterministic filename, blocked fallback), render-vs-export split + pure `decideFastAction` in `lib/intent/fastCommands`. |
+| `PR58_TRANSITION_FOUNDATION_2026-06-19.md` | Issue #57 PR 58: per-boundary transition model + honest mapping (`lib/transitions/{types,map}`, `TRANSITIONS` config). Foundation only — render/UI/chat wiring is a follow-up. |
 
 ### Training / future model direction
 
