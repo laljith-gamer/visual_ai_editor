@@ -66,6 +66,13 @@ interface EditorState {
   previousHighlights: Highlight[] | null;
   previousSelectedClipId: string | null;
 
+  /** v2.0 — One-step REDO snapshot. Captured by `undoTimeline` (the
+   *  pre-undo timeline) so a subsequent "redo" re-applies it. Cleared by
+   *  any fresh timeline mutation (via `snapshot()`), so redo never
+   *  re-applies a stale future after an unrelated edit. */
+  redoHighlights: Highlight[] | null;
+  redoSelectedClipId: string | null;
+
   /** v1.7.9 — How the NEXT pipeline run should join its results to the
    *  timeline. Set by the editor when a plan/moment turn is resolved (or
    *  deferred behind the "Run analysis" card) and read by runPipeline —
@@ -181,6 +188,9 @@ interface EditorState {
   /** v1.7.9 — Restore the timeline to the snapshot captured before the
    *  most recent mutation. Returns whether anything was restored. */
   undoTimeline: () => { restored: boolean };
+  /** v2.0 — Re-apply the timeline that `undoTimeline` reverted. One-step;
+   *  no-op when there's nothing to redo. */
+  redoTimeline: () => { restored: boolean };
   /** v1.7.9 — Set how the next pipeline run joins its results. */
   setPendingTimelineOp: (op: "append" | "replace") => void;
   updateHighlight: (id: string, patch: Partial<Highlight>) => void;
@@ -281,6 +291,8 @@ function freshState() {
     selectedClipId: null as string | null,
     previousHighlights: null as Highlight[] | null,
     previousSelectedClipId: null as string | null,
+    redoHighlights: null as Highlight[] | null,
+    redoSelectedClipId: null as string | null,
     pendingTimelineOp: "replace" as "append" | "replace",
     mode: null as IntentMode | null,
     inferred: [] as InferredField[],
@@ -346,10 +358,18 @@ function r2(n: number): number {
 function snapshot(s: {
   highlights: Highlight[];
   selectedClipId: string | null;
-}): { previousHighlights: Highlight[]; previousSelectedClipId: string | null } {
+}): {
+  previousHighlights: Highlight[];
+  previousSelectedClipId: string | null;
+  redoHighlights: null;
+  redoSelectedClipId: null;
+} {
   return {
     previousHighlights: s.highlights,
-    previousSelectedClipId: s.selectedClipId
+    previousSelectedClipId: s.selectedClipId,
+    // Any fresh mutation invalidates a pending redo.
+    redoHighlights: null,
+    redoSelectedClipId: null
   };
 }
 
@@ -651,6 +671,31 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       // rather than toggling back and forth unpredictably.
       previousHighlights: null,
       previousSelectedClipId: null,
+      // Stash the pre-undo timeline so "redo" can re-apply it.
+      redoHighlights: s.highlights,
+      redoSelectedClipId: s.selectedClipId,
+      updatedAt: Date.now()
+    });
+    return { restored: true };
+  },
+
+  redoTimeline: () => {
+    const s = get();
+    if (s.redoHighlights === null) return { restored: false };
+    const restored = s.redoHighlights;
+    const selId =
+      s.redoSelectedClipId &&
+      restored.some((h) => h.id === s.redoSelectedClipId)
+        ? s.redoSelectedClipId
+        : restored[0]?.id ?? null;
+    set({
+      highlights: restored,
+      selectedClipId: selId,
+      // Re-arm undo so the user can toggle back, and consume the redo slot.
+      previousHighlights: s.highlights,
+      previousSelectedClipId: s.selectedClipId,
+      redoHighlights: null,
+      redoSelectedClipId: null,
       updatedAt: Date.now()
     });
     return { restored: true };

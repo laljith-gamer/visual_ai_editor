@@ -4,9 +4,55 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-17 (agentic intent layer added — deterministic
-> command parsing + agent memory + timeline ops + concept/OCR/reinforcement,
-> wired before the cloud planner; additive + reversible)
+> Last updated: 2026-06-18 (offline fast-editor: fast command routing
+> [affirm/cancel/undo/redo/render never hit the planner], one-step redo,
+> agent-memory IndexedDB persistence, storage budget+manager, explicit
+> transcription errors; cloud AI confirmed disabled-by-default in code)
+
+---
+
+## 0. Latest change (2026-06-18) — offline fast-editor pass
+
+Pushes the app toward a fast, offline-first editor brain. Default path is
+deterministic + instant; **cloud AI is already OFF by default in code**
+(`cloudAiDisabled()` returns true when `DISABLE_CLOUD_AI` is unset — the
+older "cloud-primary" notes below are stale; trust the code).
+
+- **Phase 1 — fast command routing (the reported bug fix).** New pure
+  `lib/intent/fastCommands.ts` (anchored classifier:
+  affirm/cancel/undo/redo/render) runs FIRST in
+  `lib/agent/runAgentCommand.ts` `tryAgentCommand`. "yes do it" / "undo" /
+  "render" can NEVER become "look for X moments". Priority: pending
+  confirm (affirm/cancel WITH pending → existing quick-shortcut gate) →
+  undo/redo (always → store) → render (→ real `handleRender`) → affirm/
+  cancel with nothing pending (deterministic nudge) → direct commands →
+  transcript search → visual fall-through. Added one-step **redo** to the
+  store (`redoTimeline`). Direct/control commands resolve <1s, no WebGPU.
+- **Phase 2 — offline agent-memory persistence.** New `agentMemory` idb
+  store + `lib/agent-memory/persistence.ts`
+  (load/save/clear/hydrateAgentMemory) + pure `getRelevantMemory`
+  (priority: user_stated > reinforcement > clip > source > flow >
+  observed > preference). Hydrated once/session, saved after memory-
+  mutating turns. Only the compact serialization is stored — no blobs.
+- **Phase 3 — storage budget + manager.** `STORAGE_BUDGET` caps (mobile
+  150/50/100 MB, desktop 600/300/500 MB, warn >80 MB) +
+  `lib/storage/budget.ts` (pure) + `lib/storage/manager.ts` (measure via
+  Cache Storage / idb / `navigator.storage.estimate`; cleanup:
+  rendered/frame/transcript/model caches + clear-all). Panel UI not yet
+  wired (API ready).
+- **Phase 4 — transcription error honesty.** `useTranscription` now sets
+  an explicit `phase:"error"` on failure and `TranscriptDrawer` shows
+  "Transcription failed: <reason>" instead of silently falling back to
+  "No transcript yet".
+- **Phase 5 — transcript clipping** already works offline via
+  `lib/agent/conceptResolver.ts` (no change needed).
+- **Tests:** +16 (`fastCommands`, `memory`, `storage/budget`) → **102
+  pass / 0 fail**. `typecheck` + `build` ✓.
+- **NOT done (honest):** Phase 6 (cheap CPU best-parts scoring), Phase 7
+  (visual-AI enable-prompt), Phase 9 (PWA), the storage PANEL UI, and an
+  explicit Tiny/Standard/Vision/Power mode selector. Browser/WebGPU +
+  transcription runtime verification still required. See
+  `memory/OFFLINE_FAST_EDITOR_2026-06-18.md`.
 
 ---
 
@@ -61,6 +107,13 @@ browser**. The server is only a thin authenticated proxy for LLM
 text/JSON calls.
 
 ## 3. Current status
+
+> **2026-06-18 correction (trust code):** cloud AI is **disabled by
+> default** — `cloudAiDisabled()` in `lib/env.ts` returns `true` unless
+> `DISABLE_CLOUD_AI=false`. The "OpenRouter primary" / "cloud-primary"
+> phrasing in the historical bullets below describes the optional cloud
+> path that only activates when a key is set AND cloud is explicitly
+> enabled. The default runtime path is offline/deterministic.
 
 - Version: **1.7.9** (see `package.json`).
 - Latest validation: `npm install` + `npm run typecheck` + `npm run build`

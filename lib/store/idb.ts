@@ -38,7 +38,7 @@ import {
 
 /** Logical stores. Each maps to its OWN database (one object store per DB)
  *  so they can be deleted/recovered independently and never collide. */
-export type IdbKind = "sessions" | "cache" | "logs" | "transcripts" | "videoMemory";
+export type IdbKind = "sessions" | "cache" | "logs" | "transcripts" | "videoMemory" | "agentMemory";
 
 interface DbSpec {
   dbName: string;
@@ -54,7 +54,8 @@ const DB_SPECS: Record<IdbKind, DbSpec> = {
   cache: { dbName: "shorts-studio-cache", storeName: "kv" },
   logs: { dbName: "shorts-studio-logs", storeName: "kv" },
   transcripts: { dbName: "shorts-studio-transcripts", storeName: "kv" },
-  videoMemory: { dbName: "shorts-studio-video-memory", storeName: "kv" }
+  videoMemory: { dbName: "shorts-studio-video-memory", storeName: "kv" },
+  agentMemory: { dbName: "shorts-studio-agent-memory", storeName: "kv" }
 };
 
 /** All database names this app owns (for the emergency reset util). */
@@ -259,4 +260,11 @@ export const idbVideoMemory = {
   set: <T>(key: string, value: T) => safeSet<T>("videoMemory", key, value),
   del: (key: string) => safeDel("videoMemory", key),
   keys: () => safeKeys("videoMemory")
+};
+
+export const idbAgentMemory = {
+  get: <T>(key: string) => safeGet<T>("agentMemory", key),
+  set: <T>(key: string, value: T) => safeSet<T>("agentMemory", key, value),
+  del: (key: string) => safeDel("agentMemory", key),
+  keys: () => safeKeys("agentMemory")
 };

@@ -133,14 +133,19 @@ export function useTranscription(): UseTranscriptionResult {
           });
           return t;
         } catch (err) {
+          const message = (err as Error).message || "Transcription failed";
+          // PHASE 4: never silently return to "No transcript yet". Surface
+          // an explicit error phase so the UI can show the real reason
+          // (no audio track / decode failed / model load failed / etc.).
+          setProgress({ phase: "error", progress: 0, error: message });
           logSystem({
             sessionId,
             kind: "transcript.failed",
             payload: {
               sourceId: source.id,
-              message: (err as Error).message
+              message
             },
-            summary: `Transcribe failed: ${(err as Error).message.slice(0, 80)}`
+            summary: `Transcribe failed: ${message.slice(0, 80)}`
           });
           return null;
         } finally {

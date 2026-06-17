@@ -148,6 +148,9 @@ export default function Home() {
   // (handleRunPipeline is defined further down, but the gate needs it
   // when an "affirm" shortcut fires.)
   const handleRunPipelineRef = useRef<(() => Promise<void>) | null>(null);
+  // Same forward-reference pattern for render, so the agentic fast-command
+  // path can trigger the real render without reordering the component.
+  const handleRenderRef = useRef<(() => void) | null>(null);
   //
   // 1. Resolve which library sources are eligible for THIS run:
   //    intersect (selectedSourceIds) ∩ (plan.sources OR all-eligible).
@@ -530,7 +533,8 @@ export default function Home() {
           setStatus,
           setProgress,
           sessionId,
-          logSession
+          logSession,
+          onRender: () => void handleRenderRef.current?.()
         });
         if (outcome.handled) {
           setBusy(false);
@@ -2363,6 +2367,12 @@ export default function Home() {
     pushMessage,
     logSession
   ]);
+
+  // Keep the render ref current so the agentic fast-command path
+  // ("render" / "export") can trigger the real render.
+  useEffect(() => {
+    handleRenderRef.current = () => void handleRender();
+  }, [handleRender]);
 
   const isRendering =
     busy && useEditorStore.getState().status === "rendering";

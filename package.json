@@ -11,8 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test:intent": "node --test --experimental-strip-types lib/plan/deriveIntent.test.ts",
     "test:compose": "node --test --experimental-strip-types lib/plan/compose.test.ts",
-    "test:agent": "node --test --experimental-strip-types --import ./scripts/register-ts-ext.mjs lib/intent/timeRangeParser.test.ts lib/intent/sourceResolver.test.ts lib/intent/clipResolver.test.ts lib/intent/editCommandParser.test.ts lib/agent-memory/policy.test.ts lib/timeline/operations.test.ts",
-    "test": "node --test --experimental-strip-types --import ./scripts/register-ts-ext.mjs lib/plan/deriveIntent.test.ts lib/plan/compose.test.ts lib/intent/timeRangeParser.test.ts lib/intent/sourceResolver.test.ts lib/intent/clipResolver.test.ts lib/intent/editCommandParser.test.ts lib/agent-memory/policy.test.ts lib/timeline/operations.test.ts"
+    "test:agent": "node --test --experimental-strip-types --import ./scripts/register-ts-ext.mjs lib/intent/timeRangeParser.test.ts lib/intent/sourceResolver.test.ts lib/intent/clipResolver.test.ts lib/intent/editCommandParser.test.ts lib/intent/fastCommands.test.ts lib/agent-memory/policy.test.ts lib/agent-memory/memory.test.ts lib/timeline/operations.test.ts lib/storage/budget.test.ts",
+    "test": "node --test --experimental-strip-types --import ./scripts/register-ts-ext.mjs lib/plan/deriveIntent.test.ts lib/plan/compose.test.ts lib/intent/timeRangeParser.test.ts lib/intent/sourceResolver.test.ts lib/intent/clipResolver.test.ts lib/intent/editCommandParser.test.ts lib/intent/fastCommands.test.ts lib/agent-memory/policy.test.ts lib/agent-memory/memory.test.ts lib/timeline/operations.test.ts lib/storage/budget.test.ts"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",

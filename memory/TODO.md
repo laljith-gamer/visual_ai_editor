@@ -8,6 +8,33 @@
 
 ## High priority
 
+- [ ] **Manual browser test — offline fast-editor (2026-06-18, after deploy).**
+      Confirm none of these reach the planner and all resolve <1s:
+      "yes do it" (with a pending → runs it; with nothing pending → nudge,
+      NOT a search), "undo"/"redo" (timeline restore), "cancel"/"no"
+      (clears pending / "nothing to cancel"), "render"/"export" (renders).
+      Direct: "add first 5 seconds", "add from 0:10 to 0:20",
+      "move clip 1 after clip 2", "remove clip 1". Refresh the page →
+      agent flow + reinforcement memory persists (IndexedDB
+      `shorts-studio-agent-memory`). Force a transcription failure (e.g.
+      audio-less file) → drawer shows "Transcription failed: <reason>",
+      NOT a silent "No transcript yet". Needs a real browser; not
+      verifiable in CI.
+- [ ] **Phase 6 — cheap CPU "best parts" (no WebGPU).** Implement
+      motion/scene-cut/audio-energy/silence/blur scoring + transcript
+      keyword + reinforcement so "pick best parts" works without a vision
+      model. Today it routes to the WebGPU pipeline via `needs_visual`.
+- [ ] **Phase 7 — visual-AI enable prompt.** Detect WebGPU + estimate
+      model size and ask before downloading; show "visual AI unavailable
+      on this device" and continue with CPU/transcript analysis.
+- [ ] **Phase 9 — PWA / offline shell.** Cache app shell + core JS/CSS +
+      lazy ffmpeg core; tiny transcription model cached only after opt-in;
+      no automatic large-model caching; offline status indicator.
+- [ ] **Storage panel UI (Phase 3 surface).** Wire `lib/storage/manager.ts`
+      (`estimateStorageBreakdown` + cleanup actions) into a debug/settings
+      panel showing Models/Frames/Transcripts/Rendered/Total + cleanup
+      buttons + over-budget + model-download warnings.
+
 - [ ] **Manual browser test — agentic intent layer (2026-06-17, after deploy).**
       With a video uploaded, verify the deterministic agent handles:
       "add first 2 min", "add last 30 sec from video 2 after clip 3",
@@ -122,6 +149,20 @@
       feature work; no big rewrite.
 
 ## Completed
+
+- [x] (2026-06-18) **Offline fast-editor pass (Phases 1–5, 10).** Fast
+      command routing (`lib/intent/fastCommands.ts` + `runAgentCommand`
+      fast path): affirm/cancel/undo/redo/render never reach the planner,
+      correct priority, <1s, no WebGPU. One-step **redo** added to the
+      store. Agent-memory IndexedDB persistence (`agentMemory` store +
+      `lib/agent-memory/persistence.ts` + pure `getRelevantMemory`
+      priority). Storage budget + manager (`lib/storage/{budget,manager}.ts`
+      + `STORAGE_BUDGET`). Explicit transcription errors (`useTranscription`
+      + `TranscriptDrawer` — no more silent "No transcript yet"). Transcript
+      clipping confirmed offline via `conceptResolver`. +16 tests
+      (`npm test` = 102 pass). typecheck + build ✓. Phases 6/7/9, storage
+      panel UI, and browser runtime verification remain. See
+      `memory/OFFLINE_FAST_EDITOR_2026-06-18.md`.
 
 - [x] (2026-06-17) **Agentic intent layer (additive, reversible).** New
       deterministic agent that parses natural editing commands into
