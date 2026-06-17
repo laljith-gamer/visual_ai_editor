@@ -17,6 +17,30 @@
 
 ---
 
+### 2026-06-19 — Questions answered offline, not turned into clip searches
+- **Change made:** Fixed the bug where "Describe what's in this video" and
+  "why did you pick these clips, explain it" were turned into clip searches
+  ("look for describe / tell / why / explain moments") and built a short.
+  - `lib/agent/questionAnswer.ts` (new, pure, tested): `classifyQuestion` +
+    `answerQuestion` answer from the editor's OWN data (clip reasons/scores,
+    transcript, timeline, boundary transitions) and never build a short.
+    describe_video is honest — transcript summary if available, else "no
+    visual analysis offline" (no fake claims).
+  - `lib/agent/runAgentCommand.ts`: classified questions answered BEFORE the
+    planner; conservative (real builds untouched).
+  - `lib/plan/deriveIntent.ts`: STOPWORDS hardened with ask/explain/meta
+    words so a pure question is non-actionable (can't synthesise
+    "<word> moments").
+- **Files affected:** `lib/agent/questionAnswer.ts` (+test),
+  `lib/agent/runAgentCommand.ts`, `lib/plan/deriveIntent.ts` (+tests),
+  `package.json`, `memory/*`.
+- **Reason:** Questions must be understood and answered accurately, offline,
+  without mutating the timeline or running the pipeline.
+- **Validation:** typecheck ✓, build ✓, `npm test` = 168 pass / 0 fail
+  (+13). On branch `feat/auto-transitions` (PR #61).
+
+---
+
 ### 2026-06-19 — Auto transition picking (issue #57, PR 59 layer)
 - **Change made:** The editor auto-picks the transition between clips from
   generic media signals (offline, deterministic, NO genre tables).

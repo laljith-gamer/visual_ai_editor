@@ -4,9 +4,33 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-19 (auto transition picking — offline, evidence-based
-> selector + per-boundary model/store/UI/chat + per-boundary render wiring;
-> on branch feat/auto-transitions, not yet merged)
+> Last updated: 2026-06-19 (questions are answered offline, not turned into
+> clip searches — `lib/agent/questionAnswer.ts` + `deriveIntent` hardening;
+> plus auto transition picking; on branch feat/auto-transitions)
+
+---
+
+## 0. Latest change (2026-06-19) — questions answered, not turned into builds
+
+Bug: "Describe what's in this video" / "why did you pick these clips, explain
+it" were turned into clip searches ("look for describe / tell / why / explain
+moments") and BUILT a short. Fixed offline + deterministically.
+
+- **Root cause:** questions fell through to the deterministic planner
+  `deriveActionableIntent`, whose STOPWORDS lacked ask/explain words, so the
+  question words became the "focus" → "<word> moments" → an auto-run plan.
+- **Fix A (primary, client/offline):** `lib/agent/questionAnswer.ts` —
+  `classifyQuestion` + `answerQuestion` answer from the editor's OWN data and
+  never build a short: explain_picks (clip reasons/scores), describe_video
+  (transcript summary, else honest "no visual analysis offline" — no fake
+  claims), timeline_status, transitions_status, capabilities. Wired in
+  `runAgentCommand` BEFORE the planner; conservative (real builds untouched).
+- **Fix B (defense-in-depth):** `deriveIntent` STOPWORDS now include
+  describe/explain/tell/why/reason/summary/etc., so a pure question reduces
+  to an empty focus → non-actionable (can never synthesise "<word> moments").
+- **Tests:** +13 → **168 pass**. typecheck ✓, build ✓.
+- On branch `feat/auto-transitions` (PR #61). See
+  `memory/QUESTION_ROUTING_FIX_2026-06-19.md`.
 
 ---
 

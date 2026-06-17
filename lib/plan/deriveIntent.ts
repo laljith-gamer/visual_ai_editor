@@ -96,6 +96,13 @@ const STOPWORDS = new Set([
   "these", "those", "and", "or", "of", "to", "for", "with", "from", "into",
   "in", "on", "at", "about", "around", "the", "a", "an", "is", "are", "be",
   "am", "was", "were", "some", "any", "just", "only", "alone", "solely",
+  // ask / explain / meta words — a QUESTION must never become a subject
+  // ("describe what's in this video" → no subject → non-actionable, not
+  // "describe moments"; "why did you pick these clips explain it" → none).
+  "describe", "description", "explain", "explained", "explaining", "tell",
+  "telling", "told", "why", "reason", "reasons", "because", "summary",
+  "summarize", "summarise", "summary", "mean", "means", "meaning", "list",
+  "happen", "happens", "happening", "did", "does", "your", "youre", "you're",
   // editing / output nouns that aren't a subject
   "part", "parts", "section", "sections", "segment", "segments", "bit",
   "bits", "piece", "pieces", "clip", "clips", "shot", "shots", "scene",

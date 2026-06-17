@@ -86,6 +86,7 @@ These files are snapshots. They explain how the project reached the current stat
 | `PR57_PRODUCTION_TOOL_RELIABILITY_2026-06-19.md` | Issue #57 PR 57: reliable export/download (`lib/util/download`, `hooks/useExport`, deterministic filename, blocked fallback), render-vs-export split + pure `decideFastAction` in `lib/intent/fastCommands`. |
 | `PR58_TRANSITION_FOUNDATION_2026-06-19.md` | Issue #57 PR 58: per-boundary transition model + honest mapping (`lib/transitions/{types,map}`, `TRANSITIONS` config). Foundation only — render/UI/chat wiring is a follow-up. |
 | `PR59_AUTO_TRANSITIONS_2026-06-19.md` | Auto transition picking: offline evidence-based selector (`lib/transitions/{features,auto,timeline}`), store/UI (`TransitionsBar`)/chat (`transitionCommands`) wiring, and per-boundary render (`lib/pipeline/renderFilters` + worker/mediabunny). Honest mapping kept; true xfade deferred. |
+| `QUESTION_ROUTING_FIX_2026-06-19.md` | Questions ("describe this video", "why did you pick these clips") answered offline from the editor's own data (`lib/agent/questionAnswer.ts`) + `deriveIntent` stopword hardening — never turned into clip searches/builds. |
 
 ### Training / future model direction
 

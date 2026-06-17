@@ -106,3 +106,35 @@ test("multi-source/compose words never become scenario labels (v1.8.1 stopwords)
     }
   }
 });
+
+
+// ---------------------------------------------------------------------
+// Question hardening — a QUESTION must never become a junk "X moments" plan.
+// ---------------------------------------------------------------------
+
+test("'Describe what's in this video' is NOT actionable (no 'describe moments')", () => {
+  const i = deriveActionableIntent("Describe what's in this video", { hasVideo: true });
+  assert.equal(i.actionable, false);
+  assert.equal(i.rawFocus, null);
+  assert.deepEqual(i.scenarioLabels, []);
+});
+
+test("'tell me why did you pick these clips explain it' is NOT actionable", () => {
+  const i = deriveActionableIntent("tell me why did you pick these clips explain it", {
+    hasVideo: true
+  });
+  assert.equal(i.actionable, false);
+  assert.equal(i.rawFocus, null);
+  assert.deepEqual(i.scenarioLabels, []);
+});
+
+test("'summarize the video' / 'what happens' are NOT actionable", () => {
+  assert.equal(deriveActionableIntent("summarize the video").actionable, false);
+  assert.equal(deriveActionableIntent("what happens in this video").actionable, false);
+});
+
+test("a real subject after an ask verb still works ('describe the dragon fight')", () => {
+  const i = deriveActionableIntent("describe the dragon fight", { hasVideo: true });
+  assert.equal(i.actionable, true);
+  assert.ok((i.rawFocus ?? "").includes("dragon"));
+});

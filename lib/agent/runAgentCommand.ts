@@ -40,6 +40,11 @@ import { hydrateAgentMemory, saveAgentMemory } from "@/lib/agent-memory/persiste
 import { parseTransitionCommand, type TransitionCommand } from "@/lib/intent/transitionCommands";
 import { mapTransition } from "@/lib/transitions/map";
 import { normalizeTransitionDuration, type BoundaryTransition } from "@/lib/transitions/types";
+import {
+  answerQuestion,
+  classifyQuestion,
+  type QAContext
+} from "@/lib/agent/questionAnswer";
 
 // ---- per-session agent memory --------------------------------------
 const memoryBySession = new Map<string, AgentMemoryStore>();
@@ -125,6 +130,50 @@ function buildContext(memory: AgentMemoryStore): {
   return { ctx, getTranscript };
 }
 
+/** Build the offline question-answer context from the live store. */
+function buildQAContext(): QAContext {
+  const s = useEditorStore.getState();
+  const hashById = new Map(s.sources.map((src) => [src.id, src.hash]));
+  const activeHash = s.activeSourceId ? hashById.get(s.activeSourceId) : undefined;
+  const activeTranscript = activeHash ? s.transcripts[activeHash] : undefined;
+  const transcriptText =
+    activeTranscript && activeTranscript.segments.length > 0
+      ? activeTranscript.fullText || activeTranscript.segments.map((seg) => seg.text).join(" ")
+      : null;
+
+  return {
+    highlights: s.highlights.map((h) => ({
+      id: h.id,
+      start: h.start,
+      end: h.end,
+      sourceId: h.sourceId,
+      label: h.label,
+      reason: h.reason,
+      score: h.score,
+      confidence: h.confidence
+    })),
+    boundaryTransitions: s.boundaryTransitions.map((b) => ({
+      index: b.index,
+      type: b.type,
+      mode: b.mode,
+      reason: b.reason,
+      render: b.render,
+      exact: b.exact,
+      note: b.note
+    })),
+    sources: s.sources.map((src) => ({
+      id: src.id,
+      name: src.meta.name,
+      duration: src.meta.duration,
+      width: src.meta.width,
+      height: src.meta.height
+    })),
+    activeSourceId: s.activeSourceId,
+    transcriptText,
+    hasTranscript: !!transcriptText
+  };
+}
+
 /** Entry point called from the editor BEFORE the quick-shortcut gate. */
 export async function tryAgentCommand(
   userText: string,
@@ -153,6 +202,22 @@ export async function tryAgentCommand(
   if (transitionCmd) {
     deps.logSession.ai("agent.transition", { kind: transitionCmd.kind }, `Transition command: ${transitionCmd.kind}`);
     return handleTransitionCommand(transitionCmd, deps);
+  }
+
+  // ---- Questions (answer offline; NEVER build a short) --------------
+  // "describe what's in this video", "why did you pick these clips,
+  // explain it", "what's on the timeline" etc. are answered from the
+  // editor's own data — they must never become "look for <word> moments".
+  const questionKind = classifyQuestion(userText);
+  if (questionKind) {
+    const answer = answerQuestion(questionKind, buildQAContext());
+    deps.pushMessage({
+      role: "assistant",
+      content: answer.message,
+      attachment: { mode: "agent", kind: "answer", question: questionKind }
+    });
+    deps.logSession.ai("agent.answer", { question: questionKind }, `Answered: ${questionKind}`);
+    return { handled: true };
   }
 
   const memory = getAgentMemory(deps.sessionId);

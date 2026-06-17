@@ -175,6 +175,16 @@
 
 ## Completed
 
+- [x] (2026-06-19) **Questions answered offline, not turned into clip
+      searches.** "Describe what's in this video" / "why did you pick these
+      clips, explain it" no longer become "look for <word> moments" + a
+      built short. New `lib/agent/questionAnswer.ts` (classify + answer from
+      clip reasons / transcript / timeline / transitions; honest, no fake
+      visual claims) wired in `runAgentCommand` before the planner; +
+      `deriveIntent` STOPWORDS hardened so question/explain words can't form
+      a plan. +13 tests → 168 pass. On `feat/auto-transitions` (PR #61).
+      See `memory/QUESTION_ROUTING_FIX_2026-06-19.md`.
+
 - [x] (2026-06-19) **Auto transition picking (issue #57, PR 59 layer).**
       Offline, deterministic, evidence-based selector (no genre tables):
       `lib/transitions/{features,auto,timeline}.ts` + `TRANSITIONS.autoPick`
