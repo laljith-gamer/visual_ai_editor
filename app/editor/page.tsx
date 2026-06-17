@@ -13,6 +13,7 @@ import { useEditorStore, scenariosChanged } from "@/hooks/useEditorStore";
 import { useFFmpeg } from "@/hooks/useFFmpeg";
 import { useCapability } from "@/hooks/useCapability";
 import { useActivityLog } from "@/hooks/useActivityLog";
+import { useExport } from "@/hooks/useExport";
 import { sampleFrames } from "@/lib/pipeline/sample";
 import { scoreFrames } from "@/lib/pipeline/score";
 import { detectCandidateWindows } from "@/lib/pipeline/events";
@@ -151,6 +152,13 @@ export default function Home() {
   // Same forward-reference pattern for render, so the agentic fast-command
   // path can trigger the real render without reordering the component.
   const handleRenderRef = useRef<(() => void) | null>(null);
+  // Export/download of the rendered short (chat "export" command reuses
+  // the same path as the Export button).
+  const exportShort = useExport();
+  const handleExportRef = useRef<(() => Promise<{ ok: boolean; message: string }>) | null>(null);
+  useEffect(() => {
+    handleExportRef.current = exportShort;
+  }, [exportShort]);
   //
   // 1. Resolve which library sources are eligible for THIS run:
   //    intersect (selectedSourceIds) ∩ (plan.sources OR all-eligible).
@@ -534,7 +542,11 @@ export default function Home() {
           setProgress,
           sessionId,
           logSession,
-          onRender: () => void handleRenderRef.current?.()
+          onRender: () => void handleRenderRef.current?.(),
+          onExport: () =>
+            handleExportRef.current
+              ? handleExportRef.current()
+              : Promise.resolve({ ok: false, message: "Export isn't ready yet." })
         });
         if (outcome.handled) {
           setBusy(false);
