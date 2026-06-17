@@ -75,10 +75,10 @@ export function buildHighlights(args: BuildArgs): BuildResult {
   //   1. base floor          → preferred matches
   //   2. base floor - 0.10   → soft matches (weakOnly = true)
   //   3. top-N regardless    → borderline matches (weakOnly = true,
-  //                            N = ceil(scoredCount / 4) capped at
-  //                            maxClipsWithoutBudget, min 2)
-  // Each tier's candidates still flow through the same overlap +
-  // duration caps so we never explode beyond maxClipsWithoutBudget.
+  //                            N = ceil(scoredCount / 4), min 2)
+  // Each tier's candidates still flow through overlap + duration caps.
+  // There is deliberately NO output clip-count cap for no-duration
+  // "best parts" requests; the total-duration guard is the only limiter.
   if (!args.plan.userSpecifiedDuration) {
     const baseFloor = args.plan.qualityFloor ?? PLAN_DEFAULTS.qualityFloor;
 
@@ -89,13 +89,7 @@ export function buildHighlights(args: BuildArgs): BuildResult {
       weakOnly = true;
     }
     if (pool.length === 0) {
-      const fallbackN = Math.max(
-        2,
-        Math.min(
-          PLAN_DEFAULTS.maxClipsWithoutBudget,
-          Math.ceil(scored.length / 4)
-        )
-      );
+      const fallbackN = Math.max(2, Math.ceil(scored.length / 4));
       pool = [...scored].sort((a, b) => b.score - a.score).slice(0, fallbackN);
       weakOnly = true;
     }
@@ -104,7 +98,6 @@ export function buildHighlights(args: BuildArgs): BuildResult {
     const selectedQ: typeof scored = [];
     let totalQ = 0;
     for (const s of ranked) {
-      if (selectedQ.length >= PLAN_DEFAULTS.maxClipsWithoutBudget) break;
       if (totalQ + s.duration > PLAN_DEFAULTS.maxTotalSecondsWithoutBudget) continue;
       if (overlapsAny(s.candidate, selectedQ.map((x) => x.candidate))) continue;
       selectedQ.push(s);
@@ -123,7 +116,7 @@ export function buildHighlights(args: BuildArgs): BuildResult {
         end: round2(s.candidate.end),
         score: round2(s.score),
         reason: weakOnly
-          ? `Best available match (top score ${round2(s.score)}) \u2014 try a more specific prompt or use the briefing`
+          ? `Best available match (top score ${round2(s.score)}) — try a more specific prompt or use the briefing`
           : s.verdict?.reason ?? "Strong visual match",
         label: s.verdict?.label,
         transition: i === 0 ? "none" : args.plan.transition,
@@ -262,7 +255,7 @@ function forceMinFallback(
       score: round2(s.score),
       reason:
         s.verdict?.reason ??
-        "Best available match (low confidence \u2014 try broader scenarios)",
+        "Best available match (low confidence — try broader scenarios)",
       label: s.verdict?.label,
       transition: i === 0 ? "none" : args.plan.transition,
       confidence: assessConfidence(s.score)
