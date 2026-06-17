@@ -1,59 +1,88 @@
 # Project Memory — INDEX
 
-> **Read me first.** This is the entry point to the project's persistent
-> memory. If you are an AI assistant (ChatGPT / Claude / Codex / Kiro or
-> any other) starting a new session on this repository, **read this file
-> before doing anything else**, then read the other memory files in the
-> order listed below.
+> **Read this first.** This folder is the handoff brain for the repo. A fresh AI/helper session should read this file before making changes, then follow the reading order below.
+>
+> Last organized: **2026-06-17** — memory-folder organization only. No UI, backend, workflow, or application-code files were changed for this organization pass.
 
-## What this is
+---
 
-This `memory/` folder is a small, human-readable knowledge base that lets a
-fresh AI session quickly understand the project's current state, the
-decisions already made, the rules it must follow, and what to do next —
-without re-deriving everything from the source code.
+## 1. What this folder is
 
-It is **documentation only**. It never replaces reading the actual code, but
-it tells you *where to look* and *what is already true* so you continue from
-the correct state instead of guessing.
+`memory/` is a small human-readable knowledge base for the project. It captures:
 
-## Reading order (do this in sequence)
+- the current source-of-truth state,
+- hard constraints,
+- active TODOs,
+- roadmap direction,
+- major decisions,
+- dated historical notes.
 
-1. **[PROJECT_STATE.md](./PROJECT_STATE.md)** — the single source of truth for
-   what the project is, its current status, architecture, and the next best
-   step. Start here after this index.
-2. **[DECISIONS.md](./DECISIONS.md)** — important technical/product decisions
-   already made, and why. Do not re-litigate these without reason.
-3. **[CONSTRAINTS.md](./CONSTRAINTS.md)** — hard rules every contributor (human
-   or AI) must follow.
-4. **[ROADMAP.md](./ROADMAP.md)** — where the project is headed (phases +
-   future ideas).
-5. **[TODO.md](./TODO.md)** — concrete tasks, prioritized.
-6. **[CHANGELOG.md](./CHANGELOG.md)** — a log of notable changes over time.
+It is documentation only. It does not replace reading the actual code before editing code.
 
-## How to use this memory
+---
 
-- Treat **PROJECT_STATE.md** as authoritative. If code and memory disagree,
-  trust the code, then **update the memory** to match.
-- Before making large changes, summarize the current state (from
-  PROJECT_STATE.md) back to the user and confirm the plan.
-- After completing meaningful work, **propose updates** to the relevant
-  memory files (PROJECT_STATE, DECISIONS, TODO, CHANGELOG) so the next
-  session inherits your progress.
-- Keep entries short, dated, and factual. This is a working memory, not a
-  marketing document.
+## 2. Reading order
 
-## File map
+Read these in sequence:
 
-| File | Purpose |
-|------|---------|
-| `INDEX.md` | This file — entry point + reading order. |
-| `PROJECT_STATE.md` | Source of truth: what/where/status/next step. |
-| `DECISIONS.md` | Why things are the way they are. |
-| `CONSTRAINTS.md` | Rules that must not be broken. |
-| `ROADMAP.md` | Planned phases + future improvements. |
-| `TODO.md` | Prioritized task list. |
-| `CHANGELOG.md` | Dated history of notable changes. |
+1. **[PROJECT_STATE.md](./PROJECT_STATE.md)** — current source of truth: goal, status, architecture, known issues, next best step.
+2. **[CONSTRAINTS.md](./CONSTRAINTS.md)** — hard rules that must not be broken.
+3. **[TODO.md](./TODO.md)** — active prioritized work.
+4. **[ROADMAP.md](./ROADMAP.md)** — larger phased direction.
+5. **[DECISIONS.md](./DECISIONS.md)** — why previous technical/product choices were made.
+6. **[CHANGELOG.md](./CHANGELOG.md)** — detailed historical log of earlier project/memory changes.
+7. Dated context notes below — use these for background after reading the active source-of-truth files.
 
-See also **[../AGENTS.md](../AGENTS.md)** for the short operating protocol AI
-agents should follow on this repo.
+---
+
+## 3. Active source-of-truth files
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `PROJECT_STATE.md` | Current repo/product state and next best step. | **Authoritative** |
+| `CONSTRAINTS.md` | Rules for code, privacy, AI work, and memory-only requests. | **Authoritative** |
+| `TODO.md` | Prioritized tasks. | **Active** |
+| `ROADMAP.md` | Direction by phase. | **Active** |
+| `DECISIONS.md` | Decision history and rationale. | Historical + active reference |
+| `CHANGELOG.md` | Detailed change history. | Historical reference |
+
+---
+
+## 4. Dated context notes
+
+These files are snapshots. They explain how the project reached the current state, but they should not override `PROJECT_STATE.md`.
+
+### Product goal and production direction
+
+| File | Use when you need |
+|------|-------------------|
+| `PROJECT_GOAL_BROWSER_FIRST_HYBRID_2026-06-16.md` | Current product direction: browser-first hybrid local AI video editor. |
+| `PRODUCTION_VIDEO_OPTIMIZATION_2026-06-15.md` | Long-video production optimization target and adaptive sampling context. |
+
+### Offline/local video understanding and memory
+
+| File | Use when you need |
+|------|-------------------|
+| `OFFLINE_FIRST_ANALYSIS_PLAN_2026-06-15.md` | 0–5 minute offline-first analysis contract and tree-memory design. |
+| `VIDEO_MEMORY_FOUNDATION_2026-06-16.md` | First persistent video-memory foundation summary. |
+| `OFFLINE_VIDEO_UNDERSTANDING_STEP1_2026-06-16.md` | Step 1: scored frames → FrameTree → VideoMemoryIndex persistence. |
+| `LOCAL_MODEL_CSP_AND_TREE_MEMORY_2026-06-16.md` | Local model CSP fixes and tree-memory wiring state. |
+| `LOCAL_ONLY_UI_AND_CSP_FIXES_2026-06-16.md` | Local-only UI badge, CSP, and deterministic fallback fixes. |
+
+### Training / future model direction
+
+| File | Use when you need |
+|------|-------------------|
+| `DOMAIN_MODEL_TRAINING_2026-06-15.md` | Planner-model fine-tuning direction, dataset format, and evaluation metrics. |
+
+---
+
+## 5. Maintenance rules
+
+- Keep `PROJECT_STATE.md` short and current. It should describe the latest state, not every historical detail.
+- Keep dated files as historical snapshots unless a correction is needed.
+- When work changes the repo, update the relevant active memory files in the same work session.
+- If code and memory disagree, trust the code, then update memory to match after reading the code.
+- When the user asks to organize or update only `memory/`, do not edit app code, UI, backend, workflows, dependencies, or unrelated files.
+
+See also **[../AGENTS.md](../AGENTS.md)** for the repo-level AI operating protocol.
