@@ -8,12 +8,12 @@
 
 ## High priority
 
-- [ ] **PR 58 — real transition system (issue #57, next).** Per-boundary
-      transition model (cut/fade/crossfade/dip_to_black/slide/zoom);
-      honest mapping (renderable vs unsupported — never claim
-      glitch/whip); transition picker UI; chat commands; render worker
-      applies per boundary. Start with a SMALL low-risk foundation
-      (types + mapping + tests; UI/render can be TODO).
+- [ ] **PR 58 (remaining) — wire the transition foundation.** The model +
+      honest mapping shipped (`lib/transitions/*`). Still TODO (larger):
+      render worker consumes `BoundaryTransition[]` per boundary; transition
+      picker UI between clips; chat commands ("add fade between clip 1 and
+      2", "make transition cut", "add zoom transition"); actually render
+      dip_to_black/slide/zoom (until then they map down honestly).
 - [ ] **Manual browser test — PR 57 export/upload/preview (after deploy).**
       Upload MP4/MOV/WebM → clear success/failure, no broken state on
       failure, duplicate handled. Source preview after upload; combined
@@ -165,6 +165,16 @@
       feature work; no big rewrite.
 
 ## Completed
+
+- [x] (2026-06-19) **PR 58 — per-boundary transition foundation (small).**
+      `TRANSITIONS` config guardrails + `lib/transitions/{types,map}.ts`:
+      `TransitionType` (cut/fade/crossfade/dip_to_black/slide/zoom/glitch/
+      whip/match_cut), `RenderableTransition`, `BoundaryTransition`, honest
+      `mapTransition`/`toRenderable`/`describeMappedDowns` (cut/fade/
+      crossfade exact; rest mapped down with a note; glitch/whip/match_cut
+      never claimed rendered). +7 tests → 119 pass. typecheck + build ✓.
+      Render worker + picker UI + chat commands are the larger follow-up.
+      See `memory/PR58_TRANSITION_FOUNDATION_2026-06-19.md`.
 
 - [x] (2026-06-19) **PR 57 — production tool reliability (issue #57).**
       Reliable export/download: `lib/util/download.ts` (deterministic
