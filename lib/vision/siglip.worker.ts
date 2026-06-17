@@ -47,8 +47,10 @@ async function ensureClassifier() {
   const pipe = (await pipeline(
     "zero-shot-image-classification",
     "Xenova/siglip-base-patch16-224",
-    // device: "webgpu" auto-falls back to wasm if WebGPU is unavailable
-    { device: "webgpu" } as Parameters<typeof pipeline>[2]
+    // Explicit dtype avoids the runtime warning and prevents WebGPU from
+    // defaulting to fp32 for this model. fp16 keeps the local scoring path
+    // lighter on VRAM while preserving the same public scoring contract.
+    { device: "webgpu", dtype: "fp16" } as Parameters<typeof pipeline>[2]
   )) as unknown as (
     image: Blob,
     labels: string[]
