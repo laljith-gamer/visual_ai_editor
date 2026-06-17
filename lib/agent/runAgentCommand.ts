@@ -35,9 +35,13 @@ import {
   trimClip
 } from "@/lib/timeline/operations";
 import { orchestrate, type AgentDecision, type ResolvedOp } from "./orchestrator";
+import { classifyFastCommand, type FastCommand } from "@/lib/intent/fastCommands";
+import { hydrateAgentMemory, saveAgentMemory } from "@/lib/agent-memory/persistence";
 
 // ---- per-session agent memory --------------------------------------
 const memoryBySession = new Map<string, AgentMemoryStore>();
+/** Sessions whose persisted memory has been hydrated (once per tab). */
+const hydratedSessions = new Set<string>();
 
 export function getAgentMemory(sessionId: string): AgentMemoryStore {
   let m = memoryBySession.get(sessionId);
@@ -46,6 +50,18 @@ export function getAgentMemory(sessionId: string): AgentMemoryStore {
     memoryBySession.set(sessionId, m);
   }
   return m;
+}
+
+/** Hydrate a session's memory from IndexedDB exactly once (offline
+ *  persistence). Safe to call every turn — it no-ops after the first. */
+async function ensureHydrated(sessionId: string, store: AgentMemoryStore): Promise<void> {
+  if (hydratedSessions.has(sessionId)) return;
+  hydratedSessions.add(sessionId);
+  try {
+    await hydrateAgentMemory(sessionId, store);
+  } catch {
+    // Non-fatal — proceed with empty in-memory state.
+  }
 }
 
 export interface AgentCommandDeps {
@@ -108,7 +124,26 @@ export async function tryAgentCommand(
   userText: string,
   deps: AgentCommandDeps
 ): Promise<AgentCommandOutcome> {
+  // ---- Phase 1: fast control commands (never reach the planner) -----
+  // Confirmations, undo/redo, and render are resolved instantly here.
+  // Anchored matching means partial commands ("go to clip 2", "render
+  // the part where he scores") are NOT caught and flow on to parsing.
+  const fast = classifyFastCommand(userText);
+  if (fast) {
+    const outcome = handleFastCommand(fast, deps);
+    if (outcome) {
+      if (outcome.handled) {
+        deps.logSession.ai("agent.fast", { kind: fast.kind }, `Fast command: ${fast.kind}`);
+      }
+      return outcome;
+    }
+    // outcome === null → intentionally fall through (e.g. affirm/cancel
+    // WITH a pending action, which the existing quick-shortcut gate
+    // handles end-to-end).
+  }
+
   const memory = getAgentMemory(deps.sessionId);
+  await ensureHydrated(deps.sessionId, memory);
   const { ctx, getTranscript } = buildContext(memory);
 
   let decision: AgentDecision;
@@ -117,6 +152,13 @@ export async function tryAgentCommand(
   } catch (err) {
     deps.logSession.system("agent.command.failed", { message: (err as Error).message }, "Agent command path errored; falling through.");
     return { handled: false };
+  }
+
+  // Persist memory after any turn that may have mutated it (the orchestrator
+  // observes the message + applies reinforcement). Fire-and-forget so a
+  // storage hiccup never blocks editing.
+  if (decision.kind !== "fallthrough") {
+    void saveAgentMemory(deps.sessionId, memory);
   }
 
   switch (decision.kind) {
@@ -175,6 +217,87 @@ export async function tryAgentCommand(
 
     default:
       return { handled: false };
+  }
+}
+
+// ---------------------------------------------------------------------
+// Fast control commands (Phase 1)
+// ---------------------------------------------------------------------
+
+/**
+ * Resolve a fast control command instantly against the live store.
+ * Returns an outcome when handled, or `null` to intentionally fall
+ * through to the existing quick-shortcut gate (used for affirm/cancel
+ * when a pending action exists — that gate already runs/clears it).
+ */
+function handleFastCommand(fast: FastCommand, deps: AgentCommandDeps): AgentCommandOutcome | null {
+  const store = useEditorStore.getState();
+
+  const refreshStatus = () => {
+    const n = useEditorStore.getState().highlights.length;
+    deps.setStatus(n > 0 ? "ready" : "idle", n > 0 ? "Ready to render" : undefined);
+    deps.setProgress(n > 0 ? 1 : 0);
+  };
+
+  switch (fast.kind) {
+    case "undo": {
+      const r = store.undoTimeline();
+      deps.pushMessage({
+        role: "assistant",
+        content: r.restored
+          ? 'Undone — restored the previous timeline. Say "redo" to reapply.'
+          : "Nothing to undo yet.",
+        attachment: { mode: "agent", kind: "undo" }
+      });
+      refreshStatus();
+      return { handled: true };
+    }
+    case "redo": {
+      const r = store.redoTimeline();
+      deps.pushMessage({
+        role: "assistant",
+        content: r.restored ? "Redone — reapplied that change." : "Nothing to redo.",
+        attachment: { mode: "agent", kind: "redo" }
+      });
+      refreshStatus();
+      return { handled: true };
+    }
+    case "render": {
+      if (store.highlights.length === 0) {
+        deps.pushMessage({
+          role: "assistant",
+          content: "Add at least one clip to the timeline first, then I can render.",
+          attachment: { mode: "agent", kind: "render" }
+        });
+        return { handled: true };
+      }
+      if (deps.onRender) {
+        deps.pushMessage({ role: "assistant", content: "Rendering the timeline now\u2026", attachment: { mode: "agent", kind: "render" } });
+        deps.onRender();
+        return { handled: true };
+      }
+      deps.pushMessage({ role: "assistant", content: 'Tap "Render" to assemble the timeline into a video.', attachment: { mode: "agent", kind: "render" } });
+      return { handled: true };
+    }
+    case "affirm": {
+      // With a pending action, let the existing quick-shortcut gate run it.
+      if (store.pendingExecution || store.pendingClarify) return null;
+      deps.pushMessage({
+        role: "assistant",
+        content:
+          'There\u2019s nothing queued to confirm yet. Tell me what to do \u2014 e.g. "add first 5 seconds", "pick best parts", or "render".',
+        attachment: { mode: "agent", kind: "affirm" }
+      });
+      return { handled: true };
+    }
+    case "cancel": {
+      // With a pending action, let the existing quick-shortcut gate clear it.
+      if (store.pendingExecution || store.pendingClarify) return null;
+      deps.pushMessage({ role: "assistant", content: "Nothing to cancel right now.", attachment: { mode: "agent", kind: "cancel" } });
+      return { handled: true };
+    }
+    default:
+      return null;
   }
 }
 

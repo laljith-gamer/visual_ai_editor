@@ -673,3 +673,37 @@ export const AGENT_GUARDRAILS = {
    *  quality-floor path (no fixed count). */
   maxConceptMatchesPerTurn: 8
 } as const;
+
+
+
+// =====================================================================
+// Offline storage / cache budget (lib/storage/*).
+//
+// The app caches models (transformers.js / Whisper), sampled frame
+// predictions, transcripts, rendered files, and project/session data
+// locally. Without a budget the browser can silently grow to multiple
+// GB. These caps drive the storage manager's over-budget warnings +
+// cleanup prompts. Power Mode may exceed them only after explicit user
+// confirmation. NOT hidden behaviour — surfaced in the storage panel.
+// =====================================================================
+
+const MB = 1024 * 1024;
+
+export const STORAGE_BUDGET = {
+  /** Caps for phones / low-memory devices. */
+  mobile: {
+    modelBytes: 150 * MB,
+    frameBytes: 50 * MB,
+    renderBytes: 100 * MB
+  },
+  /** Caps for desktops / capable devices. */
+  desktop: {
+    modelBytes: 600 * MB,
+    frameBytes: 300 * MB,
+    renderBytes: 500 * MB
+  },
+  /** Show a storage warning + ask permission before downloading any
+   *  model larger than this. Keeps a large vision/LLM model from
+   *  silently consuming the cache. */
+  modelDownloadWarnBytes: 80 * MB
+} as const;

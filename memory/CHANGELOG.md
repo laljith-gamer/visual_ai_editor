@@ -17,7 +17,44 @@
 
 ---
 
-### 2026-06-17 — Agentic intent layer (deterministic command parsing + agent memory + timeline ops)
+### 2026-06-18 — Offline fast-editor: command routing, memory persistence, storage budget, transcript errors
+- **Change made:**
+  - **Phase 1 (fast routing):** new pure `lib/intent/fastCommands.ts`
+    (anchored classifier affirm/cancel/undo/redo/render). `runAgentCommand`
+    runs it FIRST: confirmations/undo/redo/render never reach the planner;
+    "yes do it"/"undo" can no longer become "look for X moments". Priority:
+    pending-confirm (delegates to existing quick-shortcut gate) → undo/redo
+    (store) → render (real `handleRender` via new `handleRenderRef`) →
+    affirm/cancel-with-nothing-pending (nudge) → direct commands. Added
+    one-step **redo** to the store (`redoTimeline` + redo snapshot slots,
+    cleared by any fresh mutation).
+  - **Phase 2 (persistence):** new `agentMemory` idb store +
+    `lib/agent-memory/persistence.ts` (load/save/clear/hydrate) + pure
+    `getRelevantMemory` (priority user_stated > reinforcement > clip >
+    source > flow > observed > preference). Hydrate once/session; save
+    after memory-mutating turns. No blobs stored.
+  - **Phase 3 (storage):** `STORAGE_BUDGET` caps in config +
+    `lib/storage/budget.ts` (pure) + `lib/storage/manager.ts` (measure via
+    Cache Storage/idb/`navigator.storage.estimate`; cleanup actions).
+  - **Phase 4 (transcript honesty):** `useTranscription` sets explicit
+    `phase:"error"` on failure; `TranscriptDrawer` renders "Transcription
+    failed: <reason>" instead of a silent "No transcript yet".
+  - **Phase 10 (tests):** +16 (fastCommands, memory, storage/budget) →
+    102 pass.
+- **Files affected:** `lib/intent/fastCommands.ts` (+test),
+  `lib/agent/runAgentCommand.ts`, `hooks/useEditorStore.ts` (redo),
+  `app/editor/page.tsx` (render ref + onRender), `lib/store/idb.ts`
+  (agentMemory kind), `lib/agent-memory/{persistence.ts,context.ts}`
+  (+ `memory.test.ts`), `lib/storage/{budget.ts,manager.ts}`
+  (+ `budget.test.ts`), `lib/config.ts` (`STORAGE_BUDGET`),
+  `hooks/useTranscription.ts`, `components/TranscriptDrawer.tsx`,
+  `package.json`, `memory/*`.
+- **Reason:** Make the default path a fast offline editor brain: control
+  commands instant and never mis-routed to the planner; memory survives
+  refresh; local cache is measurable/capped; transcription fails loudly
+  with a real reason. Cloud AI is already off by default in code.
+
+---
 - **Change made:** Added a net-new deterministic AGENT layer so the editor
   acts like an assistant, not a command bot. It resolves natural editing
   commands into structured timeline operations BEFORE the cloud planner,

@@ -2,8 +2,9 @@
 
 > **Read this first.** This folder is the handoff brain for the repo. A fresh AI/helper session should read this file before making changes, then follow the reading order below.
 >
-> Last organized: **2026-06-17** — agentic intent layer note indexed
-> (deterministic command parsing + agent memory + timeline ops).
+> Last organized: **2026-06-18** — offline fast-editor note indexed
+> (fast command routing, agent-memory persistence, storage budget,
+> transcript error honesty).
 
 ---
 
@@ -81,6 +82,7 @@ These files are snapshots. They explain how the project reached the current stat
 | File | Use when you need |
 |------|-------------------|
 | `AGENTIC_INTENT_LAYER_2026-06-17.md` | Deterministic agent: natural-command parsing (`lib/intent`), agent memory + reinforcement (`lib/agent-memory`), timeline ops (`lib/timeline`), orchestrator + concept/OCR resolution (`lib/agent`, `lib/ocr`), and how it's wired before the cloud planner. |
+| `OFFLINE_FAST_EDITOR_2026-06-18.md` | Offline fast-editor pass: fast control-command routing (`lib/intent/fastCommands`), store redo, agent-memory IndexedDB persistence (`lib/agent-memory/persistence`, `getRelevantMemory`), storage budget+manager (`lib/storage/*`), and explicit transcription errors. |
 
 ### Training / future model direction
 

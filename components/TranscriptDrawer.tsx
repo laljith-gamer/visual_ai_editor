@@ -223,7 +223,29 @@ export function TranscriptDrawer({ open, onClose }: Props) {
                   </div>
                 )}
 
-                {!isRunning && (!transcript || transcript.segments.length === 0) && (
+                {!isRunning && progress?.phase === "error" && (
+                  <div className={styles.statusCard} role="alert">
+                    <span className={styles.statusCardLabel}>
+                      <span className={styles.statusCardTitle}>
+                        Transcription failed
+                      </span>
+                      <span className={styles.statusCardSub}>
+                        {progress.error ?? "Something went wrong while transcribing."}
+                      </span>
+                    </span>
+                    <button
+                      className={styles.emptyAction}
+                      onClick={handleRetranscribe}
+                    >
+                      <RefreshCw size={12} />
+                      Try again
+                    </button>
+                  </div>
+                )}
+
+                {!isRunning &&
+                  progress?.phase !== "error" &&
+                  (!transcript || transcript.segments.length === 0) && (
                   <div className={styles.empty}>
                     {transcript && transcript.segments.length === 0
                       ? "No speech detected in this source."
