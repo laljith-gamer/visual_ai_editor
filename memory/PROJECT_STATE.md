@@ -4,7 +4,47 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-13 (compose mode now deterministically SELECTED — multi-source detector with priority)
+> Last updated: 2026-06-17 (agentic intent layer added — deterministic
+> command parsing + agent memory + timeline ops + concept/OCR/reinforcement,
+> wired before the cloud planner; additive + reversible)
+
+---
+
+## 0. Latest change (2026-06-17) — agentic intent layer
+
+A net-new deterministic AGENT layer now turns natural editing commands
+into structured timeline operations BEFORE the cloud planner, so the app
+behaves like an editing assistant rather than a command bot. It is
+ADDITIVE and REVERSIBLE: `tryAgentCommand` runs first in `handleAgent`;
+on a miss / visual-needed it falls straight through to the unchanged
+`tryQuickShortcut` gate and the cloud planner.
+
+- New modules: `lib/intent/{command,timeRangeParser,sourceResolver,
+  clipResolver,placementResolver,editCommandParser}.ts`,
+  `lib/agent-memory/{types,store,observer,resolver,policy,context}.ts`,
+  `lib/timeline/{operations,placement}.ts`,
+  `lib/agent/{orchestrator,conceptResolver,reinforcement,runAgentCommand}.ts`,
+  `lib/ocr/{types,query}.ts`. New config: `AGENT_POLICY` +
+  `AGENT_GUARDRAILS`. See `memory/AGENTIC_INTENT_LAYER_2026-06-17.md`.
+- Resolves: which source (one-video assume / named / active-or-last-used
+  with surfaced assumption / multi-video clarify), which clip (index/
+  first/last/selected/last-created/anaphora/clip-N-from-video-M), which
+  time range (first/last/middle N, halves, absolute, before/after,
+  relative-to-clip), placement (after/before/between/start/end), and
+  append-vs-replace-vs-move-vs-remove. Concept search uses the LOCAL
+  transcript first; OCR reports honestly unavailable; generic "best
+  parts" defers to the existing visual pipeline with NO fixed clip count.
+- Memory: separate user-stated vs observed records, each with confidence
+  + evidence; reinforcement (rejected/liked ranges, source preference,
+  style hints) influences scoring via `adjustScore`. Confidence policy:
+  execute ≥0.85 / execute-with-note ≥0.65 / clarify below.
+- "Add" APPENDS (never wipes the timeline); EXACT ranges are kept verbatim
+  (never dropped by overlap/cap); undo preserved (ops route through
+  `setHighlights`, which snapshots and does NOT re-sort).
+- Validation: `npm run typecheck` ✓, `npm run build` ✓ (`/editor` first-
+  load 168 kB; agent layer lazy-loaded), `npm test` = **86 pass / 0 fail**
+  (36 existing + 50 new). **Browser/WebGPU + transcript runtime
+  verification still required** (sandbox has neither).
 
 ---
 
@@ -249,6 +289,20 @@ Upload video (stays in the browser)
   `feat/openrouter-token-caps`.
 
 ## 7. Next best step
+
+- **Manual browser test the agentic intent layer (2026-06-17).** With a
+  video uploaded: "add first 2 min", "add last 30 sec from video 2 after
+  clip 3", "remove clip 2", "move clip 3 before clip 1", "replace clip 1
+  with 0:30 to 0:45", "add the part where he says subscribe" (needs a
+  local transcript), "the screen where it says SALE" (must say OCR isn't
+  ready, not fake it), "pick best parts" (no fixed count), "not this, more
+  like clip 2". Confirm: append (not wipe), exact ranges kept, undo works,
+  assumptions surfaced, multi-video ambiguity asks. Needs a real WebGPU
+  browser + a transcript; the sandbox has neither.
+- **Optional: route the agent's `needs_visual` decision straight into the
+  in-browser pipeline** (build a scenario plan from the resolved source +
+  reinforcement and run `executeForSource` with `adjustScore`), instead of
+  falling through to the cloud planner. The pieces are ready.
 
 - **Validate OpenRouter end-to-end in a real deployment.** Set
   `OPENROUTER_API_KEY` and confirm: `/api/agent` returns valid planner JSON;

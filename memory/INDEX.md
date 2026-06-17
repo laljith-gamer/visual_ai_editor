@@ -2,7 +2,8 @@
 
 > **Read this first.** This folder is the handoff brain for the repo. A fresh AI/helper session should read this file before making changes, then follow the reading order below.
 >
-> Last organized: **2026-06-17** — runtime console fix note indexed after browser scoring warning cleanup.
+> Last organized: **2026-06-17** — agentic intent layer note indexed
+> (deterministic command parsing + agent memory + timeline ops).
 
 ---
 
@@ -74,6 +75,12 @@ These files are snapshots. They explain how the project reached the current stat
 | File | Use when you need |
 |------|-------------------|
 | `RUNTIME_CONSOLE_FIXES_2026-06-17.md` | DevTools/runtime warning triage: manifest 401, Canvas2D readback hint, SigLIP dtype warning. |
+
+### Agentic editing layer
+
+| File | Use when you need |
+|------|-------------------|
+| `AGENTIC_INTENT_LAYER_2026-06-17.md` | Deterministic agent: natural-command parsing (`lib/intent`), agent memory + reinforcement (`lib/agent-memory`), timeline ops (`lib/timeline`), orchestrator + concept/OCR resolution (`lib/agent`, `lib/ocr`), and how it's wired before the cloud planner. |
 
 ### Training / future model direction
 
