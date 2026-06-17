@@ -8,6 +8,22 @@
 
 ## High priority
 
+- [ ] **PR 58 — real transition system (issue #57, next).** Per-boundary
+      transition model (cut/fade/crossfade/dip_to_black/slide/zoom);
+      honest mapping (renderable vs unsupported — never claim
+      glitch/whip); transition picker UI; chat commands; render worker
+      applies per boundary. Start with a SMALL low-risk foundation
+      (types + mapping + tests; UI/render can be TODO).
+- [ ] **Manual browser test — PR 57 export/upload/preview (after deploy).**
+      Upload MP4/MOV/WebM → clear success/failure, no broken state on
+      failure, duplicate handled. Source preview after upload; combined
+      preview after render; clips drawer opens/closes. Render (button and
+      chat "render") → same path, progress shown, readable error. Export
+      (button and chat "export") → downloads `shorts-studio-<title>-<ts>.mp4`;
+      with no render → "Render first"; if the browser blocks the download →
+      fallback guidance shows (never silent). Remove/move/trim → undoable;
+      "undo"/"redo" restore. Needs a real browser; not verifiable in CI.
+
 - [ ] **Manual browser test — offline fast-editor (2026-06-18, after deploy).**
       Confirm none of these reach the planner and all resolve <1s:
       "yes do it" (with a pending → runs it; with nothing pending → nudge,
@@ -149,6 +165,19 @@
       feature work; no big rewrite.
 
 ## Completed
+
+- [x] (2026-06-19) **PR 57 — production tool reliability (issue #57).**
+      Reliable export/download: `lib/util/download.ts` (deterministic
+      `shorts-studio-{title}-{yyyyMMdd-HHmmss}.mp4` + `shareOrDownload`
+      with blocked/cancelled reporting), `hooks/useExport.ts`, `useShare`
+      refactor, `PreviewToolbar` always-visible Export + "Render first" +
+      status message. Render-vs-export split in `fastCommands.ts`
+      (`export` kind + pure `decideFastAction`); `runAgentCommand` chat
+      "export" → `onExport`, "render" → `onRender`; editor wires
+      `handleExportRef`. Tests: updated `fastCommands.test.ts` + new
+      `download.test.ts` → 112 pass. typecheck + build ✓. Browser manual
+      verification still required. See
+      `memory/PR57_PRODUCTION_TOOL_RELIABILITY_2026-06-19.md`.
 
 - [x] (2026-06-18) **Offline fast-editor pass (Phases 1–5, 10).** Fast
       command routing (`lib/intent/fastCommands.ts` + `runAgentCommand`

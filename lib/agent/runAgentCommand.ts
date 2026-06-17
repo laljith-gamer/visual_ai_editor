@@ -35,7 +35,7 @@ import {
   trimClip
 } from "@/lib/timeline/operations";
 import { orchestrate, type AgentDecision, type ResolvedOp } from "./orchestrator";
-import { classifyFastCommand, type FastCommand } from "@/lib/intent/fastCommands";
+import { classifyFastCommand, decideFastAction, type FastCommand } from "@/lib/intent/fastCommands";
 import { hydrateAgentMemory, saveAgentMemory } from "@/lib/agent-memory/persistence";
 
 // ---- per-session agent memory --------------------------------------
@@ -79,6 +79,9 @@ export interface AgentCommandDeps {
   };
   /** Optional render trigger for the "render" op. */
   onRender?: () => void;
+  /** Optional export/download trigger for the "export" command. Returns a
+   *  message to surface in chat (success / blocked / etc.). */
+  onExport?: () => Promise<{ ok: boolean; message: string }>;
 }
 
 export interface AgentCommandOutcome {
@@ -130,7 +133,7 @@ export async function tryAgentCommand(
   // the part where he scores") are NOT caught and flow on to parsing.
   const fast = classifyFastCommand(userText);
   if (fast) {
-    const outcome = handleFastCommand(fast, deps);
+    const outcome = await handleFastCommand(fast, deps);
     if (outcome) {
       if (outcome.handled) {
         deps.logSession.ai("agent.fast", { kind: fast.kind }, `Fast command: ${fast.kind}`);
@@ -229,8 +232,11 @@ export async function tryAgentCommand(
  * Returns an outcome when handled, or `null` to intentionally fall
  * through to the existing quick-shortcut gate (used for affirm/cancel
  * when a pending action exists — that gate already runs/clears it).
+ *
+ * The decision (what each command should do given current state) is the
+ * pure `decideFastAction`; this function only executes the decision.
  */
-function handleFastCommand(fast: FastCommand, deps: AgentCommandDeps): AgentCommandOutcome | null {
+async function handleFastCommand(fast: FastCommand, deps: AgentCommandDeps): Promise<AgentCommandOutcome | null> {
   const store = useEditorStore.getState();
 
   const refreshStatus = () => {
@@ -239,7 +245,18 @@ function handleFastCommand(fast: FastCommand, deps: AgentCommandDeps): AgentComm
     deps.setProgress(n > 0 ? 1 : 0);
   };
 
-  switch (fast.kind) {
+  const action = decideFastAction(fast.kind, {
+    pendingExecution: store.pendingExecution,
+    pendingClarify: !!store.pendingClarify,
+    highlightCount: store.highlights.length,
+    hasRenderedBlob: !!store.renderedBlob
+  });
+
+  switch (action) {
+    case "delegate":
+      // affirm/cancel WITH a pending action → existing quick-shortcut gate.
+      return null;
+
     case "undo": {
       const r = store.undoTimeline();
       deps.pushMessage({
@@ -252,6 +269,7 @@ function handleFastCommand(fast: FastCommand, deps: AgentCommandDeps): AgentComm
       refreshStatus();
       return { handled: true };
     }
+
     case "redo": {
       const r = store.redoTimeline();
       deps.pushMessage({
@@ -262,15 +280,16 @@ function handleFastCommand(fast: FastCommand, deps: AgentCommandDeps): AgentComm
       refreshStatus();
       return { handled: true };
     }
+
+    case "render_empty":
+      deps.pushMessage({
+        role: "assistant",
+        content: "Add at least one clip to the timeline first, then I can render.",
+        attachment: { mode: "agent", kind: "render" }
+      });
+      return { handled: true };
+
     case "render": {
-      if (store.highlights.length === 0) {
-        deps.pushMessage({
-          role: "assistant",
-          content: "Add at least one clip to the timeline first, then I can render.",
-          attachment: { mode: "agent", kind: "render" }
-        });
-        return { handled: true };
-      }
       if (deps.onRender) {
         deps.pushMessage({ role: "assistant", content: "Rendering the timeline now\u2026", attachment: { mode: "agent", kind: "render" } });
         deps.onRender();
@@ -279,9 +298,30 @@ function handleFastCommand(fast: FastCommand, deps: AgentCommandDeps): AgentComm
       deps.pushMessage({ role: "assistant", content: 'Tap "Render" to assemble the timeline into a video.', attachment: { mode: "agent", kind: "render" } });
       return { handled: true };
     }
-    case "affirm": {
-      // With a pending action, let the existing quick-shortcut gate run it.
-      if (store.pendingExecution || store.pendingClarify) return null;
+
+    case "export_no_render":
+      deps.pushMessage({
+        role: "assistant",
+        content: "There\u2019s no rendered short yet. Say \u201crender\u201d first, then \u201cexport\u201d to download it.",
+        attachment: { mode: "agent", kind: "export" }
+      });
+      return { handled: true };
+
+    case "export": {
+      if (deps.onExport) {
+        const r = await deps.onExport();
+        deps.pushMessage({ role: "assistant", content: r.message, attachment: { mode: "agent", kind: "export" } });
+        return { handled: true };
+      }
+      deps.pushMessage({
+        role: "assistant",
+        content: 'Tap "Export" under the preview to download the rendered short.',
+        attachment: { mode: "agent", kind: "export" }
+      });
+      return { handled: true };
+    }
+
+    case "nudge_affirm":
       deps.pushMessage({
         role: "assistant",
         content:
@@ -289,13 +329,11 @@ function handleFastCommand(fast: FastCommand, deps: AgentCommandDeps): AgentComm
         attachment: { mode: "agent", kind: "affirm" }
       });
       return { handled: true };
-    }
-    case "cancel": {
-      // With a pending action, let the existing quick-shortcut gate clear it.
-      if (store.pendingExecution || store.pendingClarify) return null;
+
+    case "nudge_cancel":
       deps.pushMessage({ role: "assistant", content: "Nothing to cancel right now.", attachment: { mode: "agent", kind: "cancel" } });
       return { handled: true };
-    }
+
     default:
       return null;
   }

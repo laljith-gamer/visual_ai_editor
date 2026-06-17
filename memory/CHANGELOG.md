@@ -17,6 +17,38 @@
 
 ---
 
+### 2026-06-19 — PR 57: production tool reliability (issue #57)
+- **Change made:** Reliable export/download + a render-vs-export split in
+  the fast command router.
+  - New `lib/util/download.ts`: pure `safeTitleSegment` / `exportTimestamp`
+    / `buildExportFilename` (→ `shorts-studio-{title}-{yyyyMMdd-HHmmss}.mp4`)
+    + browser `shareOrDownload` (Web Share → anchor download; reports
+    shared/downloaded/blocked/cancelled for honest fallback guidance).
+  - `hooks/useShare.ts` refactored onto `shareOrDownload`; new
+    `hooks/useExport.ts` (no-blob → "Render first"; blocked → guidance;
+    success → "Saved <filename>").
+  - `components/PreviewToolbar.tsx`: Export button always visible + status
+    message; never silently does nothing.
+  - `lib/intent/fastCommands.ts`: new `export` kind (export/download/save)
+    distinct from `render`; pure exhaustive `decideFastAction(kind,state)`.
+  - `lib/agent/runAgentCommand.ts`: `handleFastCommand` is async + uses
+    `decideFastAction`; chat "export" → `deps.onExport`, "render" →
+    `deps.onRender`. `app/editor/page.tsx` wires `onExport` via
+    `handleExportRef`.
+- **Files affected:** `lib/util/download.ts` (+test), `hooks/useShare.ts`,
+  `hooks/useExport.ts`, `components/PreviewToolbar.tsx`,
+  `lib/intent/fastCommands.ts` (+test update), `lib/agent/runAgentCommand.ts`,
+  `app/editor/page.tsx`, `package.json`, `memory/*`.
+- **Reason:** Issue #57 PR 57 — make basic editing reliable without
+  AI/WebGPU/backend. Export was the real gap (hardcoded filename, hidden
+  when no blob, no fallback). Render/export must never reach the planner
+  and must share one core path with their buttons.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓ (169 kB),
+  `npm test` = 112 pass / 0 fail. Browser manual verification still
+  required (upload/preview/real download).
+
+---
+
 ### 2026-06-18 — Offline fast-editor: command routing, memory persistence, storage budget, transcript errors
 - **Change made:**
   - **Phase 1 (fast routing):** new pure `lib/intent/fastCommands.ts`

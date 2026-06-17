@@ -4,10 +4,40 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-18 (offline fast-editor: fast command routing
-> [affirm/cancel/undo/redo/render never hit the planner], one-step redo,
-> agent-memory IndexedDB persistence, storage budget+manager, explicit
-> transcription errors; cloud AI confirmed disabled-by-default in code)
+> Last updated: 2026-06-19 (PR 57 production tool reliability: reliable
+> export/download with deterministic filename + "render first" + blocked
+> fallback; render-vs-export split in the fast router; pure decideFastAction)
+
+---
+
+## 0. Latest change (2026-06-19) — PR 57 production tool reliability (issue #57)
+
+Started issue #57's production-readiness sequence with **PR 57 only**
+(kept tight, no risky rewrite). The real gap was EXPORT/download; direct
+commands + undo/redo + render wiring already shipped 2026-06-18 and were
+verified, not rebuilt.
+
+- **Reliable export.** New `lib/util/download.ts` (pure `buildExportFilename`
+  → `shorts-studio-{safe-title}-{yyyyMMdd-HHmmss}.mp4` + browser
+  `shareOrDownload` reporting shared/downloaded/blocked/cancelled). New
+  `hooks/useExport.ts`; `useShare` refactored onto the shared helper.
+  `PreviewToolbar` Export is always visible (no blob → "Render first"),
+  shows a status message, and never silently does nothing.
+- **Render vs Export split.** `fastCommands.ts` adds an `export` kind
+  (export/download/save) distinct from `render` (render/assemble/finish),
+  plus a PURE exhaustive `decideFastAction(kind,state)` for testable
+  routing. `runAgentCommand.handleFastCommand` uses it; chat "export" →
+  `deps.onExport` (→ `useExport`), chat "render" → `deps.onRender`
+  (→ real `handleRender`). Editor wires `onExport` via `handleExportRef`.
+- **Verified (code-level):** render button and chat render share one path;
+  export button and chat export share one path; ClipsDrawer closable +
+  remove is undoable; timeline ops snapshot for undo/redo.
+- **Tests:** updated `fastCommands.test.ts` (+`decideFastAction`, export
+  classification) and new `download.test.ts` → **112 pass / 0 fail**.
+  `typecheck` ✓, `build` ✓ (169 kB).
+- **NOT done:** browser/manual verification (upload/preview/real download)
+  — needs a real browser. PR 58 (transition foundation) is separate. See
+  `memory/PR57_PRODUCTION_TOOL_RELIABILITY_2026-06-19.md`.
 
 ---
 
