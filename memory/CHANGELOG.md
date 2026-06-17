@@ -17,7 +17,67 @@
 
 ---
 
-### 2026-06-13 — Compose mode now actually SELECTED (deterministic multi-source detector, priority over generic fallback)
+### 2026-06-17 — Agentic intent layer (deterministic command parsing + agent memory + timeline ops)
+- **Change made:** Added a net-new deterministic AGENT layer so the editor
+  acts like an assistant, not a command bot. It resolves natural editing
+  commands into structured timeline operations BEFORE the cloud planner,
+  and is additive + reversible (falls through to the unchanged
+  quick-shortcut gate + cloud planner on a miss / when visual analysis is
+  needed).
+  - **Phase 1 — `lib/intent/`:** `command.ts` (`EditCommand` union +
+    refs/specs + `AgentCommandContext`), `timeRangeParser.ts`,
+    `sourceResolver.ts`, `clipResolver.ts`, `placementResolver.ts`,
+    `editCommandParser.ts`. Reuses `time.ts` / `dictionary.ts`. Kept
+    separate from the existing `types.ts` `QuickMatch` envelope.
+  - **Phase 2 — `lib/agent-memory/`:** `types/store/observer/resolver/
+    policy/context`. User-stated vs observed records, each with confidence
+    + evidence; flow + reinforcement memory; confidence policy (execute
+    ≥0.85 / note ≥0.65 / clarify).
+  - **Phase 3 — `lib/timeline/`:** `operations.ts` + `placement.ts` (pure
+    `Highlight[]` transforms; exact ranges kept; order preserved via
+    `setHighlights`).
+  - **Phase 4 — `lib/agent/orchestrator.ts`:** observe → reinforcement →
+    parse → resolve → policy → `AgentDecision`.
+  - **Phase 5 — `lib/agent/conceptResolver.ts`:** exact range → LOCAL
+    transcript → OCR (honest unavailable) → visual fallback. Generic
+    "best parts" → visual, NO fixed count.
+  - **Phase 6 — `lib/ocr/`:** `OcrEngine` interface + honest
+    `available:false` query; no heavy dep added.
+  - **Phase 7 — reinforcement:** detection + pure `adjustScore`.
+  - **Phase 8 — UI feedback:** one assistant message per action with
+    assumptions + an `agent` attachment carrying the evidence label
+    ("transcript match" / "exact range") + confidence.
+  - **Wiring — `lib/agent/runAgentCommand.ts`:** `tryAgentCommand` builds
+    context + per-session memory from the store, applies resolved ops via
+    the store (undo preserved), lazy-imported into `app/editor/page.tsx`
+    `handleAgent` before `tryQuickShortcut`.
+  - **Config:** `AGENT_POLICY` + `AGENT_GUARDRAILS` in `lib/config.ts`
+    (documented SAFETY guardrails — no hidden clip-count/duration).
+  - **Tests:** `scripts/ts-ext-hook.mjs` + `register-ts-ext.mjs` (a
+    `node --test` resolver hook appending `.ts` to extensionless relative
+    imports) + 6 new test files. `npm test` = 86 pass / 0 fail.
+- **Files affected:** `lib/intent/{command,timeRangeParser,sourceResolver,
+  clipResolver,placementResolver,editCommandParser}.ts` (+ `.test.ts`),
+  `lib/agent-memory/{types,store,observer,resolver,policy,context}.ts`
+  (+ `policy.test.ts`), `lib/timeline/{operations,placement}.ts`
+  (+ `operations.test.ts`), `lib/agent/{orchestrator,conceptResolver,
+  reinforcement,runAgentCommand}.ts`, `lib/ocr/{types,query}.ts`,
+  `lib/config.ts`, `app/editor/page.tsx`, `package.json`,
+  `scripts/ts-ext-hook.mjs`, `scripts/register-ts-ext.mjs`; `memory/*`.
+- **Reason:** Make the editor resolve source/clip/range/concept/placement
+  references, observed memory, and reinforcement deterministically — only
+  asking to clarify when truly ambiguous — without any hidden hardcoded
+  clip count or forced duration, and without breaking the existing render
+  pipeline / cloud planner.
+- **Privacy/honesty:** fully client-side; no video upload; no provider
+  keys touched; OCR/vision not faked (OCR reports unavailable; visual
+  concept search defers to the existing pipeline).
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓ (`/editor`
+  first-load JS 168 kB; agent layer is a lazy chunk), `npm test` 86 pass.
+  **Browser/WebGPU + transcript runtime verification still required** —
+  the sandbox has neither.
+
+---
 - **Bug:** "pick combat in the first video and the cutscene in the second and
   make it transition" never reached compose. The cloud planner mis-routed it
   to a single-source plan and the generic `deriveActionableIntent` fallback

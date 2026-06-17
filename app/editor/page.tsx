@@ -513,6 +513,38 @@ export default function Home() {
       pushMessage({ role: "user", content: userRequest });
       const previousPlan = useEditorStore.getState().plan;
 
+      // ---- Agentic command layer (deterministic-first) ---------------
+      // Resolve natural editing commands (source/clip/range/concept/
+      // placement references, append-vs-replace-vs-move-vs-remove,
+      // reinforcement) into structured timeline operations BEFORE the
+      // older quick-shortcut gate and the cloud planner. It is additive
+      // and reversible: `handled === false` falls straight through to the
+      // unchanged paths below; `needsVisual` means the concept needs the
+      // frame pipeline, so we also fall through to the cloud planner that
+      // builds scenarios + runs it. Lazy-imported so its weight stays out
+      // of the initial /editor bundle.
+      try {
+        const { tryAgentCommand } = await import("@/lib/agent/runAgentCommand");
+        const outcome = await tryAgentCommand(userRequest, {
+          pushMessage,
+          setStatus,
+          setProgress,
+          sessionId,
+          logSession
+        });
+        if (outcome.handled) {
+          setBusy(false);
+          return;
+        }
+        // needsVisual / fallthrough → continue to the existing paths.
+      } catch (err) {
+        logSession.system(
+          "agent.command.path.failed",
+          { message: (err as Error).message, userRequest },
+          `Agent command path errored, falling back: ${(err as Error).message.slice(0, 80)}`
+        );
+      }
+
       // ---- v1.7.5 — Client-side intent shortcut gate -----------------
       // Try to dispatch the turn locally before paying for a cloud
       // planner round-trip. The grammar-based matcher only fires on

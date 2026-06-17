@@ -8,6 +8,25 @@
 
 ## High priority
 
+- [ ] **Manual browser test — agentic intent layer (2026-06-17, after deploy).**
+      With a video uploaded, verify the deterministic agent handles:
+      "add first 2 min", "add last 30 sec from video 2 after clip 3",
+      "add the middle part", "add from 1:20 to 2:10", "add clip 2 after
+      clip 5", "move clip 3 before clip 1", "replace clip 4 with 0:30 to
+      0:45", "remove this", "extend clip 1 by 3 seconds", "trim clip 2 to
+      0:05-0:10", "render". Concept: "add the part where he says
+      subscribe" (needs a local transcript → transcript-grounded clip);
+      "add the screen where it says SALE" (must say OCR isn't ready and
+      fall back — never fake it); "pick best parts" / "pick best cooking
+      parts" (no fixed clip count). Reinforcement: "not this, more like
+      clip 2", "use video 1 only", "this is perfect". Single video →
+      assumed automatically; multi-video unnamed → uses active/last-used
+      with a surfaced assumption OR asks when truly ambiguous. Confirm:
+      "add" APPENDS (never wipes), exact ranges kept verbatim, undo works,
+      assumptions shown in chat, evidence label shown ("transcript match"
+      / "exact range"). NEEDS a real WebGPU browser + a transcript — not
+      verifiable in CI/sandbox.
+
 - [ ] **Manual test — compose SELECTION + decode errors (browser, after deploy).**
       With 2+ uploads: "pick combat in the first video and the cutscene in the
       second and make it transition" → mode=compose (NOT a single-source plan,
@@ -103,6 +122,23 @@
       feature work; no big rewrite.
 
 ## Completed
+
+- [x] (2026-06-17) **Agentic intent layer (additive, reversible).** New
+      deterministic agent that parses natural editing commands into
+      structured timeline operations before the cloud planner:
+      `lib/intent/{command,timeRangeParser,sourceResolver,clipResolver,
+      placementResolver,editCommandParser}`, `lib/agent-memory/*`
+      (confidence+evidence memory, reinforcement, confidence policy),
+      `lib/timeline/{operations,placement}`, `lib/agent/{orchestrator,
+      conceptResolver,reinforcement,runAgentCommand}`, `lib/ocr/*`
+      (honest unavailable). Wired into `handleAgent` before
+      `tryQuickShortcut`; falls through on miss / visual-needed. Concept
+      search uses the local transcript; "add" appends; exact ranges kept;
+      undo preserved; no fixed clip count/duration. Config: `AGENT_POLICY`
+      + `AGENT_GUARDRAILS`. Tests: +50 (`npm test` = 86 pass) via a
+      `node --test` `.ts` resolver hook (`scripts/ts-ext-hook.mjs`).
+      typecheck + build ✓. Browser/transcript runtime test pending.
+      See `memory/AGENTIC_INTENT_LAYER_2026-06-17.md`.
 
 - [x] (2026-06-11) **Documented OpenRouter-only single-model pin.**
       `.env.example` now shows `CLOUD_PROVIDER_ORDER=openrouter` + all

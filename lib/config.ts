@@ -628,3 +628,48 @@ export const BRIEFING_FOLLOWUP = {
    *  drift. */
   planTopicSignals: SIGNAL_DEFAULTS.scenarioHeavy
 } as const;
+
+
+
+// =====================================================================
+// Agentic intent layer (lib/intent command parsing, lib/agent-memory,
+// lib/timeline, lib/agent orchestrator). Tunables + DOCUMENTED guardrails
+// for the deterministic agent that resolves natural editing commands.
+//
+// IMPORTANT: the numbers below are SAFETY GUARDRAILS for browser memory /
+// render stability and CONFIDENCE thresholds — NOT hidden editing
+// decisions. There is deliberately no fixed output clip-count or forced
+// duration here; clip count/length stay emergent from the user's request
+// and the existing pipeline's quality-floor selection.
+// =====================================================================
+
+/** Confidence thresholds for the agent's execute / assume / clarify
+ *  decision (lib/agent-memory/policy.ts). */
+export const AGENT_POLICY = {
+  /** >= this → execute the command directly, no question. */
+  executeThreshold: 0.85,
+  /** >= this (but < executeThreshold) → execute but surface the
+   *  assumption in chat ("Using video 2 because…"). */
+  noteThreshold: 0.65,
+  /** Below noteThreshold → ask a short clarification instead of acting. */
+  // (anything < noteThreshold)
+} as const;
+
+/** Guardrails for agent-resolved timeline operations. These bound
+ *  browser/render stability; they are NOT editorial choices. */
+export const AGENT_GUARDRAILS = {
+  /** Largest single agent-added range, in seconds. A user asking for a
+   *  bigger explicit range is honoured up to the source duration — this
+   *  only bounds runaway concept matches. */
+  maxAgentClipSeconds: 600,
+  /** Smallest meaningful clip the agent will create. */
+  minAgentClipSeconds: 0.3,
+  /** Default seconds added by an "extend clip" when the user doesn't
+   *  name an amount. */
+  defaultExtendSeconds: 2,
+  /** Cap on how many concept matches a single "add the X" turn returns
+   *  before the existing timeline merge cap applies. Generic "best
+   *  parts" is NOT capped here — it flows through the pipeline's
+   *  quality-floor path (no fixed count). */
+  maxConceptMatchesPerTurn: 8
+} as const;
