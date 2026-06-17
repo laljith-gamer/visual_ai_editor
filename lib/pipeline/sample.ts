@@ -207,13 +207,13 @@ export async function sampleFrames(
 function readCanvasPixels(
   canvas: HTMLCanvasElement | OffscreenCanvas
 ): Uint8ClampedArray | null {
-  // OffscreenCanvas.getContext("2d") returns OffscreenCanvasRenderingContext2D
-  // which also exposes getImageData. Fall through silently if unavailable.
+  // Hint the browser that this context is used for repeated pixel readbacks.
+  // If mediabunny already created the 2D context, the option may be ignored;
+  // the call is still safe and helps when the context is first created here.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ctx = (canvas as any).getContext?.("2d") as
-    | CanvasRenderingContext2D
-    | OffscreenCanvasRenderingContext2D
-    | null;
+  const ctx = (canvas as any).getContext?.("2d", {
+    willReadFrequently: true
+  }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
   if (!ctx) return null;
   const w = (canvas as HTMLCanvasElement | OffscreenCanvas).width;
   const h = (canvas as HTMLCanvasElement | OffscreenCanvas).height;
