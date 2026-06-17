@@ -8,12 +8,21 @@
 
 ## High priority
 
-- [ ] **PR 58 (remaining) — wire the transition foundation.** The model +
-      honest mapping shipped (`lib/transitions/*`). Still TODO (larger):
-      render worker consumes `BoundaryTransition[]` per boundary; transition
-      picker UI between clips; chat commands ("add fade between clip 1 and
-      2", "make transition cut", "add zoom transition"); actually render
-      dip_to_black/slide/zoom (until then they map down honestly).
+- [ ] **Transitions — true crossfade + real effects (next PR).** Auto
+      picking + per-boundary render landed (PR 59). Still TODO: render a
+      TRUE overlap crossfade via ffmpeg `xfade` + mediabunny cross-dissolve
+      (today crossfade = a fade dip, same as fade); then implement real
+      dip_to_black / slide / zoom so they stop mapping down. Also consider
+      including `boundaryTransitions` in the undo/redo snapshot (currently
+      they recompute after undo and manual overrides aren't restored).
+- [ ] **Manual browser test — auto transitions (PR 59, after deploy).**
+      Upload a video, add 3 clips → the Transitions chip row shows auto
+      picks (e.g. "Auto: Cut"); change one to Crossfade; move/remove a clip
+      and confirm the row updates and the manual override survives; run
+      "auto pick transitions" in chat and confirm it lists picks + reasons;
+      render with cut/fade/crossfade and export; pick Zoom/Glitch and verify
+      it shows "→ crossfade (mapped)" and renders as that; confirm no
+      WebGPU/cloud is needed. (Sandbox has no GPU/decode — not run here.)
 - [ ] **Manual browser test — PR 57 export/upload/preview (after deploy).**
       Upload MP4/MOV/WebM → clear success/failure, no broken state on
       failure, duplicate handled. Source preview after upload; combined
@@ -165,6 +174,19 @@
       feature work; no big rewrite.
 
 ## Completed
+
+- [x] (2026-06-19) **Auto transition picking (issue #57, PR 59 layer).**
+      Offline, deterministic, evidence-based selector (no genre tables):
+      `lib/transitions/{features,auto,timeline}.ts` + `TRANSITIONS.autoPick`
+      config + extended `BoundaryTransition`. Store `boundaryTransitions`
+      + actions + recompute-on-sequence-change. UI `TransitionsBar`. Chat
+      `transitionCommands` (before planner). Render: pure `renderFilters.ts`
+      + per-boundary `boundaryRenders` threaded through worker + mediabunny
+      (global fallback preserved). +36 tests → 155 pass. typecheck+build ✓.
+      On branch `feat/auto-transitions`, not yet merged. Honest mapping kept
+      for dip_to_black/slide/zoom/glitch/whip/match_cut; crossfade still a
+      fade dip (true xfade is the next PR). See
+      `memory/PR59_AUTO_TRANSITIONS_2026-06-19.md`.
 
 - [x] (2026-06-19) **PR 58 — per-boundary transition foundation (small).**
       `TRANSITIONS` config guardrails + `lib/transitions/{types,map}.ts`:

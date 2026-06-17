@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { renderWithMediabunny } from "@/lib/pipeline/mediabunny-render";
+import type { RenderableTransition } from "@/lib/pipeline/renderFilters";
 import type { Highlight, EditPlan, VideoSource } from "@/lib/types";
 
 interface RenderArgs {
@@ -14,6 +15,11 @@ interface RenderArgs {
   highlights: Highlight[];
   format: EditPlan["format"];
   transition: EditPlan["transition"];
+  /** PR 59 — optional per-boundary renderable transitions (length =
+   *  highlights.length; index 0 = lead-in). When present, overrides the
+   *  global `transition` in both render paths. Already mapped down to
+   *  none/fade/crossfade. */
+  boundaryRenders?: RenderableTransition[];
   onProgress?: (p: number) => void;
 }
 
@@ -169,7 +175,8 @@ export function useFFmpeg(): UseFFmpegResult {
             inputs,
             highlights: mappedHighlights,
             format: args.format,
-            transition: args.transition
+            transition: args.transition,
+            boundaryRenders: args.boundaryRenders
           },
           transfers
         );

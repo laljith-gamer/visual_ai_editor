@@ -98,6 +98,19 @@ export default function Home() {
   const plan = useEditorStore((s) => s.plan);
   const highlights = useEditorStore((s) => s.highlights);
   const messages = useEditorStore((s) => s.messages);
+  const recomputeAutoTransitions = useEditorStore((s) => s.recomputeAutoTransitions);
+
+  // PR 59 — recompute auto transitions whenever the clip SEQUENCE changes
+  // (add / move / remove / replace / source change), but NOT on every
+  // resize/position tweak. Manual overrides are preserved by the store.
+  // Deterministic + offline; no WebGPU/cloud.
+  const timelineSeqKey = useMemo(
+    () => highlights.map((h) => `${h.id}:${h.sourceId ?? ""}`).join("|"),
+    [highlights]
+  );
+  useEffect(() => {
+    recomputeAutoTransitions();
+  }, [timelineSeqKey, recomputeAutoTransitions]);
 
   const pushMessage = useEditorStore((s) => s.pushMessage);
   const setStatus = useEditorStore((s) => s.setStatus);
@@ -2323,6 +2336,17 @@ export default function Home() {
     );
     const t0 = Date.now();
     try {
+      // PR 59 — per-boundary renderable transitions (index 0 = lead-in).
+      // Built from the store's auto/manual boundary transitions; falls back
+      // to the global `transition` when none exist.
+      const bts = cur.boundaryTransitions;
+      const btByIndex = new Map(bts.map((b) => [b.index, b]));
+      const boundaryRenders =
+        bts.length > 0
+          ? highlights.map((_, i) =>
+              i === 0 ? "none" : btByIndex.get(i)?.render ?? "none"
+            )
+          : undefined;
       // v1.6.0 — pass the library + multi-source highlights. The hook
       // resolves which source blobs are actually needed (only those
       // referenced by highlights' `sourceId`), encodes them as `in0.mp4`,
@@ -2334,6 +2358,7 @@ export default function Home() {
         highlights,
         format,
         transition,
+        boundaryRenders,
         onProgress: (p) => setProgress(p)
       });
       setRendered(blob);

@@ -23,6 +23,10 @@
  */
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL } from "@ffmpeg/util";
+import {
+  buildFilterComplex,
+  type RenderableTransition
+} from "./renderFilters";
 
 // Mirror of lib/config.ts → RENDER. Must match.
 const RENDER = {
@@ -65,6 +69,11 @@ interface RenderMessage {
   highlights: MultiSourceHighlight[];
   format: "vertical" | "horizontal" | "square";
   transition: "none" | "fade" | "crossfade";
+  /** PR 59 — optional per-boundary renderable transitions (length = clip
+   *  count; index 0 = lead-in). When present, overrides the global
+   *  `transition`. Already mapped down to none/fade/crossfade by the
+   *  caller, so the worker never has to interpret unsupported effects. */
+  boundaryRenders?: RenderableTransition[];
 }
 
 // v1.5.x compat: single-source render messages still arrive in their
@@ -189,12 +198,18 @@ function buildArgs(
   msg: RenderMessage,
   withAudio: boolean
 ): string[] {
-  const filter = buildFilterComplex(
-    msg.highlights,
-    msg.format,
-    msg.transition,
-    withAudio
-  );
+  const filter = buildFilterComplex({
+    highlights: msg.highlights,
+    format: msg.format,
+    withAudio,
+    transition: msg.transition,
+    boundaryRenders: msg.boundaryRenders,
+    config: {
+      fadeFractionOfClip: RENDER.fadeFractionOfClip,
+      fadeMaxSeconds: RENDER.fadeMaxSeconds,
+      outputDimensions: RENDER.outputDimensions
+    }
+  });
 
   const args: string[] = ["-y"];
   for (const n of inputNames) args.push("-i", n);
@@ -224,89 +239,6 @@ function buildArgs(
 
   args.push("-movflags", "+faststart", "output.mp4");
   return args;
-}
-
-/** Build the filter_complex graph string for all highlights. */
-function buildFilterComplex(
-  highlights: MultiSourceHighlight[],
-  format: RenderMessage["format"],
-  transition: RenderMessage["transition"],
-  withAudio: boolean
-): string {
-  const dim =
-    RENDER.outputDimensions[format] ?? RENDER.outputDimensions.horizontal;
-  const scale = scaleExpr(format, dim);
-  const fade = transition === "fade" || transition === "crossfade";
-
-  const chains: string[] = [];
-  const concatInputs: string[] = [];
-
-  highlights.forEach((h, i) => {
-    const dur = Math.max(0.1, h.end - h.start);
-    const fadeDur = fade
-      ? Math.min(RENDER.fadeMaxSeconds, dur * RENDER.fadeFractionOfClip)
-      : 0;
-    const idx = Math.max(0, Math.floor(h.inputIndex || 0));
-
-    // Video chain: trim → reset PTS → scale/crop → optional fade.
-    let v =
-      `[${idx}:v]trim=start=${fmt(h.start)}:end=${fmt(h.end)},` +
-      `setpts=PTS-STARTPTS,${scale}`;
-    if (fadeDur > 0) {
-      v +=
-        `,fade=t=in:st=0:d=${fmt(fadeDur)},` +
-        `fade=t=out:st=${fmt(dur - fadeDur)}:d=${fmt(fadeDur)}`;
-    }
-    v += `[v${i}]`;
-    chains.push(v);
-    concatInputs.push(`[v${i}]`);
-
-    if (withAudio) {
-      let a =
-        `[${idx}:a]atrim=start=${fmt(h.start)}:end=${fmt(h.end)},` +
-        `asetpts=PTS-STARTPTS`;
-      if (fadeDur > 0) {
-        a +=
-          `,afade=t=in:st=0:d=${fmt(fadeDur)},` +
-          `afade=t=out:st=${fmt(dur - fadeDur)}:d=${fmt(fadeDur)}`;
-      }
-      a += `[a${i}]`;
-      chains.push(a);
-      concatInputs.push(`[a${i}]`);
-    }
-  });
-
-  const a = withAudio ? 1 : 0;
-  const concatOut = withAudio ? `[outv][outa]` : `[outv]`;
-  chains.push(
-    `${concatInputs.join("")}concat=n=${highlights.length}:v=1:a=${a}${concatOut}`
-  );
-  return chains.join(";");
-}
-
-function scaleExpr(
-  format: RenderMessage["format"],
-  d: { w: number; h: number }
-): string {
-  switch (format) {
-    case "vertical":
-    case "square":
-      return (
-        `scale=${d.w}:${d.h}:force_original_aspect_ratio=increase,` +
-        `crop=${d.w}:${d.h}`
-      );
-    case "horizontal":
-    default:
-      return (
-        `scale=${d.w}:${d.h}:force_original_aspect_ratio=decrease,` +
-        `pad=${d.w}:${d.h}:(ow-iw)/2:(oh-ih)/2:black`
-      );
-  }
-}
-
-/** Tight float formatter — avoids exponential notation in filter strings. */
-function fmt(n: number): string {
-  return n.toFixed(3);
 }
 
 export {};

@@ -17,6 +17,40 @@
 
 ---
 
+### 2026-06-19 — Auto transition picking (issue #57, PR 59 layer)
+- **Change made:** The editor auto-picks the transition between clips from
+  generic media signals (offline, deterministic, NO genre tables).
+  - Engine: `lib/transitions/features.ts` (generic signals, graceful
+    degradation), `auto.ts` (`selectAutoTransition`, documented precedence),
+    `timeline.ts` (`buildAutoBoundaryTransitions`, preserves manual + clamps).
+  - Config: `TRANSITIONS.autoPick` thresholds (documented guardrails).
+  - Types: `BoundaryTransition` extended (optional mode/confidence/reason/
+    evidence/render/exact/note) — backward compatible.
+  - Store: `boundaryTransitions` + set/update/reset/recompute actions;
+    editor recomputes on clip-sequence change; manual overrides survive.
+  - UI: `components/TransitionsBar.tsx` (per-boundary chips, honest
+    mapped-down labels).
+  - Chat: `lib/intent/transitionCommands.ts` parsed before the planner;
+    `runAgentCommand.handleTransitionCommand` applies + summarizes.
+  - Render: pure `lib/pipeline/renderFilters.ts` (worker delegates);
+    optional per-boundary `boundaryRenders` through `useFFmpeg` + ffmpeg
+    worker + mediabunny; global fallback byte-identical.
+- **Files affected:** `lib/transitions/{types,features,auto,timeline}.ts`
+  (+ tests), `lib/config.ts`, `hooks/useEditorStore.ts`,
+  `app/editor/page.tsx`, `components/{TransitionsBar,Timeline}.tsx`,
+  `lib/intent/transitionCommands.ts` (+test), `lib/agent/runAgentCommand.ts`,
+  `lib/pipeline/{renderFilters.ts (+test),render.worker.ts,mediabunny-render.ts}`,
+  `hooks/useFFmpeg.ts`, `package.json`, `memory/*`.
+- **Reason:** Transitions shouldn't be manual-only; the editor should
+  understand adjacent clips + context and choose naturally — without fake
+  effect claims and without WebGPU/cloud.
+- **Honesty:** dip_to_black/slide/zoom/glitch/whip/match_cut map down with a
+  note; crossfade currently renders as a fade dip (true xfade is future).
+- **Validation:** typecheck ✓, build ✓, `npm test` = 155 pass / 0 fail
+  (+36). On branch `feat/auto-transitions` — not yet merged.
+
+---
+
 ### 2026-06-19 — PR 58: per-boundary transition foundation (small)
 - **Change made:** Added the per-boundary transition MODEL + honest
   mapping (no render/UI change). `lib/config.ts` `TRANSITIONS` guardrails;
