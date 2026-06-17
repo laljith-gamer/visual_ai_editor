@@ -3,17 +3,7 @@
  *
  * Runs the full sample → score → temporal → buildHighlights flow
  * for ONE video source and returns the resulting highlights tagged
- * with the source's id. The orchestrator (in app/page.tsx) calls this
- * once per eligible library source and merges the outputs.
- *
- * This is a pure-data helper: it takes everything it needs as
- * arguments and returns a structured result. It does NOT call
- * setHighlights, pushMessage, or any other store mutation — those
- * belong to the orchestrator so it can reason globally about budget,
- * messaging, and progress.
- *
- * The body is the verbatim logic that lived inline in runPipeline
- * pre-v1.6.0; only the data plumbing changed.
+ * with the source's id. The orchestrator owns UI/store mutations.
  */
 
 import type {
@@ -25,12 +15,18 @@ import type {
   UserTier,
   VideoSource
 } from "@/lib/types";
+import type { Transcript } from "@/lib/audio/types";
 import { sampleFrames } from "./sample";
 import { scoreFrames } from "./score";
 import { detectCandidateWindows } from "./events";
 import { runTemporalPass } from "./temporal";
 import { buildHighlights } from "./highlights";
 import { buildMomentHighlight } from "./moment";
+import {
+  applyTranscriptGrounding,
+  snapHighlightsToTranscriptMatches,
+  transcriptSignature
+} from "./transcriptGrounding";
 import { planSignaturePayload } from "@/lib/plan/normalize";
 import { sha1String } from "@/lib/util/hash";
 import { getPredictions, savePredictions, trimCache } from "@/lib/store/cache";
@@ -39,9 +35,8 @@ import { PLAN_DEFAULTS } from "@/lib/config";
 /**
  * Production guardrail for the first-pass frame scorer.
  *
- * The sampler already supports `maxFrames`; this executor uses it with an
- * adaptive interval so long videos are represented by a bounded, evenly spread
- * coarse pass instead of thousands of frames.
+ * This is a sampling cap, not an output-clip cap. Long videos are represented
+ * by a bounded, evenly spread coarse pass instead of thousands of frames.
  */
 const SOURCE_ANALYSIS_MAX_FRAMES = 240;
 
@@ -53,8 +48,7 @@ export interface SourceLogger {
 
 export interface ProgressSink {
   setStatus: (s: string, detail?: string) => void;
-  /** Progress within THIS source's run (0..1). The orchestrator scales
-   *  it to global progress. */
+  /** Progress within THIS source's run (0..1). The orchestrator scales it. */
   setProgress: (p: number) => void;
 }
 
@@ -64,6 +58,8 @@ export interface ExecuteForSourceArgs {
   mode: "plan" | "moment";
   capTier: CapabilityTier;
   userTier: UserTier;
+  /** Optional local Whisper transcript for exact speech/text-grounded scoring. */
+  transcript?: Transcript | null;
   log: SourceLogger;
   progress: ProgressSink;
 }
@@ -71,8 +67,7 @@ export interface ExecuteForSourceArgs {
 export interface ExecuteForSourceResult {
   /** Highlights tagged with source.id and ready to merge globally. */
   highlights: Highlight[];
-  /** True if the only matches were below the strong threshold; the
-   *  orchestrator may want to qualify the assistant message. */
+  /** True if the only matches were below the strong threshold. */
   weakOnly: boolean;
   /** Max composite score seen — used for "no strong matches" copy. */
   scoreMax: number;
@@ -82,14 +77,13 @@ export interface ExecuteForSourceResult {
 }
 
 /**
- * Run the full pipeline for one source. Throws on unrecoverable
- * decoding errors; returns an empty `highlights` array when nothing
- * matched (the orchestrator decides whether to surface that).
+ * Run the full pipeline for one source. Throws on unrecoverable decoding errors;
+ * returns an empty highlights array when nothing matched.
  */
 export async function executeForSource(
   args: ExecuteForSourceArgs
 ): Promise<ExecuteForSourceResult> {
-  const { source, plan, mode, capTier, userTier, log, progress } = args;
+  const { source, plan, mode, capTier, userTier, transcript = null, log, progress } = args;
   const videoBlob = source.blob;
   const videoHash = source.hash;
   const videoMeta = {
@@ -99,7 +93,11 @@ export async function executeForSource(
   };
 
   // ---- Cache lookup ------------------------------------------------
-  const sig = await sha1String(planSignaturePayload(plan));
+  // Transcript signature is part of the scoring cache key: a transcript-aware
+  // run must not reuse older visual-only frame scores.
+  const sig = await sha1String(
+    `${planSignaturePayload(plan)}\n${transcriptSignature(transcript)}`
+  );
   const cached = await getPredictions(videoHash, sig);
   let frameScores: FrameScore[];
   let cacheHit = false;
@@ -110,20 +108,26 @@ export async function executeForSource(
       { sourceId: source.id, signature: sig.slice(0, 12), frames: cached.frames.length },
       `Cache hit on "${source.meta.name}" (${cached.frames.length} frames)`
     );
-    frameScores = cached.frames;
+    frameScores = applyTranscriptGrounding(cached.frames, plan, transcript);
     progress.setStatus("scoring", `Reused cache for ${source.meta.name}`);
     progress.setProgress(0.5);
     cacheHit = true;
   } else {
     log.system(
       "cache.miss",
-      { sourceId: source.id, signature: sig.slice(0, 12) },
+      {
+        sourceId: source.id,
+        signature: sig.slice(0, 12),
+        transcriptGrounded: Boolean(transcript?.segments.length)
+      },
       `Cache miss on "${source.meta.name}" — running fresh sample+score`
     );
     frameScores = await sampleAndScore({
       videoBlob,
       videoHash,
+      scenarioSignature: sig,
       plan,
+      transcript,
       capTier,
       videoMeta,
       progress,
@@ -158,7 +162,13 @@ export async function executeForSource(
       onProgress: (done, total) =>
         progress.setProgress(0.65 + (done / Math.max(total, 1)) * 0.3)
     });
-    const tagged = buildResult.highlights.map((h) => ({
+    const grounded = snapHighlightsToTranscriptMatches(
+      buildResult.highlights,
+      plan,
+      transcript,
+      videoMeta.duration
+    );
+    const tagged = grounded.map((h) => ({
       ...h,
       sourceId: source.id
     }));
@@ -169,6 +179,7 @@ export async function executeForSource(
         found: tagged.length > 0,
         count: tagged.length,
         weakOnly: buildResult.weakOnly,
+        transcriptGrounded: Boolean(transcript?.segments.length),
         userTier
       },
       tagged.length > 0
@@ -206,7 +217,8 @@ export async function executeForSource(
       percentile: detectionResult.percentile,
       cutoff: round2(detectionResult.cutoff),
       scoreMax: round2(scoreStats.max),
-      scoreMean: round2(scoreStats.mean)
+      scoreMean: round2(scoreStats.mean),
+      transcriptGrounded: Boolean(transcript?.segments.length)
     },
     `${candidates.length} candidates from "${source.meta.name}" (top ${(detectionResult.percentile * 100).toFixed(0)}%)`
   );
@@ -234,7 +246,13 @@ export async function executeForSource(
     userTier,
     scoreStats
   });
-  const tagged = buildResult.highlights.map((h) => ({
+  const grounded = snapHighlightsToTranscriptMatches(
+    buildResult.highlights,
+    plan,
+    transcript,
+    videoMeta.duration
+  );
+  const tagged = grounded.map((h) => ({
     ...h,
     sourceId: source.id
   }));
@@ -246,6 +264,7 @@ export async function executeForSource(
       count: tagged.length,
       totalSeconds: round2(tagged.reduce((acc, h) => acc + (h.end - h.start), 0)),
       weakOnly: buildResult.weakOnly,
+      transcriptGrounded: Boolean(transcript?.segments.length),
       userTier
     },
     `Built ${tagged.length} clip${tagged.length === 1 ? "" : "s"} from "${source.meta.name}"`,
@@ -268,14 +287,27 @@ export async function executeForSource(
 async function sampleAndScore(args: {
   videoBlob: Blob;
   videoHash: string;
+  scenarioSignature: string;
   plan: EditPlan;
+  transcript?: Transcript | null;
   capTier: CapabilityTier;
   videoMeta: { duration: number; width: number; height: number };
   progress: ProgressSink;
   log: SourceLogger;
   sourceName: string;
 }): Promise<FrameScore[]> {
-  const { videoBlob, videoHash, plan, capTier, videoMeta, progress, log, sourceName } = args;
+  const {
+    videoBlob,
+    videoHash,
+    scenarioSignature,
+    plan,
+    transcript = null,
+    capTier,
+    videoMeta,
+    progress,
+    log,
+    sourceName
+  } = args;
   progress.setStatus("sampling", `Extracting frames from ${sourceName}`);
 
   const tA = Date.now();
@@ -321,22 +353,28 @@ async function sampleAndScore(args: {
   progress.setStatus("scoring", `Scoring ${frames.length} frames (${capTier})`);
   const tier = capTier === "low" ? "cloud" : "siglip-local";
   const tB = Date.now();
-  const scored = await scoreFrames({
+  const visualScores = await scoreFrames({
     frames,
     plan,
     tier,
     onProgress: (done, total) => progress.setProgress(0.25 + (done / total) * 0.35)
   });
+  const scored = applyTranscriptGrounding(visualScores, plan, transcript);
   log.ai(
     "frames.scored",
-    { count: scored.length, tier, cacheHit: false },
-    `Scored ${scored.length} frames via ${tier}`,
+    {
+      count: scored.length,
+      tier,
+      cacheHit: false,
+      transcriptGrounded: Boolean(transcript?.segments.length)
+    },
+    `Scored ${scored.length} frames via ${tier}${transcript?.segments.length ? " + transcript" : ""}`,
     Date.now() - tB
   );
 
   await savePredictions({
     videoHash,
-    scenarioSignature: await sha1String(planSignaturePayload(plan)),
+    scenarioSignature,
     sampleEverySeconds: sampling.everySeconds,
     frames: scored,
     createdAt: Date.now()
@@ -379,20 +417,6 @@ function round2(n: number): number {
 
 /**
  * Merge highlights from multiple sources into one global timeline.
- *
- * v1.6.0 default policy ("time-fused"):
- *   1. Sort all candidates by composite score, descending.
- *   2. Greedily pick clips until total length reaches plan.targetShortSeconds.
- *   3. Re-sort the final pick by source name + start time so the timeline
- *      reads predictably.
- *
- * For "balanced" selection strategy we instead spread picks evenly:
- *   - Walk each source's clips in time order
- *   - Round-robin pick one from each source until budget exhausted
- *
- * MOMENT mode is a special case — the orchestrator passes pre-merged
- * results and just wants the single best clip, so this function is a
- * one-line winner-select.
  */
 export function mergeAcrossSources(
   perSource: ExecuteForSourceResult[],
@@ -409,32 +433,24 @@ export function mergeAcrossSources(
   }
 
   if (mode === "moment") {
-    // Single best clip across all sources.
     const winner = [...all].sort((a, b) => b.score - a.score)[0];
     return { highlights: [winner], weakOnly, scoreMax };
   }
 
-  // v1.7.1 — Plan mode without an explicit user duration: skip budget
-  // enforcement entirely. Each per-source result already ran the
-  // quality-floor selection in buildHighlights; here we just collect
-  // them, dedupe across sources by overlap, and cap at the global
-  // unbudgeted limits. This is what makes "best parts" return a
-  // natural-feeling reel instead of a hard-trimmed 30s slice.
+  // No-duration plan mode: no clip-count limit. Keep all non-overlapping clips
+  // that fit inside the total-duration guard so "pick best parts" is governed
+  // by source content instead of a hardcoded count like 12.
   if (!plan.userSpecifiedDuration) {
-    // Sort globally by start so duplicate-overlap detection is stable.
     const ranked = [...all].sort((a, b) => b.score - a.score);
     const out: Highlight[] = [];
     let total = 0;
     for (const h of ranked) {
-      if (out.length >= PLAN_DEFAULTS.maxClipsWithoutBudget) break;
       const dur = h.end - h.start;
       if (total + dur > PLAN_DEFAULTS.maxTotalSecondsWithoutBudget) continue;
-      // Cross-source dedupe: drop a clip if another picked one
-      // already covers >50% of its time on the same source.
       const overlap = out.find((x) => {
         if ((x.sourceId ?? null) !== (h.sourceId ?? null)) return false;
         const o = Math.max(0, Math.min(x.end, h.end) - Math.max(x.start, h.start));
-        return o / dur > 0.5;
+        return o / Math.max(dur, 0.001) > 0.5;
       });
       if (overlap) continue;
       out.push(h);
@@ -449,13 +465,12 @@ export function mergeAcrossSources(
     return { highlights: out, weakOnly, scoreMax };
   }
 
-  // ---------- Budgeted path (existing behaviour) ----------
+  // ---------- Budgeted path ----------
   const budget = plan.targetShortSeconds;
   const sorted = [...all].sort((a, b) => b.score - a.score);
 
   let chosen: Highlight[];
   if (plan.selectionStrategy === "balanced") {
-    // Round-robin across sources by descending score.
     const bySource = new Map<string, Highlight[]>();
     for (const h of sorted) {
       const k = h.sourceId ?? "_";
@@ -487,9 +502,6 @@ export function mergeAcrossSources(
     }
   }
 
-  // Final visual order: group by source name (stable across renders),
-  // then by start time inside each source. Reads naturally on the
-  // timeline + plays in chronological chapters per source.
   chosen.sort((a, b) => {
     const sa = a.sourceId ?? "";
     const sb = b.sourceId ?? "";
