@@ -30,6 +30,10 @@ export type TransitionType =
 /** What the ffmpeg render worker can ACTUALLY apply today. */
 export type RenderableTransition = "none" | "fade" | "crossfade";
 
+/** Whether a boundary transition was chosen automatically or pinned by the
+ *  user. Manual transitions survive an auto recompute. */
+export type TransitionMode = "auto" | "manual";
+
 export const ALL_TRANSITION_TYPES: readonly TransitionType[] = [
   "cut",
   "fade",
@@ -47,6 +51,12 @@ export const ALL_TRANSITION_TYPES: readonly TransitionType[] = [
  * the clip after it). `index` is the boundary position: boundary `i` sits
  * between timeline clip `i-1` and clip `i` (boundary 0 = the lead-in to the
  * first clip, which renders as a hard cut/none).
+ *
+ * The first three fields are the original PR 58 foundation; the rest are
+ * OPTIONAL enrichment added for auto-picking (PR 59) so older callers and
+ * the existing tests keep working unchanged. `mapTransition` fills
+ * render/exact/note; `selectAutoTransition` fills mode/confidence/reason/
+ * evidence.
  */
 export interface BoundaryTransition {
   /** Boundary index (0 = before the first clip). */
@@ -54,6 +64,21 @@ export interface BoundaryTransition {
   type: TransitionType;
   /** Duration in seconds; defaults applied via `withTransitionDefaults`. */
   durationSeconds?: number;
+  /** "auto" (engine-chosen) or "manual" (user-pinned). Default treated as
+   *  "manual" by callers that don't set it. */
+  mode?: TransitionMode;
+  /** 0..1 confidence for an auto pick. */
+  confidence?: number;
+  /** Human-readable why ("same source and adjacent time"). */
+  reason?: string;
+  /** The generic signals that drove the pick (no genre tables). */
+  evidence?: string[];
+  /** What the worker will actually render (from `mapTransition`). */
+  render?: RenderableTransition;
+  /** True iff `render` reproduces `type` exactly. */
+  exact?: boolean;
+  /** Honest down-map note when `!exact`. */
+  note?: string;
 }
 
 /** True for the three transition types the render worker implements. */
@@ -67,11 +92,14 @@ export function normalizeTransitionDuration(seconds?: number): number {
   return Math.min(d, TRANSITIONS.maxDurationSeconds);
 }
 
-/** Fill in a boundary transition's default duration. */
-export function withTransitionDefaults(bt: BoundaryTransition): Required<BoundaryTransition> {
+/** Fill in a boundary transition's default duration. Returns the input
+ *  with a guaranteed numeric `durationSeconds` (other optional enrichment
+ *  fields pass through untouched). */
+export function withTransitionDefaults(
+  bt: BoundaryTransition
+): BoundaryTransition & { durationSeconds: number } {
   return {
-    index: bt.index,
-    type: bt.type,
+    ...bt,
     durationSeconds: normalizeTransitionDuration(bt.durationSeconds)
   };
 }

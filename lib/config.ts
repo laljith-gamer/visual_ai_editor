@@ -724,5 +724,33 @@ export const TRANSITIONS = {
   /** Default transition duration (seconds) when a boundary doesn't name one. */
   defaultDurationSeconds: 0.4,
   /** Hard cap so a transition can't eat a short clip. */
-  maxDurationSeconds: 1.0
+  maxDurationSeconds: 1.0,
+  /**
+   * Thresholds for the deterministic AUTO transition picker
+   * (lib/transitions/auto.ts). These are TECHNICAL guardrails on generic
+   * media signals — NOT editorial/genre rules. There are deliberately no
+   * per-genre transition choices anywhere; the picker only reads
+   * source-continuity, time gaps, motion/saliency contrast, transcript/tag
+   * overlap, and explicit user preference.
+   */
+  autoPick: {
+    /** Max gap (s) between prev.end and next.start on the SAME source for
+     *  the boundary to count as "temporally adjacent" (→ hard cut). */
+    sameSourceAdjacentGapSeconds: 1.0,
+    /** Transcript/tag overlap at/above this is "related topic" (→ crossfade
+     *  across sources rather than a fade). 0..1. */
+    relatedTopicFloor: 0.35,
+    /** Motion at/above this on either side is "high motion" (→ cut to keep
+     *  energy). 0..1. */
+    highMotionFloor: 0.6,
+    /** Motion at/below this on both sides is "low/calm" (→ smoother
+     *  crossfade). 0..1. */
+    lowMotionCeiling: 0.25,
+    /** Motion/saliency contrast at/above this is a "strong contrast"
+     *  (→ fade to absorb the jump). 0..1. */
+    strongContrastFloor: 0.45,
+    /** Confidence assigned to a clear auto pick when no stronger/weaker
+     *  signal adjusts it. 0..1. */
+    defaultConfidence: 0.65
+  }
 } as const;

@@ -5,6 +5,7 @@ import { useEditorStore } from "@/hooks/useEditorStore";
 import { formatTime } from "@/lib/util/time";
 import { logUser } from "@/lib/log/recorders";
 import { SOURCE_COLORS } from "@/lib/config";
+import { TransitionsBar } from "./TransitionsBar";
 import styles from "./Timeline.module.css";
 
 type DragMode = "move" | "resize-l" | "resize-r" | null;
@@ -323,6 +324,8 @@ export function Timeline() {
           ))}
         </div>
       </div>
+
+      <TransitionsBar />
     </div>
   );
 }

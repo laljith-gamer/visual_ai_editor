@@ -4,9 +4,43 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-19 (PR 57 production tool reliability: reliable
-> export/download with deterministic filename + "render first" + blocked
-> fallback; render-vs-export split in the fast router; pure decideFastAction)
+> Last updated: 2026-06-19 (auto transition picking — offline, evidence-based
+> selector + per-boundary model/store/UI/chat + per-boundary render wiring;
+> on branch feat/auto-transitions, not yet merged)
+
+---
+
+## 0. Latest change (2026-06-19) — auto transition picking (issue #57 PR 59 layer)
+
+The editor now AUTO-PICKS the transition between clips from generic media
+signals — offline, deterministic, no WebGPU/cloud, NO genre keyword tables.
+
+- **Engine (pure, tested):** `lib/transitions/features.ts` (generic
+  signals, graceful degradation), `lib/transitions/auto.ts`
+  (`selectAutoTransition`, fixed documented precedence), `lib/transitions/
+  timeline.ts` (`buildAutoBoundaryTransitions`, preserves manual, clamps
+  duration). Thresholds in `lib/config.ts → TRANSITIONS.autoPick`.
+- **Types:** `BoundaryTransition` extended with optional mode/confidence/
+  reason/evidence/render/exact/note (backward compatible; PR 58 map tests
+  unchanged).
+- **Store:** `boundaryTransitions` + setBoundaryTransitions/
+  updateBoundaryTransition/resetAutoTransitions/recomputeAutoTransitions;
+  editor recomputes on clip sequence change (not on resize drag); manual
+  overrides survive. Undo/redo does NOT snapshot transitions (documented).
+- **UI:** `components/TransitionsBar.tsx` chip row under the timeline
+  (Auto + per-boundary override; honestly shows mapped-down effects).
+- **Chat:** `lib/intent/transitionCommands.ts` parsed BEFORE the planner
+  ("auto pick transitions", "add fade between clip 1 and 2", "make all
+  transitions crossfade", "remove transitions", "faster cuts"); applied in
+  `runAgentCommand` with a per-boundary summary reply.
+- **Render:** pure `lib/pipeline/renderFilters.ts` (worker delegates to it);
+  optional per-boundary `boundaryRenders` threaded through `useFFmpeg` →
+  ffmpeg worker + mediabunny; GLOBAL fallback byte-identical when absent.
+- **Honesty:** dip_to_black/slide/zoom/glitch/whip/match_cut still map down
+  with a note; crossfade renders as a fade dip (true xfade is future).
+- **Validation:** typecheck ✓, build ✓, `npm test` = **155 pass** (+36).
+  On branch `feat/auto-transitions` — NOT on main yet. See
+  `memory/PR59_AUTO_TRANSITIONS_2026-06-19.md`.
 
 ---
 

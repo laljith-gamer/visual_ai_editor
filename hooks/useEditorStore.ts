@@ -19,6 +19,11 @@ import type {
   VideoSourceSummary
 } from "@/lib/types";
 import type { Transcript } from "@/lib/audio/types";
+import type { BoundaryTransition } from "@/lib/transitions/types";
+import { normalizeTransitionDuration } from "@/lib/transitions/types";
+import { mapTransition } from "@/lib/transitions/map";
+import { buildAutoBoundaryTransitions } from "@/lib/transitions/timeline";
+import type { TransitionClip, TransitionContext } from "@/lib/transitions/features";
 import { newId } from "@/lib/util/id";
 import { GREETINGS, LIBRARY_LIMITS } from "@/lib/config";
 import { mergePlan } from "@/lib/plan/merge";
@@ -197,6 +202,23 @@ interface EditorState {
   removeHighlight: (id: string) => void;
   selectClip: (id: string | null) => void;
 
+  // ----- actions: per-boundary transitions (PR 59) ------------------
+  /** Per-boundary transitions for the current timeline (render order).
+   *  Boundary index `i` sits between clip `i-1` and clip `i`. */
+  boundaryTransitions: BoundaryTransition[];
+  /** Replace the whole transition set (used by the auto recompute). */
+  setBoundaryTransitions: (transitions: BoundaryTransition[]) => void;
+  /** Pin/patch ONE boundary (a manual override). Marks it mode "manual"
+   *  unless the patch says otherwise; re-maps render/exact/note. */
+  updateBoundaryTransition: (index: number, patch: Partial<BoundaryTransition>) => void;
+  /** Drop all manual overrides and recompute every boundary as auto. */
+  resetAutoTransitions: () => void;
+  /** Recompute auto transitions from the current timeline, PRESERVING
+   *  manual overrides whose boundary still exists. Safe to call after any
+   *  add/move/remove/replace. Offline + deterministic; degrades when
+   *  transcript/motion data is absent. */
+  recomputeAutoTransitions: () => void;
+
   // ----- actions: manual edits (v1.6.0) -----------------------------
   /** Drop or shorten clips in [0, seconds) for the active source. */
   trimFirstSeconds: (seconds: number) => { changed: number };
@@ -294,6 +316,7 @@ function freshState() {
     redoHighlights: null as Highlight[] | null,
     redoSelectedClipId: null as string | null,
     pendingTimelineOp: "replace" as "append" | "replace",
+    boundaryTransitions: [] as BoundaryTransition[],
     mode: null as IntentMode | null,
     inferred: [] as InferredField[],
     pendingClarify: null as EditorState["pendingClarify"],
@@ -355,6 +378,43 @@ function r2(n: number): number {
 /** v1.7.9 — Capture the current timeline as a one-step undo snapshot.
  *  Spread into the `set(...)` of any timeline mutation so the previous
  *  state is always recoverable via undoTimeline(). */
+/** Map store highlights to the decoupled TransitionClip shape the
+ *  transition engine consumes. Motion/saliency aren't tracked per clip in
+ *  the store yet, so they stay undefined → the auto picker degrades to
+ *  source-continuity + transcript/label signals. */
+function toTransitionClips(highlights: Highlight[]): TransitionClip[] {
+  return highlights.map((h) => ({
+    id: h.id,
+    start: h.start,
+    end: h.end,
+    sourceId: h.sourceId,
+    label: h.label
+  }));
+}
+
+/** Build a transition context that reads the LOCAL transcript (when one
+ *  exists for the clip's source) so topic overlap can inform auto picks.
+ *  Fully offline; returns null text when no transcript is cached. */
+function transcriptContext(s: {
+  sources: VideoSource[];
+  transcripts: Record<string, Transcript>;
+}): TransitionContext {
+  const hashById = new Map(s.sources.map((src) => [src.id, src.hash]));
+  return {
+    getTranscriptText: (clip) => {
+      const hash = clip.sourceId ? hashById.get(clip.sourceId) : undefined;
+      const t = hash ? s.transcripts[hash] : undefined;
+      if (!t || t.segments.length === 0) return null;
+      const text = t.segments
+        .filter((seg) => seg.start < clip.end && seg.end > clip.start)
+        .map((seg) => seg.text)
+        .join(" ")
+        .trim();
+      return text || null;
+    }
+  };
+}
+
 function snapshot(s: {
   highlights: Highlight[];
   selectedClipId: string | null;
@@ -716,6 +776,56 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       selectedClipId: s.selectedClipId === id ? null : s.selectedClipId,
       updatedAt: Date.now()
     })),
+
+  // ----- per-boundary transitions (PR 59) --------------------------
+  setBoundaryTransitions: (transitions) =>
+    set({ boundaryTransitions: transitions, updatedAt: Date.now() }),
+
+  updateBoundaryTransition: (index, patch) =>
+    set((s) => {
+      const type = patch.type;
+      const next = s.boundaryTransitions.map((bt) => {
+        if (bt.index !== index) return bt;
+        const merged: BoundaryTransition = {
+          ...bt,
+          ...patch,
+          index,
+          // An explicit edit is a manual override unless caller says auto.
+          mode: patch.mode ?? "manual"
+        };
+        if (type) {
+          const mapped = mapTransition(type);
+          merged.render = mapped.render;
+          merged.exact = mapped.exact;
+          merged.note = mapped.note;
+        }
+        merged.durationSeconds = normalizeTransitionDuration(merged.durationSeconds);
+        return merged;
+      });
+      return { boundaryTransitions: next, updatedAt: Date.now() };
+    }),
+
+  resetAutoTransitions: () => {
+    const s = get();
+    set({
+      boundaryTransitions: buildAutoBoundaryTransitions(
+        toTransitionClips(s.highlights),
+        { context: transcriptContext(s) } // no `existing` → all auto
+      ),
+      updatedAt: Date.now()
+    });
+  },
+
+  recomputeAutoTransitions: () => {
+    const s = get();
+    set({
+      boundaryTransitions: buildAutoBoundaryTransitions(
+        toTransitionClips(s.highlights),
+        { context: transcriptContext(s), existing: s.boundaryTransitions }
+      ),
+      updatedAt: Date.now()
+    });
+  },
 
   selectClip: (id) => set({ selectedClipId: id }),
 

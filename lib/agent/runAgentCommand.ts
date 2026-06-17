@@ -37,6 +37,9 @@ import {
 import { orchestrate, type AgentDecision, type ResolvedOp } from "./orchestrator";
 import { classifyFastCommand, decideFastAction, type FastCommand } from "@/lib/intent/fastCommands";
 import { hydrateAgentMemory, saveAgentMemory } from "@/lib/agent-memory/persistence";
+import { parseTransitionCommand, type TransitionCommand } from "@/lib/intent/transitionCommands";
+import { mapTransition } from "@/lib/transitions/map";
+import { normalizeTransitionDuration, type BoundaryTransition } from "@/lib/transitions/types";
 
 // ---- per-session agent memory --------------------------------------
 const memoryBySession = new Map<string, AgentMemoryStore>();
@@ -143,6 +146,13 @@ export async function tryAgentCommand(
     // outcome === null → intentionally fall through (e.g. affirm/cancel
     // WITH a pending action, which the existing quick-shortcut gate
     // handles end-to-end).
+  }
+
+  // ---- Transition commands (deterministic, before the planner) ------
+  const transitionCmd = parseTransitionCommand(userText);
+  if (transitionCmd) {
+    deps.logSession.ai("agent.transition", { kind: transitionCmd.kind }, `Transition command: ${transitionCmd.kind}`);
+    return handleTransitionCommand(transitionCmd, deps);
   }
 
   const memory = getAgentMemory(deps.sessionId);
@@ -337,6 +347,86 @@ async function handleFastCommand(fast: FastCommand, deps: AgentCommandDeps): Pro
     default:
       return null;
   }
+}
+
+// ---------------------------------------------------------------------
+// Transition commands (PR 59)
+// ---------------------------------------------------------------------
+
+/** Apply a parsed transition command to the store and report what changed
+ *  + why. Offline + deterministic. */
+function handleTransitionCommand(cmd: TransitionCommand, deps: AgentCommandDeps): AgentCommandOutcome {
+  const store = useEditorStore.getState();
+  const clipCount = store.highlights.length;
+
+  if (clipCount < 2) {
+    deps.pushMessage({
+      role: "assistant",
+      content: "Transitions need at least 2 clips on the timeline. Add another clip first.",
+      attachment: { mode: "agent", kind: "transition" }
+    });
+    return { handled: true };
+  }
+
+  if (cmd.kind === "auto_all") {
+    store.resetAutoTransitions();
+  } else if (cmd.kind === "set_all") {
+    const mapped = mapTransition(cmd.type);
+    const next: BoundaryTransition[] = [];
+    for (let i = 1; i < clipCount; i++) {
+      next.push({
+        index: i,
+        type: cmd.type,
+        mode: "manual",
+        durationSeconds: normalizeTransitionDuration(undefined),
+        reason: cmd.styleReason ?? `set to ${mapped.label.toLowerCase()}`,
+        render: mapped.render,
+        exact: mapped.exact,
+        note: mapped.note
+      });
+    }
+    store.setBoundaryTransitions(next);
+  } else if (cmd.kind === "set_between") {
+    // boundary index between clip A (1-based) and clip A+1 is `clipA`.
+    if (store.boundaryTransitions.length === 0) store.recomputeAutoTransitions();
+    const boundaryIndex = cmd.clipA;
+    useEditorStore.getState().updateBoundaryTransition(boundaryIndex, {
+      type: cmd.type,
+      mode: "manual",
+      reason: "set by you"
+    });
+  }
+
+  const summary = summarizeBoundaries(deps, cmd);
+  deps.pushMessage({ role: "assistant", content: summary, attachment: { mode: "agent", kind: "transition" } });
+  return { handled: true };
+}
+
+/** Build a per-boundary chat summary ("1→2 Cut — same source…"). */
+function summarizeBoundaries(deps: AgentCommandDeps, cmd: TransitionCommand): string {
+  void deps;
+  const bts = useEditorStore.getState().boundaryTransitions;
+  if (bts.length === 0) return "No transitions to set yet.";
+
+  const header =
+    cmd.kind === "auto_all"
+      ? `Auto-picked transitions for ${bts.length} boundar${bts.length === 1 ? "y" : "ies"}:`
+      : cmd.kind === "set_all"
+        ? `Set all ${bts.length} transition${bts.length === 1 ? "" : "s"}:`
+        : `Updated the transition:`;
+
+  const lines = [...bts]
+    .sort((a, b) => a.index - b.index)
+    .map((b) => {
+      const label = mapTransition(b.type).label;
+      const clipA = b.index; // boundary i is between clip i and i+1 (1-based)
+      const clipB = b.index + 1;
+      const reason = b.reason ? ` — ${b.reason}` : "";
+      const mapped = !b.exact && b.note ? ` (${b.note})` : "";
+      return `${clipA}→${clipB} ${label}${reason}${mapped}`;
+    });
+
+  return [header, ...lines].join("\n");
 }
 
 interface ApplyResult {

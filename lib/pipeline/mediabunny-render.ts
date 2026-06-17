@@ -1,6 +1,7 @@
 "use client";
 
 import { RENDER } from "@/lib/config";
+import { computeClipFades, type RenderableTransition } from "@/lib/pipeline/renderFilters";
 import type { EditPlan, Highlight, VideoSource } from "@/lib/types";
 
 type RenderFormat = EditPlan["format"];
@@ -12,6 +13,10 @@ interface MediabunnyRenderArgs {
   highlights: Highlight[];
   format: RenderFormat;
   transition: RenderTransition;
+  /** PR 59 — optional per-boundary renderable transitions (length =
+   *  highlights.length; index 0 = lead-in). Overrides the global
+   *  `transition` when present. */
+  boundaryRenders?: RenderableTransition[];
   onProgress?: (p: number) => void;
 }
 
@@ -264,6 +269,13 @@ async function addVideoSamples(args: {
   let outputTime = 0;
   let framesDone = 0;
 
+  // PR 59 — per-clip fade flags (per-boundary when provided, else global).
+  const fades = computeClipFades(args.args.highlights.length, {
+    transition: args.args.transition,
+    boundaryRenders: args.args.boundaryRenders
+  });
+  let clipIndex = 0;
+
   for (const h of args.args.highlights) {
     const sourceId = h.sourceId ?? args.prepared[0].id;
     const source = args.sourceById.get(sourceId);
@@ -272,6 +284,7 @@ async function addVideoSamples(args: {
     const clipDuration = durationOf(h);
     const frameCount = Math.max(1, Math.ceil(clipDuration * RENDER.fps));
     const timestamps = frameTimestamps(h.start, frameCount, frameDuration);
+    const clipFade = fades[clipIndex] ?? { in: false, out: false };
     let i = 0;
 
     for await (const sample of source.videoSink.samplesAtTimestamps(
@@ -287,7 +300,7 @@ async function addVideoSamples(args: {
           sample,
           dim: args.dim,
           format: args.args.format,
-          alpha: clipAlpha(args.args.transition, clipDuration, i * frameDuration)
+          alpha: clipAlpha(clipFade, clipDuration, i * frameDuration)
         });
         sample.close();
       } else {
@@ -303,6 +316,7 @@ async function addVideoSamples(args: {
       i++;
       args.args.onProgress?.(Math.min(0.82, (framesDone / totalFrames) * 0.82));
     }
+    clipIndex++;
   }
 }
 
@@ -436,19 +450,21 @@ function* frameTimestamps(
 }
 
 function clipAlpha(
-  transition: RenderTransition,
+  fade: { in: boolean; out: boolean },
   clipDuration: number,
   localTime: number
 ): number {
-  if (transition !== "fade" && transition !== "crossfade") return 1;
+  if (!fade.in && !fade.out) return 1;
   const fadeDuration = Math.min(
     RENDER.fadeMaxSeconds,
     clipDuration * RENDER.fadeFractionOfClip
   );
   if (fadeDuration <= 0) return 1;
-  if (localTime < fadeDuration) return clamp(localTime / fadeDuration, 0, 1);
-  const remaining = clipDuration - localTime;
-  if (remaining < fadeDuration) return clamp(remaining / fadeDuration, 0, 1);
+  if (fade.in && localTime < fadeDuration) return clamp(localTime / fadeDuration, 0, 1);
+  if (fade.out) {
+    const remaining = clipDuration - localTime;
+    if (remaining < fadeDuration) return clamp(remaining / fadeDuration, 0, 1);
+  }
   return 1;
 }
 
