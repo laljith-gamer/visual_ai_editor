@@ -110,6 +110,54 @@ export const PLAN_DEFAULTS = {
   maxTotalSecondsWithoutBudget: 180
 } as const;
 
+// =====================================================================
+// v1.9.x (issue #62) — Target-coverage guardrails + CPU/offline best-parts.
+//
+// THE BUG: "make a best picks for reels for 40 sec" produced a single 1.0s
+// low-confidence clip and was marked "ready to render". When the user states
+// an explicit duration, the result must reasonably FILL that target; if it
+// can't (especially with weak/low confidence or when the visual verdict is
+// unavailable) the app must say so and ask — never silently ship a 1s short.
+//
+// These are SAFETY GUARDRAILS + CONFIDENCE thresholds, not editorial choices.
+// There is no fixed clip count and no forced default duration here — clip
+// count/length stay emergent from the request, the source, and the candidate
+// spread. All fractions below are of the user's requested duration.
+// =====================================================================
+
+export const TARGET_COVERAGE = {
+  /** At/above this fraction of the requested duration the result is
+   *  considered well-filled and may be marked "ready to render". */
+  minReadyFraction: 0.6,
+  /** Below this fraction the result is a HARD underfill (e.g. a 1s clip for a
+   *  40s ask). Never auto-ready — always ask / offer a broader reel. */
+  hardUnderfillFraction: 0.25,
+  /** When confidence is weak/low AND coverage is below this fraction, ask the
+   *  user before proceeding instead of rendering a weak short. */
+  weakConfidenceAskFraction: 0.5,
+  /** Smallest clip length (seconds) that counts as "useful" output. Single-
+   *  frame / 1s peaks are expanded up to at least this before selection so a
+   *  reel is made of watchable clips, not flashes. */
+  minUsefulClipSeconds: 3
+} as const;
+
+/** CPU/offline best-parts fallback (lib/pipeline/bestParts.ts). Used when the
+ *  visual verdict is unavailable (cloud disabled / WebGPU absent) or matches
+ *  are weak: build a broad, SPREAD reel from local evidence (candidate windows
+ *  + motion/saliency scores) instead of returning one random peak. No heavy
+ *  dependency, no WebGPU, no cloud. */
+export const OFFLINE_BEST_PARTS = {
+  /** Preferred per-clip length (seconds) when expanding a short peak so a reel
+   *  of N clips ≈ target. Always clamped to the plan's maxClipSeconds. */
+  preferredClipSeconds: 8,
+  /** Fill clips until the total reaches this fraction of the target. A little
+   *  overshoot is fine — the existing over-budget nudge handles trimming. */
+  fillToFraction: 1.0,
+  /** Hard cap on fallback clip count (protects ffmpeg.wasm input lists).
+   *  Mirrors PLAN_DEFAULTS.maxClipsWithoutBudget. */
+  maxClips: 12
+} as const;
+
 /** Plan validation bounds. */
 export const PLAN_BOUNDS = {
   targetShortSeconds: { min: 5, max: 600 },

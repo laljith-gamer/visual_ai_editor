@@ -17,6 +17,32 @@
 
 ---
 
+### 2026-06-19 — Issue #62: generic best-parts intent + offline target-coverage fix
+- **Change made:** A 40s "best picks for reels" request no longer collapses to
+  a single 1.0s "ready to render" clip.
+  - **Intent** (`lib/plan/deriveIntent.ts`): generic editing/output words
+    ("best", "picks", "highlights", "make a reel") stop becoming SigLIP search
+    subjects. New `ActionableIntent.genericBestParts` → focus "best moments",
+    scenarioLabels `["visually rich moments"]`, duration preserved. NOT a
+    genre table.
+  - **Offline scoring** (`app/api/agent/route.ts`): generic best-parts uses
+    `SIGNAL_DEFAULTS.visualInterest` (semantic = 0 → SigLIP skipped).
+  - **CPU/offline fallback** (`lib/pipeline/bestParts.ts`, pure): expand short
+    peaks + spread non-overlapping clips toward the target; no fixed clip
+    count. Wired as an underfill guard in `lib/pipeline/highlights.ts`.
+  - **Honest coverage** (`lib/pipeline/coverage.ts`, pure;
+    `app/editor/page.tsx`): underfilled explicit-duration runs show an honest
+    message, set the new `needs_review` status, and never push "Tap Render".
+  - **Config** (`lib/config.ts`): `TARGET_COVERAGE` + `OFFLINE_BEST_PARTS`.
+- **Files affected:** `lib/plan/deriveIntent.ts` (+test), `app/api/agent/
+  route.ts`, `lib/config.ts`, `lib/pipeline/bestParts.ts` (+test),
+  `lib/pipeline/coverage.ts` (+test), `lib/pipeline/highlights.ts`,
+  `app/editor/page.tsx`, `lib/types.ts`, `components/Topbar.tsx`,
+  `components/ProjectRail.tsx`, `package.json`.
+- **Reason:** Production bug #62 — the app silently shipped a 1s short for a
+  40s ask. It must now fill the target from local evidence or honestly say it
+  can't and ask. Validation: typecheck ✓, build ✓, 172 tests ✓.
+
 ### 2026-06-19 — Auto transition picking (issue #57, PR 59 layer)
 - **Change made:** The editor auto-picks the transition between clips from
   generic media signals (offline, deterministic, NO genre tables).

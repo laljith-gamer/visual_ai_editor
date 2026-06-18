@@ -25,6 +25,7 @@ import {
   executeForSource,
   mergeAcrossSources
 } from "@/lib/pipeline/executePerSource";
+import { assessTargetCoverage } from "@/lib/pipeline/coverage";
 import { buildComposeSubPlan } from "@/lib/plan/composeSubPlan";
 import {
   resolveComposeSources,
@@ -419,6 +420,45 @@ export default function Home() {
         const newClipCount = appendToTimeline
           ? merged.highlights.length
           : finalTimeline.length;
+
+        // Issue #62 — target-coverage guard. When the user asked for an
+        // explicit duration but the result falls materially short (a hard
+        // underfill, or a weak-confidence underfill), we must NOT silently
+        // mark it "ready to render" / push "Tap Render". Surface an honest
+        // message and offer the broader fallback instead. Skipped for append
+        // and single-moment runs (they aren't duration-fill requests).
+        if (!appendToTimeline && mode !== "moment") {
+          const coverage = assessTargetCoverage({
+            userSpecifiedDuration: activePlan.userSpecifiedDuration === true,
+            targetSeconds: activePlan.targetShortSeconds,
+            selectedSeconds: total,
+            clipCount: finalTimeline.length,
+            weakOnly: merged.weakOnly,
+            scoreMax: merged.scoreMax
+          });
+          if (coverage.level === "review") {
+            pushMessage({
+              role: "assistant",
+              content: coverage.message ?? ""
+            });
+            setStatus("needs_review", coverage.statusDetail);
+            setProgress(1);
+            logSession.ai(
+              "highlights.underfilled",
+              {
+                target: activePlan.targetShortSeconds,
+                selectedSeconds: round1(total),
+                clips: finalTimeline.length,
+                ratio: round1(coverage.ratio),
+                weakOnly: merged.weakOnly,
+                scoreMax: round1(merged.scoreMax)
+              },
+              `Underfilled: ${round1(total)}s of ${activePlan.targetShortSeconds}s`,
+              Date.now() - t0
+            );
+            return;
+          }
+        }
 
         // Build a friendly summary that mentions the source breakdown
         // when the run was multi-source.

@@ -323,5 +323,6 @@ export function ProjectRail() {
 
 function labelStatus(s: string): string {
   if (s === "idle") return "Idle";
+  if (s === "needs_review") return "Needs review";
   return s.charAt(0).toUpperCase() + s.slice(1);
 }

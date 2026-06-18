@@ -106,3 +106,67 @@ test("multi-source/compose words never become scenario labels (v1.8.1 stopwords)
     }
   }
 });
+
+
+// ---------------------------------------------------------------------
+// Issue #62 — generic best-parts intent. Generic editing/output vocabulary
+// ("best", "picks", "highlights", "make a reel") must NOT become literal
+// search subjects. The duration is preserved.
+// ---------------------------------------------------------------------
+
+test("'make a best picks for reels for 40 sec' → generic best-parts, 40s, no 'best'/'picks' subjects", () => {
+  const i = deriveActionableIntent("make a best picks for reels for 40 sec", {
+    hasVideo: true
+  });
+  assert.equal(i.actionable, true);
+  assert.equal(i.genericBestParts, true);
+  assert.equal(i.targetSeconds, 40);
+  assert.equal(i.userSpecifiedDuration, true);
+  assert.equal(i.focus, "best moments");
+  assert.equal(i.rawFocus, "visual interest");
+  assert.deepEqual(i.scenarioLabels, ["visually rich moments"]);
+  // The bug: "best" and "picks" became separate search subjects.
+  for (const label of i.scenarioLabels) {
+    const words = label.split(/\s+/);
+    assert.ok(!words.includes("best"), `leaked "best" in "${label}"`);
+    assert.ok(!words.includes("picks"), `leaked "picks" in "${label}"`);
+  }
+  // The confirm message must not promise "best and picks moments".
+  const msg = actionableIntentMessage(i, true);
+  assert.ok(!msg.toLowerCase().includes("picks"), msg);
+  assert.ok(!/best and|and picks/i.test(msg), msg);
+});
+
+test("'make a 40 sec reel' → generic best-parts with preserved 40s target", () => {
+  const i = deriveActionableIntent("make a 40 sec reel", { hasVideo: true });
+  assert.equal(i.actionable, true);
+  assert.equal(i.genericBestParts, true);
+  assert.equal(i.targetSeconds, 40);
+  assert.equal(i.userSpecifiedDuration, true);
+  assert.deepEqual(i.scenarioLabels, ["visually rich moments"]);
+});
+
+test("'highlights' / 'best parts' → generic best-parts even without a duration", () => {
+  for (const phrase of ["highlights", "give me the best parts", "top moments"]) {
+    const i = deriveActionableIntent(phrase, { hasVideo: true });
+    assert.equal(i.genericBestParts, true, phrase);
+    assert.equal(i.actionable, true, phrase);
+    assert.deepEqual(i.scenarioLabels, ["visually rich moments"], phrase);
+  }
+});
+
+test("a concrete subject next to 'best' stays subject-driven (NOT generic)", () => {
+  const i = deriveActionableIntent("best cooking moments for 40 sec", {
+    hasVideo: true
+  });
+  assert.equal(i.genericBestParts, false);
+  assert.equal(i.targetSeconds, 40);
+  assert.equal(i.focus, "cooking moments");
+  assert.deepEqual(i.scenarioLabels, ["cooking moments"]);
+});
+
+test("'make a short' (no duration, no best word) stays non-actionable", () => {
+  const i = deriveActionableIntent("make a short", { hasVideo: true });
+  assert.equal(i.actionable, false);
+  assert.equal(i.genericBestParts, false);
+});

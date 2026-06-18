@@ -8,11 +8,12 @@ import type {
 } from "@/lib/types";
 import { newId } from "@/lib/util/id";
 import { clamp } from "@/lib/util/time";
-import { HIGHLIGHT_SCORING, PLAN_DEFAULTS } from "@/lib/config";
+import { HIGHLIGHT_SCORING, PLAN_DEFAULTS, TARGET_COVERAGE, OFFLINE_BEST_PARTS } from "@/lib/config";
 import {
   assessConfidence,
   deriveForceMinHighlights
 } from "@/lib/pipeline/adapt";
+import { buildOfflineBestParts } from "@/lib/pipeline/bestParts";
 
 interface BuildArgs {
   candidates: CandidateWindow[];
@@ -62,6 +63,14 @@ export function buildHighlights(args: BuildArgs): BuildResult {
 
   const consideredCount = scored.length;
   if (scored.length === 0) {
+    // Issue #62 — even when no window survived the minClip filter, an explicit
+    // duration request should try the offline best-parts fallback (which
+    // expands short candidate windows) before collapsing to a single forced
+    // 1s clip. This is the exact path that produced the reported bug.
+    if (args.plan.userSpecifiedDuration) {
+      const fb = tryOfflineBestParts(args, consideredCount, 0);
+      if (fb) return fb;
+    }
     return forceMinFallback(args, []);
   }
 
@@ -183,6 +192,23 @@ export function buildHighlights(args: BuildArgs): BuildResult {
 
   selected.sort((a, b) => a.candidate.start - b.candidate.start);
 
+  // Issue #62 — offline best-parts underfill guard. When the user stated a
+  // duration but the strong-match selection is materially short of it (or
+  // empty), broaden using the CPU/offline fallback: expand short windows and
+  // spread picks across the source to approach the target. This is what stops
+  // a 40s request collapsing to a single 1s peak when the visual verdict is
+  // unavailable (cloud disabled / WebGPU absent). We only REPLACE the
+  // selection when the fallback genuinely covers more.
+  if (args.plan.userSpecifiedDuration) {
+    const target = args.plan.targetShortSeconds;
+    const selectedSeconds = selected.reduce((acc, s) => acc + s.duration, 0);
+    const minReady = target * TARGET_COVERAGE.minReadyFraction;
+    if (target > 0 && (selected.length === 0 || selectedSeconds < minReady)) {
+      const fb = tryOfflineBestParts(args, consideredCount, selectedSeconds);
+      if (fb) return fb;
+    }
+  }
+
   if (selected.length === 0) {
     return forceMinFallback(args, scored);
   }
@@ -262,6 +288,46 @@ function forceMinFallback(
     })),
     weakOnly: true,
     consideredCount: pool.length
+  };
+}
+
+function tryOfflineBestParts(
+  args: BuildArgs,
+  consideredCount: number,
+  currentSelectedSeconds: number
+): BuildResult | null {
+  const target = args.plan.targetShortSeconds;
+  if (!(target > 0)) return null;
+  const fb = buildOfflineBestParts({
+    candidates: args.candidates.map((c) => ({
+      start: c.start,
+      end: c.end,
+      score: c.meanScore
+    })),
+    sourceDuration: args.videoDuration,
+    targetSeconds: target,
+    minUsefulSeconds: Math.max(
+      TARGET_COVERAGE.minUsefulClipSeconds,
+      args.plan.minClipSeconds
+    ),
+    maxClipSeconds: args.plan.maxClipSeconds,
+    maxClips: OFFLINE_BEST_PARTS.maxClips
+  });
+  const fbSeconds = fb.reduce((acc, h) => acc + (h.end - h.start), 0);
+  if (fb.length === 0 || fbSeconds <= currentSelectedSeconds) return null;
+  return {
+    highlights: fb.map((h, i): Highlight => ({
+      id: newId("clip"),
+      start: round2(h.start),
+      end: round2(h.end),
+      score: round2(h.score),
+      reason:
+        "Broad pick from local motion/visual-interest signals (visual AI unavailable)",
+      transition: i === 0 ? "none" : args.plan.transition,
+      confidence: assessConfidence(h.score)
+    })),
+    weakOnly: true,
+    consideredCount
   };
 }
 

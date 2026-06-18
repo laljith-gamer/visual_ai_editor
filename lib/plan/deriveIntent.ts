@@ -45,6 +45,13 @@ export interface ActionableIntent {
   userSpecifiedDuration: boolean;
   /** True when the user limited scope ("only" / "alone" / "just"). */
   exclusiveOnly: boolean;
+  /** True when the request is a GENERIC "best parts / highlights / make a
+   *  reel" ask with no concrete subject left after removing editing/output
+   *  vocabulary. The pipeline should score for broad VISUAL INTEREST
+   *  (motion + saliency), NOT run SigLIP against meaningless words like
+   *  "best" or "picks". See issue #62. This is NOT a genre table — it is
+   *  generic editing/output vocabulary cleanup only. */
+  genericBestParts: boolean;
   /** Generic, honest exclusion constraints derived from exclusivity. */
   negativeConstraints: string[];
   /** Output framing. Defaults to "vertical" (this is a shorts app). */
@@ -111,6 +118,31 @@ const STOPWORDS = new Set([
   "upload", "uploads", "uploaded", "transition", "transitions", "merge",
   "combine", "mix", "shuffle", "montage", "another"
 ]);
+
+// Generic editing / output-quality vocabulary. These words survive the
+// STOPWORDS pass (they aren't pronouns/verbs/articles) but they are NOT
+// content SUBJECTS — they describe "give me the good bits", not a topic. If
+// the ONLY tokens left after stopword removal are these, the request is a
+// generic best-parts / highlights ask and must score for broad visual
+// interest, not literal SigLIP search for "best"/"picks". (Issue #62.)
+//
+// This is deliberately a small, domain-AGNOSTIC list of editorial-quality
+// words — NOT a genre/subject keyword table. Do not add topics here.
+const GENERIC_EDIT_VOCAB = new Set([
+  "best", "bests", "top", "key", "greatest", "finest", "favourite",
+  "favorite", "favourites", "favorites", "picks", "pic", "pics",
+  "highlight", "highlights", "standout", "standouts", "memorable",
+  "interesting", "exciting", "epic", "cool", "awesome", "good", "great",
+  "nice", "fun", "montage", "compilation", "compile", "recap", "summary",
+  "overview", "wrapup", "wrap", "bestof"
+]);
+
+// Output / format words that signal a short-form reel is wanted. These are
+// already stripped as STOPWORDS from the subject tokens, so we detect them
+// from the raw text instead. Used only to decide that a duration-bearing
+// request like "make a 40 sec reel" is a generic best-parts ask.
+const REEL_OUTPUT_RE =
+  /\b(reels?|shorts?|montages?|compilations?|recaps?|highlights?|tiktoks?|story|stories)\b/;
 
 /** Parse a duration in seconds from free text. Returns null when none stated. */
 function parseDuration(text: string): number | null {
@@ -202,44 +234,72 @@ export function deriveActionableIntent(
     coreTokens.push(w);
   }
 
-  const rawFocus = coreTokens.length > 0 ? coreTokens.join(" ").slice(0, 80) : null;
+  // Issue #62 — generic best-parts detection. Separate genuine SUBJECT tokens
+  // from generic editing/output vocabulary. If nothing concrete remains, the
+  // request is a generic "best parts / highlights / make a reel" ask: it must
+  // NOT turn "best"/"picks" into literal SigLIP search subjects.
+  const subjectTokens = coreTokens.filter((w) => !GENERIC_EDIT_VOCAB.has(w));
+  const hasGenericEditWord = coreTokens.some((w) => GENERIC_EDIT_VOCAB.has(w));
+  const wantsReelOutput = REEL_OUTPUT_RE.test(lower);
+  const genericBestParts =
+    subjectTokens.length === 0 &&
+    (hasGenericEditWord || (targetSeconds !== null && wantsReelOutput));
 
   // Build clean, display-ready scenario labels + a focus phrase. We NEVER
   // surface the user's raw text here.
   let focus: string | null = null;
   const scenarioLabels: string[] = [];
-  if (coreTokens.length > 0) {
+
+  if (genericBestParts) {
+    // Generic visual-interest output. The pipeline scores motion + saliency
+    // (semantic = 0); the scenario label is for DISPLAY only. No subject words.
+    focus = "best moments";
+    scenarioLabels.push("visually rich moments");
+  } else if (subjectTokens.length > 0) {
     if (exclusiveOnly) {
-      const joined = coreTokens.join(" ");
+      const joined = subjectTokens.join(" ");
       focus = `${joined}-only moments`;
       scenarioLabels.push(`${joined}-only moments`);
-    } else if (coreTokens.length === 1) {
-      focus = `${coreTokens[0]} moments`;
-      scenarioLabels.push(`${coreTokens[0]} moments`);
+    } else if (subjectTokens.length === 1) {
+      focus = `${subjectTokens[0]} moments`;
+      scenarioLabels.push(`${subjectTokens[0]} moments`);
     } else {
-      focus = `${coreTokens.join(" and ")} moments`;
-      for (const t of coreTokens) scenarioLabels.push(`${t} moments`);
+      focus = `${subjectTokens.join(" and ")} moments`;
+      for (const t of subjectTokens) scenarioLabels.push(`${t} moments`);
     }
   }
 
+  // For a generic best-parts ask the display "raw focus" is the editing
+  // intent, not a search subject. For a concrete subject it is the cleaned
+  // subject tokens (used as semantic grounding downstream).
+  const effectiveRawFocus = genericBestParts
+    ? "visual interest"
+    : subjectTokens.length > 0
+      ? subjectTokens.join(" ").slice(0, 80)
+      : null;
+
   const negativeConstraints: string[] = [];
-  if (exclusiveOnly && rawFocus) {
-    negativeConstraints.push(`keep only the ${rawFocus} segments`);
+  if (exclusiveOnly && effectiveRawFocus && !genericBestParts) {
+    negativeConstraints.push(`keep only the ${effectiveRawFocus} segments`);
     negativeConstraints.push("exclude unrelated scenes");
   }
 
-  // Actionable when we have a content focus, OR a stated duration paired with
-  // an explicit "only/alone" scope (enough to build a visual-interest cut).
-  const actionable = Boolean(rawFocus) || (targetSeconds !== null && exclusiveOnly);
+  // Actionable when we have a concrete subject, a generic best-parts ask, OR a
+  // stated duration paired with an explicit "only/alone" scope.
+  const actionable =
+    genericBestParts ||
+    Boolean(effectiveRawFocus) ||
+    (targetSeconds !== null && exclusiveOnly);
 
   return {
     actionable,
     focus,
-    rawFocus,
+    rawFocus: effectiveRawFocus,
     scenarioLabels,
     targetSeconds,
     userSpecifiedDuration: targetSeconds !== null,
     exclusiveOnly,
+    genericBestParts,
     negativeConstraints,
     format,
     needsAnalysis: actionable
