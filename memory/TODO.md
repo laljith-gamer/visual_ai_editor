@@ -8,6 +8,21 @@
 
 ## High priority
 
+- [ ] **Manual browser test — issue #62 best-picks / target-coverage (after
+      deploy).** Upload a long video, ask `make a best picks for reels for
+      40 sec`: chat must NOT say "best and picks moments"; target = 40s;
+      output is NOT a single 1s clip; if confidence is low the UI explains it
+      and status shows "needs review" (not "ready to render") when badly
+      underfilled; render is not pushed as ready; transitions only with 2+
+      clips; no cloud/WebGPU needed for the CPU fallback. See
+      `ISSUE62_BEST_PICKS_TARGET_FIX_2026-06-19.md`. (No GPU/decode in
+      sandbox — not run here.)
+- [ ] **Follow-up — events.ts window sizing (issue #62).** Single-frame
+      candidate windows are sized by `plan.sampleEverySeconds` (1.0s) even
+      when adaptive sampling spaces frames ~5s apart. The offline expansion
+      masks this for explicit-duration asks; the underlying window sizing was
+      left unchanged (out of scope). Consider sizing windows by the actual
+      adaptive step.
 - [ ] **Transitions — true crossfade + real effects (next PR).** Auto
       picking + per-boundary render landed (PR 59). Still TODO: render a
       TRUE overlap crossfade via ffmpeg `xfade` + mediabunny cross-dissolve

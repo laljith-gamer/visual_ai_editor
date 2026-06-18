@@ -4,13 +4,47 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-19 (auto transition picking — offline, evidence-based
-> selector + per-boundary model/store/UI/chat + per-boundary render wiring;
-> on branch feat/auto-transitions, not yet merged)
+> Last updated: 2026-06-19 (issue #62 — generic best-parts intent + offline
+> best-parts fallback + honest target-coverage status; on a feature branch,
+> not yet merged)
 
 ---
 
-## 0. Latest change (2026-06-19) — auto transition picking (issue #57 PR 59 layer)
+## 0. Latest change (2026-06-19) — issue #62 best-picks / target-coverage fix
+
+A 40s "best picks for reels" request used to produce a single 1.0s
+low-confidence clip marked "ready to render". Fixed end-to-end on the
+default deterministic/offline path (cloud AI is OFF by default):
+
+- **Generic best-parts intent** (`lib/plan/deriveIntent.ts`): generic editing
+  words ("best", "picks", "highlights", "make a reel") no longer become SigLIP
+  search subjects. New `ActionableIntent.genericBestParts` → focus
+  "best moments", scenarioLabels `["visually rich moments"]`, duration
+  preserved. Concrete subjects ("best cooking moments") stay subject-driven;
+  "make a short" (no duration) stays non-actionable. NOT a genre table — just
+  output-vocabulary cleanup.
+- **Offline scoring** (`app/api/agent/route.ts`): generic best-parts uses
+  `SIGNAL_DEFAULTS.visualInterest` (semantic = 0 → SigLIP skipped; motion +
+  saliency). No WebGPU/cloud.
+- **CPU/offline fallback** (`lib/pipeline/bestParts.ts`, pure + tested):
+  `expandClipRange` + `buildOfflineBestParts` expand short/1s peaks to a useful
+  length and spread non-overlapping clips across the source toward the target.
+  No fixed clip count. Wired into `lib/pipeline/highlights.ts` as an underfill
+  guard for explicit-duration runs.
+- **Honest coverage** (`lib/pipeline/coverage.ts`, pure + tested):
+  `assessTargetCoverage` flags hard/weak underfill; the editor
+  (`app/editor/page.tsx`) then shows an honest "I only found Xs of Ys …"
+  message, sets the new `needs_review` status (Topbar/ProjectRail labelled),
+  and does NOT say "Tap Render". No-duration runs keep the quality-floor path.
+- **Config** (`lib/config.ts`): `TARGET_COVERAGE` + `OFFLINE_BEST_PARTS`
+  (all thresholds centralized + commented).
+- **Validation:** typecheck ✓, build ✓, tests ✓ (172, incl. new bestParts /
+  coverage / deriveIntent cases). Browser run not done (no GPU in sandbox).
+- See `ISSUE62_BEST_PICKS_TARGET_FIX_2026-06-19.md` for the full writeup.
+
+---
+
+## 0b. Previous change (2026-06-19) — auto transition picking (issue #57 PR 59 layer)
 
 The editor now AUTO-PICKS the transition between clips from generic media
 signals — offline, deterministic, no WebGPU/cloud, NO genre keyword tables.

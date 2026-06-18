@@ -378,6 +378,7 @@ function round1(n: number): string {
 function statusToClass(s: string): string {
   if (s === "completed" || s === "ready") return "accent";
   if (s === "failed") return "warn";
+  if (s === "needs_review") return "warn";
   if (s === "idle") return "";
   return "info";
 }
@@ -391,6 +392,7 @@ function labelStatus(s: string): string {
       temporal: "judging windows",
       selecting: "picking clips",
       ready: "ready to render",
+      needs_review: "needs review",
       rendering: "rendering",
       completed: "done",
       failed: "failed"

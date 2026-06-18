@@ -1686,10 +1686,19 @@ function synthesizeVaguePlan(args: {
   // Bug 2: semantic-heavy signals for a concrete topic (a named subject
   // should lean on SigLIP, not motion/saliency). The visual-interest
   // fallback (no usable text) stays motion+saliency only.
-  const signals = useSemantic
-    ? { semantic: 0.65, motion: 0.2, saliency: 0.15 }
-    : { semantic: 0, motion: 0.6, saliency: 0.4 };
-  void SIGNAL_DEFAULTS; // imported for future use; reserved.
+  //
+  // Issue #62 — a GENERIC best-parts ask ("best picks", "make a 40s reel")
+  // has no concrete subject. Scoring SigLIP against a placeholder label like
+  // "visually rich moments" is meaningless and was producing weak 0.3x
+  // matches. Force pure visual-interest scoring (semantic = 0 → SigLIP is
+  // skipped entirely; motion + saliency drive selection). This is the
+  // CPU/offline-friendly path: no WebGPU, no cloud required.
+  const genericBestParts = args.intent?.genericBestParts === true;
+  const signals = genericBestParts
+    ? { ...SIGNAL_DEFAULTS.visualInterest }
+    : useSemantic
+      ? { semantic: 0.65, motion: 0.2, saliency: 0.15 }
+      : { semantic: 0, motion: 0.6, saliency: 0.4 };
   const target =
     args.intent?.targetSeconds ??
     args.memory?.duration ??

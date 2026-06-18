@@ -242,6 +242,7 @@ export type JobStatus =
   | "temporal"
   | "selecting"
   | "ready"
+  | "needs_review"
   | "rendering"
   | "completed"
   | "failed";
