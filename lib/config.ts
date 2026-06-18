@@ -158,6 +158,27 @@ export const OFFLINE_BEST_PARTS = {
   maxClips: 12
 } as const;
 
+// =====================================================================
+// v1.9.x (issue #64) — Professional video-prompt interpreter guardrails.
+//
+// The prompt interpreter (lib/intent/videoPromptInterpreter.ts) parses
+// messy real-user editing prompts into structured slots (duration, clip
+// count, format, platform, source scope, topic) BEFORE the specialized
+// detectors run. These are PARSE BOUNDS only — they never inject editorial
+// behaviour (no fixed clip count, no forced duration, no genre table).
+// =====================================================================
+export const VIDEO_PROMPT = {
+  /** Accepted parsed-duration window (seconds). Mirrors
+   *  PLAN_BOUNDS.targetShortSeconds; values outside are clamped, not invented. */
+  durationSeconds: { min: 2, max: 600 },
+  /** Accepted parsed clip-count window. A user asking for "at least 5 clips"
+   *  is clamped here; we never default a count when the user didn't state one. */
+  clipCount: { min: 1, max: 40 },
+  /** Max sources an all-source compose will fan out across (protects the
+   *  per-source vision passes + ffmpeg input list on huge libraries). */
+  maxComposeSources: 8
+} as const;
+
 /** Plan validation bounds. */
 export const PLAN_BOUNDS = {
   targetShortSeconds: { min: 5, max: 600 },

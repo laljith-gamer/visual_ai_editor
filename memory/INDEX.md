@@ -2,9 +2,9 @@
 
 > **Read this first.** This folder is the handoff brain for the repo. A fresh AI/helper session should read this file before making changes, then follow the reading order below.
 >
-> Last organized: **2026-06-19** — issue #62 best-picks / target-coverage fix
-> note indexed (generic best-parts intent, offline best-parts fallback,
-> honest underfill status).
+> Last organized: **2026-06-19** — issue #64 professional video-prompt
+> interpreter note indexed (normalize + slot parsers + meaning guard,
+> all-source compose). Issue #62 best-picks fix also indexed.
 
 ---
 
@@ -87,6 +87,7 @@ These files are snapshots. They explain how the project reached the current stat
 | `PR58_TRANSITION_FOUNDATION_2026-06-19.md` | Issue #57 PR 58: per-boundary transition model + honest mapping (`lib/transitions/{types,map}`, `TRANSITIONS` config). Foundation only — render/UI/chat wiring is a follow-up. |
 | `PR59_AUTO_TRANSITIONS_2026-06-19.md` | Auto transition picking: offline evidence-based selector (`lib/transitions/{features,auto,timeline}`), store/UI (`TransitionsBar`)/chat (`transitionCommands`) wiring, and per-boundary render (`lib/pipeline/renderFilters` + worker/mediabunny). Honest mapping kept; true xfade deferred. |
 | `ISSUE62_BEST_PICKS_TARGET_FIX_2026-06-19.md` | Issue #62 fix: generic best-parts intent (`lib/plan/deriveIntent`, no genre table), offline visual-interest scoring, CPU/offline best-parts fallback (`lib/pipeline/bestParts`), honest target-coverage status + `needs_review` (`lib/pipeline/coverage`, `app/editor/page.tsx`), config guardrails (`TARGET_COVERAGE`, `OFFLINE_BEST_PARTS`). |
+| `ISSUE64_PROFESSIONAL_VIDEO_PROMPT_INTERPRETER_2026-06-19.md` | Issue #64 fix: professional prompt interpreter (`lib/intent/videoPromptInterpreter` — normalize + parseDuration/ClipCount/Format/Platform/SourceScope + META_VOCAB + meaningful-topic guard + exclusions). composeIntent refactor (no fake topics) + all-source compose (`MultiSourceComposePlan.sourceScope/format/minClipCount/genericBestParts/allSourcesTopic`) + editor fan-out execution. `VIDEO_PROMPT` config. |
 
 ### Training / future model direction
 

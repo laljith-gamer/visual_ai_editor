@@ -153,7 +153,15 @@ export function normalizeComposePlan(
     const sel = normalizeSelection(s);
     if (sel) sources.push(sel);
   }
-  if (sources.length === 0) return null;
+
+  // v1.9.x (issue #64) — all-source compose may legitimately carry NO
+  // enumerated sources (the client fans out across the live library). Only
+  // reject when there's nothing to compose AND it isn't an all-source plan.
+  const sourceScope =
+    r.sourceScope === "all" || r.sourceScope === "explicit"
+      ? (r.sourceScope as "all" | "explicit")
+      : undefined;
+  if (sources.length === 0 && sourceScope !== "all") return null;
 
   const orderingRaw = obj(r.ordering);
   const ordering: ComposeOrdering = {
@@ -182,6 +190,22 @@ export function normalizeComposePlan(
     transition,
     needsAnalysis: r.needsAnalysis === false ? false : true
   };
+
+  // v1.9.x (issue #64) — optional all-source / output slots.
+  if (sourceScope) plan.sourceScope = sourceScope;
+  const format = oneOf<"vertical" | "horizontal" | "square">(r.format, [
+    "vertical",
+    "horizontal",
+    "square"
+  ]);
+  if (format) plan.format = format;
+  const minClipCount = num(r.minClipCount);
+  if (minClipCount !== undefined && minClipCount >= 1) {
+    plan.minClipCount = Math.trunc(clamp(minClipCount, 1, 40));
+  }
+  if (r.genericBestParts === true) plan.genericBestParts = true;
+  const allSourcesTopic = str(r.allSourcesTopic, 200);
+  if (allSourcesTopic) plan.allSourcesTopic = allSourcesTopic;
 
   const targetSeconds = num(r.targetSeconds);
   if (targetSeconds !== undefined && targetSeconds > 0) {

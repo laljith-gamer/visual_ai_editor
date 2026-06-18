@@ -5,21 +5,27 @@
 // NET that runs with PRIORITY over the generic single-source
 // `deriveActionableIntent` fallback.
 //
-// Why this exists: the cloud planner kept mis-routing clear multi-source
-// montage requests ("pick combat in the first video and the cutscene in
-// the second and make it transition") into single-source plans, and the
-// generic fallback then built junk scenarios from words like "pick" /
-// "first" / "transition". This module reads the user's text and, when it
-// confidently sees picks from MORE THAN ONE source (or an explicit
-// cross-source ordering directive), returns a ready MultiSourceComposePlan
-// so the route can answer with mode "compose" before any generic fallback.
+// It now sits on top of the professional prompt interpreter
+// (lib/intent/videoPromptInterpreter.ts), which normalizes messy text and
+// extracts structured slots (duration, clip count, format, source scope,
+// MEANINGFUL topic). This is what fixes issue #64: meta/output words like
+// "atleast sect all" / "min vertical" can no longer become source topics.
 //
-// Precision over recall: it only fires on clear multi-source patterns and
-// returns null otherwise, so normal single-source / merge / edit prompts
-// are untouched.
+// Two compose shapes are produced:
+//   1. PER-SOURCE semantic compose — "combat in the first video and the
+//      cutscene in the second" → distinct queries per source (unchanged).
+//   2. ALL-SOURCES compose — "select at least 5 clips from all videos and
+//      make a combined 5 min vertical video" → a generic (or single-topic)
+//      compose fanned across EVERY upload, carrying duration / format /
+//      min-clip-count, never inventing per-source topics.
 //
-// Dependency-free at runtime (only `import type`, stripped by the Node test
-// runner) so it can be unit-tested with `--experimental-strip-types`.
+// Precision over recall: returns null when the prompt isn't clearly a
+// multi-source request, so normal single-source / merge / edit prompts are
+// untouched.
+//
+// Dependency-light: `import type` from @/lib/types (stripped by the Node
+// test runner) + value helpers from the interpreter (relative path, resolved
+// by the test runner's ts-ext hook). Unit-testable with `node --test`.
 // =====================================================================
 
 import type {
@@ -29,14 +35,22 @@ import type {
   ComposeTransitionType,
   MultiSourceComposePlan
 } from "@/lib/types";
+import {
+  normalizeVideoPromptText,
+  parseDuration,
+  parseFormat,
+  parseClipCount,
+  parseSourceScope,
+  extractMeaningfulTopic,
+  splitExclusions
+} from "../intent/videoPromptInterpreter";
 
 export interface ComposeIntentResult {
   plan: MultiSourceComposePlan;
   message: string;
-  /** "high" → clear multi-source (≥2 source refs with topics, or an
-   *  anchor-first shuffle). The route uses this to OVERRIDE the cloud
-   *  planner. "low" → a softer signal (e.g. "mix combat and cutscene")
-   *  used only in fallback sites (planner failed / clarify / unusable). */
+  /** "high" → clear multi-source (≥2 source refs with topics, an all-sources
+   *  compose, or an anchor-first shuffle). "low" → a softer signal used only
+   *  in fallback sites (planner failed / clarify / unusable). */
   confidence: "high" | "low";
 }
 
@@ -48,33 +62,6 @@ const ORDINAL_NAMES = ["first", "second", "third", "fourth", "fifth"];
 const NUMBER_WORDS: Record<string, number> = {
   one: 1, two: 2, three: 3, four: 4, five: 5
 };
-
-// Words removed when extracting the CONTENT topic from a clause. Generic
-// commands / fillers / source nouns / ordering+transition words — never a
-// subject. (Keeps "combat", "cutscene", "jokes", "story", "ingredient", …;
-// drops "pick", "first", "video", "transition", "mix", …)
-const TOPIC_STOP = new Set([
-  "pick", "picking", "picked", "take", "taking", "use", "using", "used",
-  "get", "getting", "grab", "grabbing", "show", "showing", "want", "need",
-  "make", "making", "add", "adding", "put", "putting", "include", "including",
-  "give", "giving", "do",
-  "the", "a", "an", "this", "that", "these", "those", "it", "its", "my",
-  "your", "our", "his", "her", "their",
-  "of", "for", "from", "to", "with", "into", "or", "then", "after", "before",
-  "also", "just", "only", "should", "start", "starts", "starting", "rest",
-  "lead", "leads", "leading", "and", "in", "on", "at", "as", "by",
-  "video", "videos", "upload", "uploads", "uploaded", "clip", "clips", "vid",
-  "footage", "source", "sources", "file", "files", "another", "other",
-  "mix", "mixing", "combine", "combining", "combined", "montage",
-  "interleave", "interleaved", "alternate", "alternating", "shuffle",
-  "shuffled", "shuffling", "order", "ordering", "arrange",
-  "transition", "transitions", "fade", "fades", "crossfade", "glitch",
-  "whip", "zoom", "cut", "cuts", "cinematic", "dynamic", "effect", "effects",
-  "smooth", "hard", "fast", "slow",
-  "scene", "scenes", "part", "parts", "moment", "moments", "bit", "bits",
-  "section", "sections", "segment", "segments", "thing", "things", "stuff",
-  "reel", "reels", "short", "shorts", "please", "pls"
-]);
 
 function parseNum(token: string): number | null {
   if (/^\d+$/.test(token)) {
@@ -116,27 +103,6 @@ export function findSourceIndex(clause: string): number | null {
   return null;
 }
 
-/** Extract the content topic tokens from a clause (stop/ordinal/number
- *  words removed). e.g. "pick combat in the first video" → ["combat"]. */
-function extractTopicTokens(clause: string): string[] {
-  const cleaned = clause
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\b\d+\b/g, " ");
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const w of cleaned.split(/\s+/)) {
-    const t = w.trim();
-    if (t.length < 2) continue;
-    if (TOPIC_STOP.has(t)) continue;
-    if (t in ORDINALS || t in NUMBER_WORDS) continue;
-    if (seen.has(t)) continue;
-    seen.add(t);
-    out.push(t);
-  }
-  return out.slice(0, 4);
-}
-
 /** Detect a transition request from the whole text. Defaults to "auto"
  *  (montages want a transition; the client resolves it per boundary). */
 function detectTransition(lower: string): ComposeTransition {
@@ -164,12 +130,45 @@ function joinList(items: string[]): string {
   return items.join(", ");
 }
 
+/** Human duration label, e.g. 300 → "5-minute", 30 → "30-second". */
+function durationLabel(seconds: number): string {
+  if (seconds % 60 === 0) {
+    const m = seconds / 60;
+    return `${m}-minute`;
+  }
+  if (seconds < 60) return `${seconds}-second`;
+  const m = Math.round((seconds / 60) * 10) / 10;
+  return `${m}-minute`;
+}
+
+interface OutputExtras {
+  targetSeconds?: number;
+  format?: "vertical" | "horizontal" | "square";
+  minClipCount?: number;
+  avoid?: string[];
+}
+
+function applyExtras(
+  plan: MultiSourceComposePlan,
+  extras: OutputExtras
+): MultiSourceComposePlan {
+  const out = { ...plan };
+  if (extras.targetSeconds !== undefined) {
+    out.targetSeconds = extras.targetSeconds;
+    out.userSpecifiedDuration = true;
+  }
+  if (extras.format) out.format = extras.format;
+  if (extras.minClipCount !== undefined) out.minClipCount = extras.minClipCount;
+  return out;
+}
+
 function buildResult(
   sources: ComposeSourceSelection[],
   ordering: ComposeOrdering,
   transition: ComposeTransition,
   confidence: "high" | "low",
-  picks: Array<{ index: number; baseTopic: string }>
+  picks: Array<{ index: number; baseTopic: string }>,
+  extras: OutputExtras = {}
 ): ComposeIntentResult {
   const name = "AI Combined 1";
 
@@ -182,12 +181,17 @@ function buildResult(
     };
   }
 
+  const fmtSuffix = extras.format ? ` (${extras.format})` : "";
+  const durPrefix = extras.targetSeconds
+    ? `a ${durationLabel(extras.targetSeconds)} `
+    : "";
+
   let message: string;
   if (picks.length >= 2) {
     const parts = picks.map(
       (p) => `${p.baseTopic} from the ${ORDINAL_NAMES[p.index] ?? `#${p.index + 1}`} video`
     );
-    message = `Got it \u2014 I\u2019ll build ${name} with ${joinList(parts)}`;
+    message = `Got it \u2014 I\u2019ll build ${durPrefix}${name}${fmtSuffix} with ${joinList(parts)}`;
     message +=
       transition.type === "cut"
         ? ", with hard cuts."
@@ -204,17 +208,71 @@ function buildResult(
     message = `Got it \u2014 I\u2019ll build ${name} by ${verb} your videos.`;
   }
 
-  return {
-    plan: {
+  const plan = applyExtras(
+    {
       outputTarget: { type: "new_timeline_slot", name },
       sources,
       ordering,
       transition,
+      sourceScope: "explicit",
       needsAnalysis: true
     },
-    message,
-    confidence
+    extras
+  );
+
+  return { plan, message, confidence };
+}
+
+/**
+ * Build an ALL-SOURCES compose result. No per-source topics are invented;
+ * the client fans the request out across every eligible upload using either
+ * a single shared topic or broad visual-interest selection.
+ */
+function buildAllSourceResult(args: {
+  sharedTopic: string | null;
+  targetSeconds: number | null;
+  format: "vertical" | "horizontal" | "square" | null;
+  minClipCount?: number;
+  transition: ComposeTransition;
+  ordering: ComposeOrdering["type"];
+  avoid: string[];
+}): ComposeIntentResult {
+  const name = "AI Combined 1";
+  const genericBestParts = !args.sharedTopic;
+
+  const plan: MultiSourceComposePlan = {
+    outputTarget: { type: "new_timeline_slot", name },
+    sources: [], // client expands to all eligible uploads at run time
+    ordering: { type: args.ordering },
+    transition: args.transition,
+    sourceScope: "all",
+    genericBestParts,
+    needsAnalysis: true,
+    ...(args.sharedTopic ? { allSourcesTopic: args.sharedTopic } : {}),
+    ...(args.targetSeconds
+      ? { targetSeconds: args.targetSeconds, userSpecifiedDuration: true }
+      : {}),
+    ...(args.format ? { format: args.format } : {}),
+    ...(args.minClipCount ? { minClipCount: args.minClipCount } : {})
   };
+
+  // Clean, professional confirmation built ONLY from real slots.
+  const durPart = args.targetSeconds ? `${durationLabel(args.targetSeconds)} ` : "";
+  const fmtPart = args.format ? `${args.format} ` : "";
+  let message = `Got it \u2014 I\u2019ll build a ${durPart}${fmtPart}combined video from all uploaded videos`;
+  if (args.sharedTopic) message += `, focusing on ${args.sharedTopic}`;
+  if (args.minClipCount) {
+    message += `, using at least ${args.minClipCount} ${genericBestParts ? "best-moment " : ""}clips`;
+  } else if (genericBestParts) {
+    message += `, using the best moments from each`;
+  }
+  if (args.avoid.length > 0) message += `, avoiding ${joinList(args.avoid)}`;
+  message +=
+    args.transition.type === "cut"
+      ? ", with hard cuts."
+      : ", with automatic transitions.";
+
+  return { plan, message, confidence: "high" };
 }
 
 /**
@@ -225,9 +283,18 @@ function buildResult(
 export function deriveComposeIntent(
   userText: string
 ): ComposeIntentResult | null {
-  const text = (userText || "").trim();
-  if (!text) return null;
-  const lower = text.toLowerCase();
+  const raw = (userText || "").trim();
+  if (!raw) return null;
+
+  // Normalize messy text once (spelling/spacing only) and extract slots.
+  const { normalized: lower } = normalizeVideoPromptText(raw);
+
+  const targetSeconds = parseDuration(lower);
+  const format = parseFormat(lower);
+  const clipCounts = parseClipCount(lower);
+  const scope = parseSourceScope(lower);
+  const minClipCount = clipCounts.minClipCount ?? clipCounts.targetClipCount;
+  const { keep: topicText, exclusions } = splitExclusions(lower);
 
   const hasShuffle = /\bshuffl/.test(lower);
   const hasMix = /\b(mix|mixing|alternat|interleav)/.test(lower);
@@ -238,20 +305,20 @@ export function deriveComposeIntent(
   const anchorFirst =
     hasShuffle && /\bfirst\b/.test(lower) && /(then|after|rest)/.test(lower);
 
-  // Parse clauses ("X in the first video" AND "Y in the second" AND …).
-  const clauses = lower.split(/\band\b/);
+  // Parse clauses ("X in the first video" AND "Y in the second" AND …). Topic
+  // tokens come from the interpreter, so meta/output words never leak in.
+  const clauses = topicText.split(/\band\b/);
   const picks: Array<{ index: number; baseTopic: string; query: string }> = [];
   const looseTopics: string[] = [];
   let sawSourceRef = false;
   for (const clause of clauses) {
     const idx = findSourceIndex(clause);
     if (idx !== null) sawSourceRef = true;
-    const tokens = extractTopicTokens(clause);
-    const base = tokens.join(" ");
-    if (idx !== null && base) {
-      picks.push({ index: idx, baseTopic: base, query: `${base} moments` });
-    } else if (base) {
-      looseTopics.push(base);
+    const topic = extractMeaningfulTopic(clause);
+    if (idx !== null && topic) {
+      picks.push({ index: idx, baseTopic: topic, query: `${topic} moments` });
+    } else if (topic) {
+      looseTopics.push(topic);
     }
   }
 
@@ -261,6 +328,12 @@ export function deriveComposeIntent(
     /\bvideos\b|\bclips\b|\buploads\b|\bthem\b|\bthe rest\b|\beach\b|\ball of them\b/.test(
       lower
     );
+
+  const sharedExtras: OutputExtras = {
+    ...(targetSeconds !== null ? { targetSeconds } : {}),
+    ...(format ? { format } : {}),
+    ...(minClipCount !== undefined ? { minClipCount } : {})
+  };
 
   // ---- Tier A: ≥2 explicit per-source picks (combat in #1, cutscene in #2)
   if (picks.length >= 2 && distinctIdx.size >= 2) {
@@ -272,10 +345,42 @@ export function deriveComposeIntent(
         role: "segment",
         order: i + 1
       }));
-    return buildResult(sources, { type: ordering }, transition, "high", picks);
+    return buildResult(
+      sources,
+      { type: ordering },
+      transition,
+      "high",
+      picks,
+      sharedExtras
+    );
   }
 
-  // ---- Tier B: mix/combine/montage trigger + ≥2 content topics
+  // ---- All-sources compose (issue #64). Fires on an explicit all-videos
+  //      scope plus ANY build/combine cue OR an output constraint. No fake
+  //      per-source topics — generic visual-interest unless ONE real shared
+  //      topic survives (e.g. "cooking from all videos").
+  const wantsBuild =
+    hasCombine ||
+    hasMontage ||
+    /\b(make|build|create|generate|produce|select|combine|reel|reels|short|shorts|montage|tiktoks?)\b/.test(
+      lower
+    );
+  const hasOutputConstraint =
+    targetSeconds !== null || minClipCount !== undefined || format !== null;
+  if (scope.type === "all" && (wantsBuild || hasOutputConstraint)) {
+    const sharedTopic = extractMeaningfulTopic(topicText);
+    return buildAllSourceResult({
+      sharedTopic,
+      targetSeconds,
+      format,
+      minClipCount,
+      transition,
+      ordering,
+      avoid: exclusions
+    });
+  }
+
+  // ---- Tier B: mix/combine/montage trigger + ≥2 MEANINGFUL content topics
   if (
     (hasMix || hasCombine || hasMontage) &&
     picks.length + looseTopics.length >= 2
@@ -293,7 +398,8 @@ export function deriveComposeIntent(
       { type: ord },
       transition,
       multiCue ? "high" : "low",
-      topics.map((t, i) => ({ index: i, baseTopic: t }))
+      topics.map((t, i) => ({ index: i, baseTopic: t })),
+      sharedExtras
     );
   }
 
@@ -309,7 +415,14 @@ export function deriveComposeIntent(
     const ord: ComposeOrdering = anchorFirst
       ? { type: "shuffle", anchorFirst: true }
       : { type: ordering };
-    return buildResult(sources, ord, transition, anchorFirst ? "high" : "low", []);
+    return buildResult(
+      sources,
+      ord,
+      transition,
+      anchorFirst ? "high" : "low",
+      [],
+      sharedExtras
+    );
   }
 
   return null;

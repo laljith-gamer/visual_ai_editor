@@ -26,7 +26,8 @@ import {
   mergeAcrossSources
 } from "@/lib/pipeline/executePerSource";
 import { assessTargetCoverage } from "@/lib/pipeline/coverage";
-import { buildComposeSubPlan } from "@/lib/plan/composeSubPlan";
+import { VIDEO_PROMPT } from "@/lib/config";
+import { buildComposeSubPlan, buildComposeOutputPlan } from "@/lib/plan/composeSubPlan";
 import {
   resolveComposeSources,
   type ResolvableSource
@@ -52,6 +53,7 @@ import type {
   AgentRequest,
   AgentResponse,
   ComposeRole,
+  ComposeSourceSelection,
   ComposeTransitionType,
   EditPlan,
   FrameScore,
@@ -1707,10 +1709,42 @@ export default function Home() {
             selected: composeStore.selectedSourceIds.includes(s.id),
             active: s.id === composeStore.activeSourceId
           }));
-          const { resolved, unresolved } = resolveComposeSources(
-            compose.sources,
-            resolvable
-          );
+
+          // Issue #64 — ALL-SOURCES compose. The server can't enumerate the
+          // library, so for sourceScope "all" we fan out across EVERY eligible
+          // upload here, splitting the target duration evenly and using either
+          // the one shared topic or broad visual-interest selection (generic
+          // best parts). No fabricated per-source topics.
+          let resolved: Array<{
+            selection: ComposeSourceSelection;
+            source: ResolvableSource;
+          }>;
+          let unresolved: ComposeSourceSelection[];
+          if (compose.sourceScope === "all") {
+            const eligible = resolvable.slice(0, VIDEO_PROMPT.maxComposeSources);
+            const numSrc = eligible.length;
+            const perSourceDuration =
+              compose.targetSeconds && compose.targetSeconds > 0
+                ? compose.targetSeconds / numSrc
+                : undefined;
+            resolved = eligible.map((source, i) => ({
+              source,
+              selection: {
+                sourceRef: { type: "index", index: i },
+                query: compose.allSourcesTopic ?? "",
+                role: "segment" as ComposeRole,
+                order: i + 1,
+                ...(perSourceDuration
+                  ? { durationSeconds: perSourceDuration }
+                  : {})
+              }
+            }));
+            unresolved = [];
+          } else {
+            const r = resolveComposeSources(compose.sources, resolvable);
+            resolved = r.resolved;
+            unresolved = r.unresolved;
+          }
 
           if (resolved.length === 0) {
             pushMessage({
@@ -1904,6 +1938,11 @@ export default function Home() {
             if (firstSourceId && firstSourceId !== composeStore.activeSourceId) {
               useEditorStore.getState().setActiveSource(firstSourceId);
             }
+            // Honor the requested output format/duration at render time. Compose
+            // otherwise lays clips without a plan, so "vertical" would be lost.
+            if (compose.format || compose.userSpecifiedDuration) {
+              setPlan(buildComposeOutputPlan(compose));
+            }
 
             const runLabel = compose.outputTarget.name || "AI Combined 1";
             const total = finalClips.reduce(
@@ -1915,6 +1954,21 @@ export default function Home() {
               .map((s) => `${s.count} from \u201c${s.name}\u201d`)
               .join(", ");
             let summary = `Built ${runLabel} \u2014 a ${finalClips.length}-clip montage (${total.toFixed(1)}s): ${breakdown}. Tap \u201cRender\u201d to assemble. Say \u201cundo\u201d to restore your previous timeline.`;
+            // Issue #64 — honest target reporting for all-source compose. If
+            // the user asked for a minimum clip count or a duration we
+            // couldn't reach, say so instead of implying success.
+            if (
+              compose.minClipCount &&
+              finalClips.length < compose.minClipCount
+            ) {
+              summary += ` Heads up \u2014 you asked for at least ${compose.minClipCount} clips but I only found ${finalClips.length} with enough evidence across your videos.`;
+            }
+            if (
+              compose.targetSeconds &&
+              total < compose.targetSeconds * 0.7
+            ) {
+              summary += ` It runs ${total.toFixed(1)}s of your ${compose.targetSeconds}s target \u2014 some sources had weak material. Want me to broaden the selection?`;
+            }
             // Honesty: if a non-renderable transition was requested, say
             // what actually got rendered.
             const fancy: ComposeTransitionType[] = [

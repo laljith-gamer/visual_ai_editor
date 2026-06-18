@@ -4,13 +4,41 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-19 (issue #62 — generic best-parts intent + offline
-> best-parts fallback + honest target-coverage status; on a feature branch,
-> not yet merged)
+> Last updated: 2026-06-19 (issue #64 — professional video-prompt interpreter +
+> all-source compose; on a feature branch, not yet merged)
 
 ---
 
-## 0. Latest change (2026-06-19) — issue #62 best-picks / target-coverage fix
+## 0. Latest change (2026-06-19) — issue #64 professional video-prompt interpreter
+
+Messy real-user editing prompts no longer fabricate meaning. A new pure
+interpreter extracts structured slots BEFORE the specialized detectors run, so
+meta/output words can never become content topics.
+
+- **New `lib/intent/videoPromptInterpreter.ts` (pure, tested):**
+  `normalizeVideoPromptText` (spelling/spacing only), `parseDuration`,
+  `parseClipCount` (min/max/target, guards "5 min"/"clip 5"), `parseFormat`,
+  `parsePlatform`, `parseSourceScope`, `META_VOCAB` + `isMeaningfulContentTopic`
+  + `extractMeaningfulTopic` (the no-fake-topic guard — NOT a genre table),
+  `splitExclusions`. Bounds in `lib/config.ts → VIDEO_PROMPT`.
+- **`composeIntent.ts` refactor:** topics come only from
+  `extractMeaningfulTopic`; per-source compose preserved; NEW **all-source
+  compose** ("select at least 5 clips from all videos … 5 min vertical") →
+  `sourceScope:"all"`, `targetSeconds`, `format`, `minClipCount`,
+  `genericBestParts`/`allSourcesTopic`, `sources:[]`, clean message.
+- **Type + execution:** `MultiSourceComposePlan` extended;
+  `composeNormalize` reads the fields (LLM path) and allows empty sources for
+  all-scope; `app/editor/page.tsx` fans an all-source compose across EVERY
+  eligible upload (cap `VIDEO_PROMPT.maxComposeSources`), splits the duration,
+  uses the issue-#62 offline fallback per source, reports underfill honestly,
+  and honors `format`/duration at render via `buildComposeOutputPlan`.
+- **Validation:** typecheck ✓, build ✓, tests ✓ (198, incl. new interpreter +
+  compose #64 cases). Browser run not done (no GPU in sandbox).
+- See `ISSUE64_PROFESSIONAL_VIDEO_PROMPT_INTERPRETER_2026-06-19.md`.
+
+---
+
+## 0a. Previous change (2026-06-19) — issue #62 best-picks / target-coverage fix
 
 A 40s "best picks for reels" request used to produce a single 1.0s
 low-confidence clip marked "ready to render". Fixed end-to-end on the

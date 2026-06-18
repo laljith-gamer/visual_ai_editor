@@ -17,6 +17,32 @@
 
 ---
 
+### 2026-06-19 — Issue #64: professional video-prompt interpreter + all-source compose
+- **Change made:** Messy editing prompts no longer fabricate topics. A new pure
+  interpreter extracts structured slots before the specialized detectors run.
+  - **`lib/intent/videoPromptInterpreter.ts` (new, tested):**
+    `normalizeVideoPromptText` (spelling/spacing only), `parseDuration`,
+    `parseClipCount` (guards "5 min"/"clip 5"), `parseFormat`, `parsePlatform`,
+    `parseSourceScope`, `META_VOCAB` + `isMeaningfulContentTopic` +
+    `extractMeaningfulTopic` (no-fake-topic guard, NOT a genre table),
+    `splitExclusions`. Bounds in `VIDEO_PROMPT` config.
+  - **`composeIntent.ts`:** topics only from `extractMeaningfulTopic`; per-source
+    compose preserved; NEW all-source compose (`sourceScope:"all"` + duration /
+    format / minClipCount / genericBestParts / allSourcesTopic, no per-source
+    fakery).
+  - **Type/exec:** `MultiSourceComposePlan` extended; `composeNormalize` reads
+    the fields + allows empty sources for all-scope; `app/editor/page.tsx` fans
+    all-source compose across every upload with honest underfill reporting and
+    render-format wiring (`buildComposeOutputPlan`).
+- **Files affected:** `lib/intent/videoPromptInterpreter.ts` (+test),
+  `lib/plan/composeIntent.ts`, `lib/plan/compose.test.ts`,
+  `lib/plan/composeNormalize.ts`, `lib/plan/composeSubPlan.ts`,
+  `lib/plan/prompt.ts`, `lib/types.ts`, `app/editor/page.tsx`, `lib/config.ts`,
+  `package.json`.
+- **Reason:** Production bug #64 — "atleast sect 5 clip from all … combined 5 min
+  vertical" was parsed into fake per-source topics ("atleast sect all" / "min
+  vertical"). Validation: typecheck ✓, build ✓, 198 tests ✓.
+
 ### 2026-06-19 — Issue #62: generic best-parts intent + offline target-coverage fix
 - **Change made:** A 40s "best picks for reels" request no longer collapses to
   a single 1.0s "ready to render" clip.
