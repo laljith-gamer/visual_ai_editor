@@ -17,6 +17,51 @@
 
 ---
 
+### 2026-06-19 — Meta question guard (explanation questions never mutate the timeline)
+- **Change made:** Added a deterministic, READ-ONLY meta/explanation guard
+  that runs BEFORE every mutation path so questions like "explain why you did
+  these changes" / "what changed" / "why this clip" / "why only fade" are
+  ANSWERED in chat and never routed into edit-command parsing or the planner
+  (which previously could mutate the timeline).
+  - **`lib/intent/metaQuestions.ts` (new, pure, no imports):**
+    `parseMetaQuestion(text)` → `MetaQuestion { kind, confidence, target }` or
+    null. Kinds: explain_previous_changes / what_changed / why_clip_selected /
+    why_plan / what_will_happen / capability_explanation. Requires a meta cue
+    (why/explain/what/how come) AND negative-guards any sentence that STARTS
+    with an edit verb (add/remove/delete/trim/replace/move/render/export/make/
+    create/build/change/fix/…) so "add explanation text", "make an explanation
+    video", "add why text", "change this clip" are NOT meta.
+  - **`lib/agent/metaAnswer.ts` (new, pure, type-only imports):**
+    `answerMetaQuestion(question, state)` explains from CURRENT state only
+    (plan, highlights, selected clip, boundary transitions, memory, sources,
+    last messages). Honest: no edit, no analysis, no fake claims; "No edit has
+    been applied yet." when empty; transition answers state the renderer only
+    does cut/fade/crossfade (crossfade = fade dip) and richer transitions are
+    mapped down, never faked.
+  - **Integration (`app/editor/page.tsx`):** the guard is the FIRST thing in
+    `handleAgent` after the user message — before `tryAgentCommand`, the
+    transition parser, the intake layer, the quick-shortcut gate, and the
+    cloud/local planner. On a match it pushes the answer, logs `meta.explained`,
+    clears the busy spinner, and returns WITHOUT touching highlights/plan/status.
+  - **Double safety (`lib/agent/runAgentCommand.ts`):** `tryAgentCommand` also
+    runs the guard first and returns `handled:true` with a read-only answer, so
+    no caller (e.g. the dev intent tester) can mutate on a meta question.
+- **Files affected:** `lib/intent/metaQuestions.ts` (+ `.test.ts`),
+  `lib/agent/metaAnswer.ts` (+ `.test.ts`), `app/editor/page.tsx`,
+  `lib/agent/runAgentCommand.ts`, `package.json` (test + test:meta scripts).
+- **Reason:** There was no first-class meta/explanation intent, so explanation
+  questions fell through into edit-command parsing or the planner and could
+  edit clips / change the timeline. Users asking "why did you…" expect an
+  explanation, never an edit.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓ (/editor 180 kB),
+  `npm test` = **306 pass / 0 fail** (+38 new: meta detection for explain/why/
+  what-changed/why-clip/why-plan/capability/render, negative guards for edit
+  verbs, and read-only answers incl. the empty-timeline "No edit applied yet"
+  and the fade/transition limitation). Existing edit commands still parse to
+  null in the guard and flow through unchanged.
+
+---
+
 ### 2026-06-19 — Project history restore: full-snapshot autosave (runtime fix)
 - **Change made:** Fixed the runtime failure where restored projects were
   stale/wrong after reload. Root cause was NOT the hash matching — it was that

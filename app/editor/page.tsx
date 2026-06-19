@@ -45,6 +45,8 @@ import {
 } from "@/lib/store/cache";
 import { friendlyStorageError } from "@/lib/store/idb";
 import { projectPersistSignature } from "@/lib/store/projectSignature";
+import { parseMetaQuestion } from "@/lib/intent/metaQuestions";
+import { answerMetaQuestion, type MetaAnswerState } from "@/lib/agent/metaAnswer";
 import { sha1String } from "@/lib/util/hash";
 import { logAi, logSystem, logUser } from "@/lib/log/recorders";
 import { summarizeRecentActivity } from "@/lib/log/summarize";
@@ -593,6 +595,74 @@ export default function Home() {
       // compiled prompt instead of the raw messy text. Stays undefined for
       // passthrough turns so behaviour is unchanged there.
       let intakeCompiledPrompt: string | undefined;
+
+      // ---- Meta / explanation question guard (READ-ONLY) -------------
+      // Runs BEFORE every mutation path (agent command parser, transition
+      // parser, quick-shortcut, cloud planner, local planner). Questions
+      // like "explain why you did these changes" / "what changed" / "why
+      // only fade" must be ANSWERED in chat, never routed into an editor
+      // that mutates the timeline. It never changes highlights / plan /
+      // status, never runs analysis, and returns immediately on a match.
+      try {
+        const meta = parseMetaQuestion(userRequest);
+        if (meta && meta.confidence >= 0.6) {
+          const st = useEditorStore.getState();
+          const lastAssistant =
+            [...st.messages].reverse().find((m) => m.role === "assistant")?.content ?? null;
+          const metaState: MetaAnswerState = {
+            questionText: userRequest,
+            plan: st.plan
+              ? {
+                  targetShortSeconds: st.plan.targetShortSeconds,
+                  userSpecifiedDuration: st.plan.userSpecifiedDuration,
+                  format: st.plan.format,
+                  transition: st.plan.transition,
+                  scenarios: st.plan.scenarios?.map((sc) => ({ id: sc.id, prompt: sc.prompt })),
+                  rationale: st.plan.rationale
+                }
+              : null,
+            highlights: st.highlights.map((h) => ({
+              id: h.id,
+              start: h.start,
+              end: h.end,
+              label: h.label,
+              reason: h.reason,
+              sourceId: h.sourceId,
+              score: h.score
+            })),
+            selectedClipId: st.selectedClipId,
+            boundaryTransitions: st.boundaryTransitions.map((t) => ({
+              index: t.index,
+              type: t.type,
+              mode: t.mode,
+              render: t.render,
+              exact: t.exact,
+              note: t.note
+            })),
+            memory: st.memory,
+            sources: st.sources.map((s) => ({ id: s.id, name: s.meta.name })),
+            lastAssistantMessage: lastAssistant,
+            lastUserMessage: null
+          };
+          const answer = answerMetaQuestion(meta, metaState);
+          pushMessage({
+            role: "assistant",
+            content: answer,
+            attachment: { mode: "meta", kind: meta.kind, target: meta.target }
+          });
+          // Deliberately read-only: do NOT touch highlights, plan, or the
+          // project status. Just clear the local busy spinner.
+          logSession.ai("meta.explained", { kind: meta.kind, target: meta.target }, answer.slice(0, 140));
+          setBusy(false);
+          return;
+        }
+      } catch (err) {
+        logSession.system(
+          "meta.path.failed",
+          { message: (err as Error).message, userRequest },
+          `Meta guard errored, falling back: ${(err as Error).message.slice(0, 80)}`
+        );
+      }
 
       // ---- Agentic command layer (deterministic-first) ---------------
       // Resolve natural editing commands (source/clip/range/concept/
