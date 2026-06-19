@@ -10,6 +10,24 @@
 4. The browser samples frames, scores each frame against your scenarios, finds candidate windows, sends a contact sheet of each window to a vision model for a keep/skip verdict, then assembles the highlight reel.
 5. ffmpeg.wasm renders the final MP4 in a Web Worker. You preview, share, or download.
 
+### Fast, dynamic local analysis
+
+The editor behaves like a human editor instead of always scanning the whole
+video. A per-request **analysis budget** (`lib/analysis/budget.ts`) decides how
+much local work each turn deserves — there is no single fixed frame cap:
+
+- Exact edits ("add the first 30 seconds"), control commands (render/export),
+  read-only questions ("why this clip?"), and whole-video merges run with **no
+  frame analysis** — they respond instantly.
+- **"Describe what's in this video"** does a quick, honest local read instead of
+  building a short: it never runs the highlight pipeline.
+- "Best parts" scans **fewer frames on a short clip and deeper (still bounded)
+  on a long video**, scaled by your device tier; a cached scan is reused.
+
+Heavier passes are coarse-to-fine (a light scan first, deep analysis only on
+the strongest candidate windows). All of this stays **on-device** — the video
+bytes never leave the browser, and API keys are server-only.
+
 ## Tech stack
 
 | Layer | Choice | Why |

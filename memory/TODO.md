@@ -8,6 +8,29 @@
 
 ## High priority
 
+- [ ] **Wire the dynamic-analysis foundation end-to-end (2026-06-20).** The
+      pure modules (`lib/analysis/*`, `lib/timeline/overlapResolver`,
+      `lib/agent/describeResponder`) are built + tested, and the describe fix +
+      dynamic frame cap are live. Remaining incremental wiring:
+      1. Persist `videoMemoryStore` after a scan + read it before scanning
+         (memory reuse; cache-hit budget → 0 new frames).
+      2. Route multi-source runs through `globalVideoPlanner` (roles/order/
+         shares) instead of the flat per-source merge.
+      3. Gate the add-clip / agent add path through `overlapResolver` (ask on
+         ambiguous overlap; respect keep-both; never silent replace).
+      4. Run a real bounded quick-scan (Level 1–3 progressive passes) when the
+         user taps "Run a quick local scan" / "deeper local scan", writing the
+         result into video memory.
+      5. Surface `decideClarification` after the first quick scan for vague /
+         low-confidence creative prompts.
+      See `memory/DYNAMIC_LOCAL_ANALYSIS_2026-06-20.md`.
+- [ ] **Manual browser test — describe + dynamic budget (2026-06-20, after
+      deploy).** "Describe what's in this video" → honest instant answer + chips
+      (quick scan / motion reel / find specific), NO timeline change, NO stuck
+      scoring. "Add first 30 seconds" → instant, no frame analysis. "Pick best
+      parts" on a 10s vs 30-min video → far fewer frames on the short clip,
+      deeper (still bounded) coarse scan on the long one. Needs a real browser.
+
 - [ ] **Manual browser test — issue #64 messy compose prompts (after deploy).**
       Upload 2–3 videos, ask `atleast sect 5 clip from all and make it as
       combined 5 min video vertical`: clean message (no "atleast sect all" /

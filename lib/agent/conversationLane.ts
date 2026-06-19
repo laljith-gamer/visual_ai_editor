@@ -19,6 +19,8 @@ import {
   type SemanticClassifyFn
 } from "@/lib/intent/conversationIntent";
 import { answerReadOnly, deterministicAnswer, type ReadOnlyState } from "@/lib/agent/readOnlyResponder";
+import { buildDescribeResponse, type DescribeResponse } from "@/lib/agent/describeResponder";
+import { detectDeviceTier } from "@/lib/analysis/deviceTier";
 
 /** Snapshot the live store into the classifier's context. */
 export function buildConversationContext(): ConversationContext {
@@ -132,4 +134,33 @@ export async function respondReadOnly(intent: ConversationIntent, text: string):
 /** Deterministic-only read-only answer (used by the sync double-safety guard). */
 export function respondReadOnlySync(intent: ConversationIntent, text: string): string {
   return deterministicAnswer(intent, buildReadOnlyState(text));
+}
+
+/**
+ * Build an honest, INSTANT response to a "describe this video" turn from the
+ * live store. NEVER mutates state and NEVER runs the highlight pipeline — it
+ * answers from metadata (+ transcript presence) and offers next-step chips.
+ * Cached analysis-memory lookup is a follow-up; for now it reports honestly
+ * that no scan has run.
+ */
+export function respondDescribe(): DescribeResponse {
+  const s = useEditorStore.getState();
+  const active = s.sources.find((src) => src.id === s.activeSourceId) ?? s.sources[0] ?? null;
+  const hasTranscript = active ? Boolean(s.transcripts?.[active.hash]) : false;
+  let deviceTier: ReturnType<typeof detectDeviceTier> | undefined;
+  try {
+    deviceTier = detectDeviceTier();
+  } catch {
+    deviceTier = undefined;
+  }
+  return buildDescribeResponse({
+    hasVideo: Boolean(active),
+    sourceName: active?.meta.name,
+    durationSeconds: active?.meta.duration,
+    width: active?.meta.width,
+    height: active?.meta.height,
+    hasTranscript,
+    memory: null,
+    deviceTier
+  });
 }

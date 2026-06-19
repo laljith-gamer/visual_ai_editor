@@ -31,14 +31,24 @@ import { planSignaturePayload } from "@/lib/plan/normalize";
 import { sha1String } from "@/lib/util/hash";
 import { getPredictions, savePredictions, trimCache } from "@/lib/store/cache";
 import { PLAN_DEFAULTS } from "@/lib/config";
+import { planAnalysisBudget } from "@/lib/analysis/budget";
+import type { AnalysisBudget, DeviceTier } from "@/lib/analysis/types";
 
 /**
- * Production guardrail for the first-pass frame scorer.
- *
- * This is a sampling cap, not an output-clip cap. Long videos are represented
- * by a bounded, evenly spread coarse pass instead of thousands of frames.
+ * Fallback first-pass frame cap, used ONLY when no dynamic analysis budget is
+ * available. The real cap is now DYNAMIC (see planAnalysisBudget): short
+ * videos sample fewer frames, long videos get a larger (still bounded) coarse
+ * scan. This constant remains as a safe backstop.
  */
 const SOURCE_ANALYSIS_MAX_FRAMES = 240;
+
+/** Map the existing capability tier to the analysis device tier. */
+function capTierToDeviceTier(capTier: CapabilityTier): DeviceTier {
+  if (capTier === "high") return "high";
+  if (capTier === "mid") return "mid";
+  if (capTier === "low") return "low";
+  return "unknown";
+}
 
 /** Activity-log fan-out passed in by the orchestrator. */
 export interface SourceLogger {
@@ -60,6 +70,10 @@ export interface ExecuteForSourceArgs {
   userTier: UserTier;
   /** Optional local Whisper transcript for exact speech/text-grounded scoring. */
   transcript?: Transcript | null;
+  /** v2.2 — Optional dynamic analysis budget. When omitted, a duration-aware
+   *  budget is derived from the plan + capability tier (replaces the old
+   *  flat 240-frame cap). */
+  analysisBudget?: AnalysisBudget;
   log: SourceLogger;
   progress: ProgressSink;
 }
@@ -91,6 +105,26 @@ export async function executeForSource(
     width: source.meta.width,
     height: source.meta.height
   };
+
+  // v2.2 — Dynamic analysis budget. Provided by the caller, or derived here
+  // from the plan + capability tier so the coarse scan scales with video
+  // length instead of a flat 240-frame cap (short → fewer, long → deeper but
+  // still bounded). Describe/exact/control requests never reach this path.
+  const analysisBudget: AnalysisBudget =
+    args.analysisBudget ??
+    planAnalysisBudget({
+      durationSeconds: videoMeta.duration,
+      width: videoMeta.width,
+      height: videoMeta.height,
+      sourceCount: 1,
+      purpose: "normal_highlights",
+      deviceTier: capTierToDeviceTier(capTier),
+      hasCachedQuickScan: false,
+      hasCachedDeepScan: false,
+      userSpecifiedDuration: plan.userSpecifiedDuration,
+      targetSeconds: plan.targetShortSeconds,
+      promptSpecificity: "normal"
+    });
 
   // ---- Cache lookup ------------------------------------------------
   // Transcript signature is part of the scoring cache key: a transcript-aware
@@ -130,6 +164,7 @@ export async function executeForSource(
       transcript,
       capTier,
       videoMeta,
+      analysisBudget,
       progress,
       log,
       sourceName: source.meta.name
@@ -292,6 +327,7 @@ async function sampleAndScore(args: {
   transcript?: Transcript | null;
   capTier: CapabilityTier;
   videoMeta: { duration: number; width: number; height: number };
+  analysisBudget: AnalysisBudget;
   progress: ProgressSink;
   log: SourceLogger;
   sourceName: string;
@@ -304,6 +340,7 @@ async function sampleAndScore(args: {
     transcript = null,
     capTier,
     videoMeta,
+    analysisBudget,
     progress,
     log,
     sourceName
@@ -326,7 +363,7 @@ async function sampleAndScore(args: {
           endSeconds: plan.extractRange.endSeconds
         }
     : undefined;
-  const sampling = computeAdaptiveSampling(plan, videoMeta.duration, range);
+  const sampling = computeAdaptiveSampling(plan, videoMeta.duration, analysisBudget, range);
   const frames = await sampleFrames(videoBlob, {
     every: sampling.everySeconds,
     width: plan.inferenceWidth,
@@ -386,13 +423,16 @@ async function sampleAndScore(args: {
 function computeAdaptiveSampling(
   plan: EditPlan,
   videoDuration: number,
+  budget: AnalysisBudget,
   range?: { startSeconds: number; endSeconds: number }
 ): {
   everySeconds: number;
   maxFrames: number;
   adaptive: boolean;
 } {
-  const maxFrames = SOURCE_ANALYSIS_MAX_FRAMES;
+  // v2.2 — the cap is the dynamic budget's maxFrames (duration + device aware),
+  // falling back to the flat backstop only if the budget yielded 0 frames.
+  const maxFrames = budget.maxFrames > 0 ? budget.maxFrames : SOURCE_ANALYSIS_MAX_FRAMES;
   const start = range ? Math.max(0, range.startSeconds) : 0;
   const end = range
     ? Math.max(start, Math.min(videoDuration, range.endSeconds))

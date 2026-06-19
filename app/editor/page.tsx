@@ -45,7 +45,7 @@ import {
 } from "@/lib/store/cache";
 import { friendlyStorageError } from "@/lib/store/idb";
 import { projectPersistSignature } from "@/lib/store/projectSignature";
-import { classifyTurn, respondReadOnly } from "@/lib/agent/conversationLane";
+import { classifyTurn, respondReadOnly, respondDescribe } from "@/lib/agent/conversationLane";
 import { sha1String } from "@/lib/util/hash";
 import { logAi, logSystem, logUser } from "@/lib/log/recorders";
 import { summarizeRecentActivity } from "@/lib/log/summarize";
@@ -617,6 +617,41 @@ export default function Home() {
             "meta.explained",
             { target: intent.target, confidence: intent.confidence, ambiguous: Boolean(intent.ambiguous) },
             answer.slice(0, 140)
+          );
+          setBusy(false);
+          return;
+        }
+
+        // ---- Describe guard (Core 4 — the reported-bug fix) -----------
+        // "Describe what's in this video" / "what's happening" must NOT be
+        // routed into the highlight pipeline (which used to interpret it as
+        // "build a short" and get stuck in frame scoring). Answer honestly
+        // and instantly from local metadata, offer next steps, and STOP.
+        // No timeline mutation, no analysis, no planner.
+        if (intent.kind === "visual_question" && intent.confidence >= 0.6) {
+          const d = respondDescribe();
+          pushMessage({
+            role: "assistant",
+            content: d.message,
+            attachment: { mode: "describe", suggestions: d.suggestions }
+          });
+          if (d.suggestions.length > 0) {
+            setPendingClarify({
+              message: d.message,
+              questions: [
+                {
+                  id: "describe-next",
+                  prompt: d.message,
+                  suggestions: d.suggestions,
+                  kind: "single-choice"
+                }
+              ]
+            });
+          }
+          logSession.ai(
+            "describe.quick",
+            { needsMore: d.needsMore, confidence: intent.confidence },
+            d.message.slice(0, 140)
           );
           setBusy(false);
           return;
