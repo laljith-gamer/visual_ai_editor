@@ -4,10 +4,10 @@
  * Two layers:
  *   - PURE filename helpers (`safeTitleSegment`, `exportTimestamp`,
  *     `buildExportFilename`) — deterministic, unit-testable in node.
- *   - BROWSER `shareOrDownload` — tries the Web Share API (mobile), then
- *     falls back to an anchor download, and reports whether the platform
- *     BLOCKED the save so the caller can show fallback guidance instead
- *     of silently doing nothing.
+ *   - BROWSER `shareOrDownload` — despite the historical name, this now
+ *     performs a direct system download only. It intentionally does NOT open
+ *     the Web Share sheet because the editor's Export button must save the
+ *     rendered file, not share it.
  *
  * Deterministic export filename:
  *   shorts-studio-{safe-session-title}-{yyyyMMdd-HHmmss}.mp4
@@ -46,13 +46,13 @@ export function buildExportFilename(
 }
 
 export interface DownloadResult {
-  /** Shared via the Web Share API. */
+  /** Always false now: export is download-only, not share. */
   shared: boolean;
   /** Saved via an anchor download. */
   downloaded: boolean;
-  /** The platform prevented both share and download (show guidance). */
+  /** The platform prevented the download (show guidance). */
   blocked: boolean;
-  /** The user dismissed the share sheet (not an error). */
+  /** Kept for API compatibility; direct downloads do not use a share sheet. */
   cancelled: boolean;
 }
 
@@ -64,32 +64,14 @@ interface ShareArgs {
 }
 
 /**
- * Share the file if the platform supports sharing files; otherwise trigger
- * a download. Never throws — returns a result the caller can message from.
+ * Directly download the rendered file using the browser/system save path.
+ * The name is kept for compatibility with existing callers, but this function
+ * does not call navigator.share.
  */
-export async function shareOrDownload({ blob, filename, title, text }: ShareArgs): Promise<DownloadResult> {
+export async function shareOrDownload({ blob, filename }: ShareArgs): Promise<DownloadResult> {
   const base: DownloadResult = { shared: false, downloaded: false, blocked: false, cancelled: false };
   if (typeof document === "undefined") {
     return { ...base, blocked: true };
-  }
-
-  const file = new File([blob], filename, { type: blob.type || "video/mp4" });
-  const nav = navigator as Navigator & {
-    canShare?: (data: { files: File[] }) => boolean;
-    share?: (data: { files: File[]; title?: string; text?: string }) => Promise<void>;
-  };
-
-  if (nav.share && nav.canShare?.({ files: [file] })) {
-    try {
-      await nav.share({ files: [file], title, text });
-      return { ...base, shared: true };
-    } catch (err) {
-      // User dismissed the share sheet — not an error, and not a download.
-      if ((err as DOMException)?.name === "AbortError") {
-        return { ...base, cancelled: true };
-      }
-      // Any other share failure → fall through to the download path.
-    }
   }
 
   try {
