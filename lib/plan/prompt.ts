@@ -561,9 +561,21 @@ Output:
     },
     "targetSeconds": 30,             // OPTIONAL total montage length, only if the user named one
     "userSpecifiedDuration": false,
+    "sourceScope": "explicit",       // OPTIONAL "explicit" (use the sources array) or "all" (fan across EVERY upload)
+    "format": "vertical",            // OPTIONAL output aspect the user asked for
+    "minClipCount": 5,               // OPTIONAL "at least N clips" the user asked for (NEVER invent one)
+    "genericBestParts": false,       // OPTIONAL true for an all-source request with NO concrete topic
+    "allSourcesTopic": "cooking",    // OPTIONAL shared query for an all-source request WITH one real topic
     "needsAnalysis": true            // true whenever any query is a semantic moment ("combat", "jokes", …)
   }
   "message": "<short, warm one-liner>"
+
+All-sources compose (issue #64) — "select at least 5 clips from all videos and make a combined 5 min vertical video", "combine all uploads into a 2 min reel", "best parts from every video":
+  - Set "sourceScope": "all" and leave "sources": [] (the client fans out across the live library — you can't enumerate it).
+  - Parse the OUTPUT constraints into their own fields: duration → targetSeconds, "vertical/reel/tiktok" → format "vertical", "at least 5 clips" → minClipCount 5.
+  - If there is NO concrete subject (only "best/clips/combined/reel" meta words), set "genericBestParts": true and do NOT invent a topic. If there is ONE real subject across all videos ("cooking from all videos"), put it in "allSourcesTopic" and leave genericBestParts false.
+  - NEVER turn meta/output words ("atleast", "select", "all", "min", "vertical", "combined") into a per-source query. That is the exact bug this guards against.
+
 
 Resolving sources (map the user's words to refs — DON'T guess blindly):
   - "first/second/third video" → { type: "index", index: 0/1/2 }. When the library block gives you a concrete id for that position, PREFER { type: "id", sourceId: "src_…" }.

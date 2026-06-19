@@ -8,6 +8,23 @@
 
 ## High priority
 
+- [ ] **Manual browser test — issue #64 messy compose prompts (after deploy).**
+      Upload 2–3 videos, ask `atleast sect 5 clip from all and make it as
+      combined 5 min video vertical`: clean message (no "atleast sect all" /
+      "min vertical" / fake first/second), source scope all, target 5 min,
+      vertical, ≥5 clips if possible. Verify `pick combat in first and cutscene
+      in second` per-source compose, `make a 40 sec reel of cooking shots`
+      single-source, `remove clip 5` direct edit, `select 5 clips from all`
+      count-not-index. See `ISSUE64_PROFESSIONAL_VIDEO_PROMPT_INTERPRETER_2026-06-19.md`.
+      (No GPU/decode in sandbox — not run here.)
+- [ ] **Follow-up — feed compose exclusions into sub-plans (issue #64).**
+      `splitExclusions` records "avoid X" and shows it in the message but the
+      excluded subject isn't yet threaded into the per-source `avoid` list.
+- [ ] **Follow-up — unify routing on the interpreter (issue #64).**
+      `classifyVideoPromptIntent`-style full routing (control/question/exact_edit/
+      …) was scoped down; the interpreter currently powers compose only. A later
+      pass can route the fast-command / edit / question detectors through it.
+
 - [ ] **Manual browser test — issue #62 best-picks / target-coverage (after
       deploy).** Upload a long video, ask `make a best picks for reels for
       40 sec`: chat must NOT say "best and picks moments"; target = 40s;

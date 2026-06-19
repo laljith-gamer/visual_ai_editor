@@ -652,6 +652,26 @@ export interface MultiSourceComposePlan {
   /** Total montage length the user named, if any. */
   targetSeconds?: number;
   userSpecifiedDuration?: boolean;
+  /** v1.9.x (issue #64) — which uploads to combine.
+   *    "explicit" (default) → use the enumerated `sources` (per-source picks).
+   *    "all"               → fan out across EVERY eligible upload; the client
+   *                          expands `sources` from the live library at run
+   *                          time (the server can't enumerate the library). */
+  sourceScope?: "all" | "explicit";
+  /** Output aspect the user asked for (vertical/horizontal/square). Drives
+   *  the render aspect; absent → derive from the source. */
+  format?: "vertical" | "horizontal" | "square";
+  /** Minimum total clips the user asked for ("at least 5 clips"). Soft — the
+   *  client tries to meet it and reports honestly if it can't. Never a
+   *  fabricated default. */
+  minClipCount?: number;
+  /** True when an all-source compose has NO concrete subject ("combine all
+   *  into a 2 min reel"): each source uses broad visual-interest selection
+   *  (motion + saliency), not a fabricated semantic topic. */
+  genericBestParts?: boolean;
+  /** For an all-source compose WITH a real subject ("cooking from all
+   *  videos"): the shared query applied to every source. */
+  allSourcesTopic?: string;
   /** True when per-source clip selection needs the vision pipeline (the
    *  common case for semantic queries like "combat" / "jokes"). */
   needsAnalysis: boolean;

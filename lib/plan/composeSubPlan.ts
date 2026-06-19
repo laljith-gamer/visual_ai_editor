@@ -98,3 +98,43 @@ export function buildComposeSubPlan(
     }`
   };
 }
+
+/**
+ * Build a minimal EditPlan that carries the compose run's OUTPUT preferences
+ * (format + target duration) so the render path picks them up. Compose lays
+ * clips on the timeline without a plan; without this, a "vertical" request
+ * would silently fall back to the source's native aspect at render time.
+ * Scenarios are intentionally empty — this plan only conveys output framing.
+ */
+export function buildComposeOutputPlan(
+  compose: MultiSourceComposePlan
+): EditPlan {
+  const target =
+    compose.targetSeconds && compose.targetSeconds > 0
+      ? Math.min(
+          PLAN_BOUNDS.targetShortSeconds.max,
+          Math.max(PLAN_BOUNDS.targetShortSeconds.min, compose.targetSeconds)
+        )
+      : PLAN_DEFAULTS.targetShortSeconds;
+  return {
+    scenarios: [],
+    labelWeights: {},
+    targetShortSeconds: target,
+    userSpecifiedDuration: compose.userSpecifiedDuration === true,
+    qualityFloor: PLAN_DEFAULTS.qualityFloor,
+    maxClipSeconds: PLAN_DEFAULTS.maxClipSeconds,
+    minClipSeconds: PLAN_DEFAULTS.minClipSeconds,
+    selectionStrategy: PLAN_DEFAULTS.selectionStrategy,
+    format: compose.format ?? PLAN_DEFAULTS.format,
+    transition: PLAN_DEFAULTS.transition,
+    styles: [],
+    avoid: [],
+    sampleEverySeconds: PLAN_DEFAULTS.sampleEverySeconds,
+    inferenceWidth: PLAN_DEFAULTS.inferenceWidth,
+    signals: { semantic: 0, motion: 0.6, saliency: 0.4 },
+    sources: undefined,
+    rationale: compose.outputTarget.name
+      ? `Compose output — ${compose.outputTarget.name}`
+      : "Compose output"
+  };
+}

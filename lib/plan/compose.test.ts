@@ -344,3 +344,128 @@ test("findSourceIndex: ordinals, video N, bare ordinal; not time ranges", () => 
   assert.equal(findSourceIndex("trim the first 30 seconds"), null);
   assert.equal(findSourceIndex("the best parts"), null);
 });
+
+
+// ---------------------------------------------------------------------
+// Issue #64 — messy compose prompts. Meta/output words must NEVER become
+// per-source topics; all-source compose carries duration/format/min-clips.
+// ---------------------------------------------------------------------
+
+const META_TOPIC_JUNK = [
+  "atleast", "at", "least", "sect", "select", "all", "min", "minute",
+  "minutes", "vertical", "horizontal", "combined", "video", "clip", "reel"
+];
+
+function assertNoFakeTopics(r: ReturnType<typeof deriveComposeIntent>) {
+  assert.ok(r, "should detect compose");
+  // No source query may be built from meta words.
+  for (const s of r!.plan.sources) {
+    for (const j of META_TOPIC_JUNK) {
+      assert.ok(
+        !s.query.split(/\s+/).includes(j),
+        `query leaked meta word "${j}": "${s.query}"`
+      );
+    }
+  }
+  // The message must not echo the garbage topics from the bug.
+  assert.ok(!/atleast sect all/i.test(r!.message), r!.message);
+  assert.ok(!/min vertical/i.test(r!.message), r!.message);
+}
+
+test("composeIntent #64: broken 'atleast sect 5 clip from all ... combined 5 min vertical'", () => {
+  const r = deriveComposeIntent(
+    "atleast sect 5 clip from all and make it as combined 5 min video vertical"
+  );
+  assertNoFakeTopics(r);
+  assert.equal(r!.plan.sourceScope, "all");
+  assert.equal(r!.plan.sources.length, 0); // no fabricated per-source picks
+  assert.equal(r!.plan.genericBestParts, true);
+  assert.equal(r!.plan.targetSeconds, 300);
+  assert.equal(r!.plan.format, "vertical");
+  assert.equal(r!.plan.minClipCount, 5);
+  // Message must not reference first/second video assignments.
+  assert.ok(!/first video|second video/i.test(r!.message), r!.message);
+});
+
+test("composeIntent #64: clean 'select at least 5 clips from all videos ... 5 min vertical'", () => {
+  const r = deriveComposeIntent(
+    "select at least 5 clips from all videos and make a combined 5 min vertical video"
+  );
+  assertNoFakeTopics(r);
+  assert.equal(r!.plan.sourceScope, "all");
+  assert.equal(r!.plan.targetSeconds, 300);
+  assert.equal(r!.plan.format, "vertical");
+  assert.equal(r!.plan.minClipCount, 5);
+  assert.equal(r!.plan.genericBestParts, true);
+});
+
+test("composeIntent #64: 'combine all videos into a 2 minute reel' → generic all-source", () => {
+  const r = deriveComposeIntent("combine all videos into a 2 minute reel");
+  assert.ok(r);
+  assert.equal(r!.plan.sourceScope, "all");
+  assert.equal(r!.plan.targetSeconds, 120);
+  assert.equal(r!.plan.format, "vertical");
+  assert.equal(r!.plan.genericBestParts, true);
+  assert.ok(!r!.plan.allSourcesTopic, "no fabricated topic");
+});
+
+test("composeIntent #64: 'take cooking parts from all videos and make 3 min vertical' → topic cooking", () => {
+  const r = deriveComposeIntent(
+    "take cooking parts from all videos and make 3 min vertical"
+  );
+  assert.ok(r);
+  assert.equal(r!.plan.sourceScope, "all");
+  assert.equal(r!.plan.allSourcesTopic, "cooking");
+  assert.equal(r!.plan.genericBestParts, false);
+  assert.equal(r!.plan.targetSeconds, 180);
+  assert.equal(r!.plan.format, "vertical");
+});
+
+test("composeIntent #64: 'select 5 clips from all videos' → count, not clip index", () => {
+  const r = deriveComposeIntent("select 5 clips from all videos");
+  assert.ok(r);
+  assert.equal(r!.plan.sourceScope, "all");
+  assert.equal(r!.plan.minClipCount, 5);
+  assert.equal(r!.plan.genericBestParts, true);
+});
+
+test("composeIntent #64: 'all video best 5 clip 2 min vertical' → all-source parsed fields", () => {
+  const r = deriveComposeIntent("all video best 5 clip 2 min vertical");
+  assert.ok(r);
+  assert.equal(r!.plan.sourceScope, "all");
+  assert.equal(r!.plan.targetSeconds, 120);
+  assert.equal(r!.plan.format, "vertical");
+  assert.equal(r!.plan.minClipCount, 5);
+  assertNoFakeTopics(r);
+});
+
+test("composeIntent #64: 'make tiktok from every upload 30 sec' → all-source vertical 30s", () => {
+  const r = deriveComposeIntent("make tiktok from every upload 30 sec");
+  assert.ok(r);
+  assert.equal(r!.plan.sourceScope, "all");
+  assert.equal(r!.plan.targetSeconds, 30);
+  assert.equal(r!.plan.format, "vertical");
+});
+
+test("composeIntent #64: 'make 1 min reel from all videos but avoid intro' → exclude intro", () => {
+  const r = deriveComposeIntent("make 1 min reel from all videos but avoid intro");
+  assert.ok(r);
+  assert.equal(r!.plan.sourceScope, "all");
+  assert.equal(r!.plan.targetSeconds, 60);
+  assert.equal(r!.plan.genericBestParts, true);
+  assert.ok(!r!.plan.allSourcesTopic, "intro must not become the topic");
+  assert.ok(/avoiding intro/i.test(r!.message), r!.message);
+});
+
+test("composeIntent #64: per-source semantic compose still carries duration/format", () => {
+  const r = deriveComposeIntent(
+    "combat from the first video and cutscene from the second, make it 1 min vertical"
+  );
+  assert.ok(r);
+  assert.equal(r!.plan.sourceScope, "explicit");
+  assert.equal(r!.plan.sources.length, 2);
+  assert.equal(r!.plan.sources[0].query, "combat moments");
+  assert.equal(r!.plan.sources[1].query, "cutscene moments");
+  assert.equal(r!.plan.targetSeconds, 60);
+  assert.equal(r!.plan.format, "vertical");
+});
