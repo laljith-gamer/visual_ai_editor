@@ -136,7 +136,7 @@ export function EditorStage({ onOpenClips, onRender, isRendering }: Props) {
 
   return (
     <main className={styles.stage}>
-      <section className="card">
+      <section className={`card ${styles.previewCard}`}>
         <div className="card-header row gap">
           <span>Preview</span>
           <div className="spacer" />
@@ -146,7 +146,7 @@ export function EditorStage({ onOpenClips, onRender, isRendering }: Props) {
             isRendering={isRendering}
           />
         </div>
-        <div className="card-body">
+        <div className={`card-body ${styles.previewBody}`}>
           <div className={styles.previewSplit}>
             {/* ─── Combined pane ─────────────────────────────────── */}
             <div className={styles.pane}>
@@ -236,9 +236,9 @@ export function EditorStage({ onOpenClips, onRender, isRendering }: Props) {
         </div>
       </section>
 
-      <section className="card">
+      <section className={`card ${styles.timelineCard}`}>
         <div className="card-header">Timeline</div>
-        <div className="card-body">
+        <div className={`card-body ${styles.timelineBody}`}>
           <Timeline />
           <ClipInspector />
         </div>
