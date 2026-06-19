@@ -492,3 +492,107 @@
     max-height: 210px;
   }
 }
+
+
+/* ----- v2.1 project-history restore: missing-source placeholders ----- */
+.missingBanner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 11px;
+  margin-bottom: 9px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line) 60%);
+  background: color-mix(in srgb, var(--warn) 9%, var(--bg-1));
+  font-size: 11px;
+  color: var(--text);
+}
+.missingBanner strong {
+  font-weight: 760;
+}
+.missingBanner .missingBannerFiles {
+  color: var(--text-faint);
+  word-break: break-word;
+}
+
+/* A missing source reuses .libraryItem but reads as "needs re-upload". */
+.libraryItem.missing {
+  opacity: 0.9;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--warn) 38%, var(--line) 62%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 90%, transparent), var(--bg-1));
+}
+.libraryItem.missing .libraryItemName {
+  color: var(--text-faint);
+}
+
+.missingTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 44%, var(--line) 56%);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.reuploadBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--line) 56%);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
+  transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
+}
+.reuploadBtn:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-1));
+}
+
+.restoreNotice {
+  padding: 8px 11px;
+  margin-bottom: 9px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line) 60%);
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-1));
+  font-size: 11px;
+  color: var(--text);
+}
+
+/* History project-summary meta row (chips). */
+.historyMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+}
+.historyChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-faint);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-2) 70%, transparent);
+  white-space: nowrap;
+}
+.historyChipWarn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line) 60%);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}

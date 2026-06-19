@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Upload,
   Plus,
   Trash2,
   History as HistoryIcon,
-  Film
+  Film,
+  AlertTriangle
 } from "lucide-react";
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { safeVideoFingerprint } from "@/lib/util/hash";
@@ -14,14 +15,16 @@ import { probeVideo } from "@/lib/pipeline/sample";
 import { formatTime } from "@/lib/util/time";
 import { logUser } from "@/lib/log/recorders";
 import { LIBRARY_LIMITS, SOURCE_COLORS } from "@/lib/config";
+import { summarizeSession } from "@/lib/store/projectRestore";
 import styles from "./ProjectRail.module.css";
 
 export function ProjectRail() {
   const fileRef = useRef<HTMLInputElement>(null);
   const sources = useEditorStore((s) => s.sources);
+  const missingSources = useEditorStore((s) => s.missingSources);
   const activeSourceId = useEditorStore((s) => s.activeSourceId);
   const selectedSourceIds = useEditorStore((s) => s.selectedSourceIds);
-  const addSource = useEditorStore((s) => s.addSource);
+  const hydrateRestoredSource = useEditorStore((s) => s.hydrateRestoredSource);
   const removeSource = useEditorStore((s) => s.removeSource);
   const setActiveSource = useEditorStore((s) => s.setActiveSource);
   const selectAllSources = useEditorStore((s) => s.selectAllSources);
@@ -36,6 +39,9 @@ export function ProjectRail() {
   const restoreSession = useEditorStore((s) => s.restoreSession);
   const removeSession = useEditorStore((s) => s.removeSession);
 
+  // Transient "Restored previous video: …" confirmation after a hash match.
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
+
   useEffect(() => {
     void refreshHistory();
   }, [refreshHistory]);
@@ -45,6 +51,7 @@ export function ProjectRail() {
     [sources]
   );
   const atCountCap = sources.length >= LIBRARY_LIMITS.maxCount;
+  const hasLibrary = sources.length > 0 || missingSources.length > 0;
 
   async function handleFiles(fileList: FileList) {
     const files = Array.from(fileList);
@@ -52,7 +59,13 @@ export function ProjectRail() {
       try {
         const probe = await probeVideo(file);
         const hash = await safeVideoFingerprint(file);
-        const added = addSource(
+        // Was this file one of the project's missing sources? Decide by
+        // HASH only (filenames are weak), BEFORE hydration mutates state.
+        const matched = useEditorStore
+          .getState()
+          .missingSources.find((p) => p.hash === hash);
+
+        const added = hydrateRestoredSource(
           file,
           {
             name: file.name,
@@ -70,19 +83,34 @@ export function ProjectRail() {
           );
           break;
         }
-        logUser({
-          sessionId,
-          kind: "video.uploaded",
-          payload: {
-            sourceId: added.id,
-            name: file.name,
-            sizeBytes: file.size,
-            durationSeconds: Math.round(probe.duration),
-            width: probe.width,
-            height: probe.height
-          },
-          summary: `Added "${file.name}" (${Math.round(probe.duration)}s, ${probe.width}×${probe.height})`
-        });
+        if (matched) {
+          setRestoreNotice(`Restored previous video: ${matched.meta.name}`);
+          logUser({
+            sessionId,
+            kind: "video.uploaded",
+            payload: {
+              sourceId: added.id,
+              name: file.name,
+              restored: true,
+              matchedSourceId: matched.id
+            },
+            summary: `Reconnected "${file.name}" to the restored project (hash match)`
+          });
+        } else {
+          logUser({
+            sessionId,
+            kind: "video.uploaded",
+            payload: {
+              sourceId: added.id,
+              name: file.name,
+              sizeBytes: file.size,
+              durationSeconds: Math.round(probe.duration),
+              width: probe.width,
+              height: probe.height
+            },
+            summary: `Added "${file.name}" (${Math.round(probe.duration)}s, ${probe.width}×${probe.height})`
+          });
+        }
       } catch (err) {
         console.error("Failed to load video", err);
         alert(`Couldn't read "${file.name}": ${(err as Error).message}`);
@@ -131,7 +159,25 @@ export function ProjectRail() {
           </div>
         </div>
         <div className={`card-body ${styles.libraryBody}`}>
-          {sources.length === 0 ? (
+          {/* Missing-source banner — honest, hash-based restore prompt. */}
+          {missingSources.length > 0 && (
+            <div className={styles.missingBanner}>
+              <strong>
+                This project needs {missingSources.length} missing{" "}
+                {missingSources.length === 1 ? "video" : "videos"}.
+              </strong>
+              <span className={styles.missingBannerFiles}>
+                Re-upload:{" "}
+                {missingSources.map((p) => p.meta.name).join(", ")}
+              </span>
+            </div>
+          )}
+
+          {restoreNotice && (
+            <div className={styles.restoreNotice}>{restoreNotice}</div>
+          )}
+
+          {!hasLibrary ? (
             <button
               className={`btn primary ${styles.uploadBtn}`}
               onClick={() => fileRef.current?.click()}
@@ -199,6 +245,40 @@ export function ProjectRail() {
                     </li>
                   );
                 })}
+
+                {/* Missing placeholders — keep the original id; show a
+                    re-upload affordance. No object URL is ever created. */}
+                {missingSources.map((p) => (
+                  <li
+                    key={p.id}
+                    className={`${styles.libraryItem} ${styles.missing}`}
+                  >
+                    <span
+                      className={styles.colorDot}
+                      style={{ background: "var(--warn)" }}
+                      aria-hidden
+                    />
+                    <div className={styles.libraryItemBody}>
+                      <span className={styles.libraryItemName}>{p.meta.name}</span>
+                      <span className={styles.libraryItemMeta}>
+                        <span className="mono">{formatTime(p.meta.duration)}</span>
+                        {p.meta.aspect && <span className="badge">{p.meta.aspect}</span>}
+                        <span className={styles.missingTag}>
+                          <AlertTriangle size={9} /> Missing — re-upload to restore
+                        </span>
+                      </span>
+                    </div>
+                    <div className={styles.libraryItemActions}>
+                      <button
+                        className={styles.reuploadBtn}
+                        onClick={() => fileRef.current?.click()}
+                        title={`Re-upload "${p.meta.name}" to reconnect this project`}
+                      >
+                        <Upload size={11} /> Re-upload
+                      </button>
+                    </div>
+                  </li>
+                ))}
               </ul>
 
               <div className={styles.libraryControls}>
@@ -290,29 +370,63 @@ export function ProjectRail() {
             <p className="faint">Past sessions show up here.</p>
           ) : (
             <ul className={styles.historyList}>
-              {history.slice(0, 8).map((h) => (
-                <li key={h.id} className={styles.historyItem}>
-                  <button
-                    className={styles.historyButton}
-                    onClick={() => void restoreSession(h.id)}
-                  >
-                    <span className={styles.historyTitle}>{h.title}</span>
-                    <span className="faint">
-                      {new Date(h.updatedAt).toLocaleString()}
-                      {h.sources && h.sources.length > 1
-                        ? ` · ${h.sources.length} videos`
-                        : ""}
-                    </span>
-                  </button>
-                  <button
-                    className="btn icon danger"
-                    aria-label="Delete session"
-                    onClick={() => void removeSession(h.id)}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </li>
-              ))}
+              {history.slice(0, 8).map((h) => {
+                const sum = summarizeSession(h);
+                return (
+                  <li key={h.id} className={styles.historyItem}>
+                    <button
+                      className={styles.historyButton}
+                      onClick={() => void restoreSession(h.id)}
+                      title={sum.lastAction ?? h.title}
+                    >
+                      <span className={styles.historyTitle}>{h.title}</span>
+                      <span className="faint">
+                        {new Date(h.updatedAt).toLocaleString()}
+                      </span>
+                      <span className={styles.historyMeta}>
+                        {sum.sourceCount > 0 && (
+                          <span className={styles.historyChip}>
+                            {sum.sourceCount}{" "}
+                            {sum.sourceCount === 1 ? "video" : "videos"}
+                          </span>
+                        )}
+                        {sum.clipCount > 0 && (
+                          <span className={styles.historyChip}>
+                            {sum.clipCount} clip{sum.clipCount === 1 ? "" : "s"}
+                          </span>
+                        )}
+                        {sum.totalDurationSeconds > 0 && (
+                          <span className={styles.historyChip}>
+                            {formatTime(sum.totalDurationSeconds)}
+                          </span>
+                        )}
+                        {sum.format && (
+                          <span className={styles.historyChip}>{sum.format}</span>
+                        )}
+                        {sum.status !== "idle" && (
+                          <span className={styles.historyChip}>
+                            {labelStatus(sum.status)}
+                          </span>
+                        )}
+                        {sum.missingCount > 0 && (
+                          <span
+                            className={`${styles.historyChip} ${styles.historyChipWarn}`}
+                          >
+                            {sum.missingCount} missing
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                    <button
+                      className="btn icon danger"
+                      aria-label="Delete session"
+                      onClick={() => void removeSession(h.id)}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

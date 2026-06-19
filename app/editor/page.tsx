@@ -2453,6 +2453,21 @@ export default function Home() {
   const handleRender = useCallback(async () => {
     const cur = useEditorStore.getState();
     if (highlights.length === 0) return;
+    // v2.1 — render guard: never invoke ffmpeg/mediabunny when a clip
+    // references a source whose bytes aren't loaded (a restored project
+    // awaiting re-upload). Surface an honest re-upload prompt instead.
+    if (!cur.canRenderCurrentTimeline()) {
+      const missing = cur.usedMissingSources();
+      const names = missing.map((m) => m.meta.name).join(", ");
+      pushMessage({
+        role: "assistant",
+        content:
+          missing.length > 0
+            ? `Re-upload the missing source ${missing.length === 1 ? "video" : "videos"} before rendering: ${names}.`
+            : "Upload a video first, then I can render."
+      });
+      return;
+    }
     const sources = cur.sources;
     if (sources.length === 0 && !videoBlob) {
       pushMessage({
