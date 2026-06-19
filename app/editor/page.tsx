@@ -45,8 +45,7 @@ import {
 } from "@/lib/store/cache";
 import { friendlyStorageError } from "@/lib/store/idb";
 import { projectPersistSignature } from "@/lib/store/projectSignature";
-import { parseMetaQuestion } from "@/lib/intent/metaQuestions";
-import { answerMetaQuestion, type MetaAnswerState } from "@/lib/agent/metaAnswer";
+import { classifyTurn, respondReadOnly } from "@/lib/agent/conversationLane";
 import { sha1String } from "@/lib/util/hash";
 import { logAi, logSystem, logUser } from "@/lib/log/recorders";
 import { summarizeRecentActivity } from "@/lib/log/summarize";
@@ -596,63 +595,29 @@ export default function Home() {
       // passthrough turns so behaviour is unchanged there.
       let intakeCompiledPrompt: string | undefined;
 
-      // ---- Meta / explanation question guard (READ-ONLY) -------------
+      // ---- Conversation-intent guard (READ-ONLY lane) ---------------
       // Runs BEFORE every mutation path (agent command parser, transition
-      // parser, quick-shortcut, cloud planner, local planner). Questions
-      // like "explain why you did these changes" / "what changed" / "why
-      // only fade" must be ANSWERED in chat, never routed into an editor
-      // that mutates the timeline. It never changes highlights / plan /
-      // status, never runs analysis, and returns immediately on a match.
+      // parser, agentic intake, quick-shortcut, cloud planner, local
+      // planner, runPipeline). A semantic classifier (grammar-level Layer A
+      // + optional already-loaded local LLM for ambiguous turns) decides if
+      // this turn is a read-only question ("why did you arrange it like
+      // this", "what will happen if I render", "did you change my original
+      // video"). If so we ANSWER from current state and return — never
+      // touching highlights / plan / transitions / selection / status.
       try {
-        const meta = parseMetaQuestion(userRequest);
-        if (meta && meta.confidence >= 0.6) {
-          const st = useEditorStore.getState();
-          const lastAssistant =
-            [...st.messages].reverse().find((m) => m.role === "assistant")?.content ?? null;
-          const metaState: MetaAnswerState = {
-            questionText: userRequest,
-            plan: st.plan
-              ? {
-                  targetShortSeconds: st.plan.targetShortSeconds,
-                  userSpecifiedDuration: st.plan.userSpecifiedDuration,
-                  format: st.plan.format,
-                  transition: st.plan.transition,
-                  scenarios: st.plan.scenarios?.map((sc) => ({ id: sc.id, prompt: sc.prompt })),
-                  rationale: st.plan.rationale
-                }
-              : null,
-            highlights: st.highlights.map((h) => ({
-              id: h.id,
-              start: h.start,
-              end: h.end,
-              label: h.label,
-              reason: h.reason,
-              sourceId: h.sourceId,
-              score: h.score
-            })),
-            selectedClipId: st.selectedClipId,
-            boundaryTransitions: st.boundaryTransitions.map((t) => ({
-              index: t.index,
-              type: t.type,
-              mode: t.mode,
-              render: t.render,
-              exact: t.exact,
-              note: t.note
-            })),
-            memory: st.memory,
-            sources: st.sources.map((s) => ({ id: s.id, name: s.meta.name })),
-            lastAssistantMessage: lastAssistant,
-            lastUserMessage: null
-          };
-          const answer = answerMetaQuestion(meta, metaState);
+        const intent = await classifyTurn(userRequest);
+        if (intent.kind === "read_only_meta" && intent.confidence >= 0.6) {
+          const answer = await respondReadOnly(intent, userRequest);
           pushMessage({
             role: "assistant",
             content: answer,
-            attachment: { mode: "meta", kind: meta.kind, target: meta.target }
+            attachment: { mode: "meta", kind: intent.kind, target: intent.target }
           });
-          // Deliberately read-only: do NOT touch highlights, plan, or the
-          // project status. Just clear the local busy spinner.
-          logSession.ai("meta.explained", { kind: meta.kind, target: meta.target }, answer.slice(0, 140));
+          logSession.ai(
+            "meta.explained",
+            { target: intent.target, confidence: intent.confidence, ambiguous: Boolean(intent.ambiguous) },
+            answer.slice(0, 140)
+          );
           setBusy(false);
           return;
         }
@@ -660,7 +625,7 @@ export default function Home() {
         logSession.system(
           "meta.path.failed",
           { message: (err as Error).message, userRequest },
-          `Meta guard errored, falling back: ${(err as Error).message.slice(0, 80)}`
+          `Conversation guard errored, falling back: ${(err as Error).message.slice(0, 80)}`
         );
       }
 

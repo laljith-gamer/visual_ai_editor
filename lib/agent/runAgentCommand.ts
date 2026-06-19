@@ -38,8 +38,7 @@ import { orchestrate, type AgentDecision, type ResolvedOp } from "./orchestrator
 import { classifyFastCommand, decideFastAction, type FastCommand } from "@/lib/intent/fastCommands";
 import { hydrateAgentMemory, saveAgentMemory } from "@/lib/agent-memory/persistence";
 import { parseTransitionCommand, type TransitionCommand } from "@/lib/intent/transitionCommands";
-import { parseMetaQuestion } from "@/lib/intent/metaQuestions";
-import { answerMetaQuestion, type MetaAnswerState } from "@/lib/agent/metaAnswer";
+import { classifyTurnSync, respondReadOnlySync } from "@/lib/agent/conversationLane";
 import { mapTransition } from "@/lib/transitions/map";
 import { normalizeTransitionDuration, type BoundaryTransition } from "@/lib/transitions/types";
 
@@ -127,62 +126,29 @@ function buildContext(memory: AgentMemoryStore): {
   return { ctx, getTranscript };
 }
 
-/** Snapshot the store into the read-only state the meta answerer needs. */
-function buildMetaAnswerState(): MetaAnswerState {
-  const s = useEditorStore.getState();
-  const lastAssistant =
-    [...s.messages].reverse().find((m) => m.role === "assistant")?.content ?? null;
-  return {
-    plan: s.plan
-      ? {
-          targetShortSeconds: s.plan.targetShortSeconds,
-          userSpecifiedDuration: s.plan.userSpecifiedDuration,
-          format: s.plan.format,
-          transition: s.plan.transition,
-          scenarios: s.plan.scenarios?.map((sc) => ({ id: sc.id, prompt: sc.prompt })),
-          rationale: s.plan.rationale
-        }
-      : null,
-    highlights: s.highlights.map((h) => ({
-      id: h.id,
-      start: h.start,
-      end: h.end,
-      label: h.label,
-      reason: h.reason,
-      sourceId: h.sourceId,
-      score: h.score
-    })),
-    selectedClipId: s.selectedClipId,
-    boundaryTransitions: s.boundaryTransitions.map((t) => ({
-      index: t.index,
-      type: t.type,
-      mode: t.mode,
-      render: t.render,
-      exact: t.exact,
-      note: t.note
-    })),
-    memory: s.memory,
-    sources: s.sources.map((src) => ({ id: src.id, name: src.meta.name })),
-    lastAssistantMessage: lastAssistant,
-    lastUserMessage: null
-  };
-}
-
 /** Entry point called from the editor BEFORE the quick-shortcut gate. */
 export async function tryAgentCommand(
   userText: string,
   deps: AgentCommandDeps
 ): Promise<AgentCommandOutcome> {
-  // ---- Meta / explanation question guard (READ-ONLY, double safety) -
-  // The editor already runs this before tryAgentCommand, but guarding here
-  // too means ANY caller (e.g. the dev intent tester) can never mutate the
-  // timeline on an explanation question. Read-only: it only pushes an
-  // answer built from current state.
-  const meta = parseMetaQuestion(userText);
-  if (meta && meta.confidence >= 0.6) {
-    const answer = answerMetaQuestion(meta, { ...buildMetaAnswerState(), questionText: userText });
-    deps.pushMessage({ role: "assistant", content: answer, attachment: { mode: "meta", kind: meta.kind } });
-    deps.logSession.ai("meta.explained", { kind: meta.kind, target: meta.target }, answer.slice(0, 140));
+  // ---- Read-only conversation guard (double safety) -----------------
+  // The editor already runs the (richer, async) conversation lane before
+  // tryAgentCommand. This synchronous Layer-A check means ANY caller (e.g.
+  // the dev intent tester) can never mutate the timeline on an explanation
+  // question. Read-only: it only pushes a deterministic answer from state.
+  const convo = classifyTurnSync(userText);
+  if (convo.kind === "read_only_meta" && convo.confidence >= 0.6) {
+    const answer = respondReadOnlySync(convo, userText);
+    deps.pushMessage({
+      role: "assistant",
+      content: answer,
+      attachment: { mode: "meta", target: convo.target }
+    });
+    deps.logSession.ai(
+      "meta.explained",
+      { target: convo.target, confidence: convo.confidence },
+      answer.slice(0, 140)
+    );
     return { handled: true };
   }
 
