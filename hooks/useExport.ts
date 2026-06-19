@@ -13,15 +13,11 @@ export interface ExportOutcome {
 }
 
 /**
- * PR 57 — reliable export of the rendered short.
+ * Reliable system export of the rendered short.
  *
  * Reads the in-memory rendered blob + session title from the store, builds
- * the deterministic filename, and shares/downloads it. Returns an outcome
- * with a message so the caller (Export button OR chat "export") can show
- * clear feedback — export never silently does nothing:
- *   - no rendered blob → "Render first".
- *   - browser blocked the save → fallback guidance.
- *   - success → "Saved <filename>".
+ * the deterministic filename, and triggers a direct browser/system download.
+ * It intentionally does not use the Web Share sheet: Export means save file.
  */
 export function useExport() {
   return useCallback(async (): Promise<ExportOutcome> => {
@@ -39,14 +35,13 @@ export function useExport() {
       filename,
       title: "Shorts Studio export"
     });
-    if (res.shared) return { ok: true, filename, message: `Shared ${filename}.` };
     if (res.downloaded) return { ok: true, filename, message: `Saved ${filename} to your downloads.` };
     if (res.cancelled) return { ok: false, reason: "cancelled", message: "Export cancelled." };
     return {
       ok: false,
       reason: "blocked",
       message:
-        "Your browser blocked the download. Allow downloads/pop-ups for this site and try again, or right-click the preview video and choose \u201cSave video as\u2026\u201d."
+        "Your browser blocked the download. Allow downloads/pop-ups for this site and try again, or right-click the preview video and choose “Save video as…”."
     };
   }, []);
 }
