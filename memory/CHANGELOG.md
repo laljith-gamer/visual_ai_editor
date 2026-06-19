@@ -17,6 +17,70 @@
 
 ---
 
+### 2026-06-19 — Agentic intake layer (universal vague-request handling, Phase 1)
+- **Change made:** Added a NEW universal layer BEFORE the existing planner so
+  the app behaves like an agentic editor for vague/messy requests ("make this
+  cool", "make a reel", "edit for YouTube") instead of feeding bad prompts to
+  the planner. It does not replace the planner — it improves the input.
+  - **`lib/agentic-intake/editBrief.ts` (new, pure):** the universal
+    `EditBrief` type (intentKind / sourceScope / output / content / style /
+    effects / constraints / confidence / missing) + `createEmptyBrief` +
+    `mergeBrief` (multi-turn merge — a known value never loses to "unknown").
+  - **`lib/agentic-intake/capabilityMatrix.ts` (new, pure):** honest
+    `CAPABILITY_MATRIX` (supported: vertical/horizontal/square output, trim/
+    extract, highlight reel, continuous, merge/compose, fade, keep-original
+    audio; partial: crossfade=fade-dip, crop_reframe; UNSUPPORTED: slow_zoom,
+    speed_change/ramp, color_grade, camera_shake, letterbox, text_overlay,
+    captions, blur, lower/mute audio, music/SFX/voiceover) + `classifyEffects`.
+  - **`lib/agentic-intake/inferBrief.ts` (new, pure):** `inferBrief` /
+    `finalizeBrief` / `computeMissing`. Reuses `videoPromptInterpreter`
+    (duration/format/platform/scope/topic/exclusions). Infers obvious defaults
+    (one video → current scope; platform → format). NO genre table — subject
+    words are treated uniformly; style/scope words are stripped so "dark
+    trailer" never becomes a fake content focus.
+  - **`lib/agentic-intake/questionEngine.ts` (new, pure):** `decideQuestion`
+    asks ONE focused option-chip question at a time in priority order
+    (source_scope → output_type → content_focus → duration → format → style →
+    text → audio → avoid), returning the existing `ClarifyQuestion` shape.
+  - **`lib/agentic-intake/promptCompiler.ts` (new, pure):** `compileBriefPrompt`
+    (clean, structured, capability-honest planner prompt — never echoes raw
+    text; unsupported effects listed as future requests, never claimed) +
+    `briefSummaryMessage` ("Got it — I'll make a 35s vertical dark trailer…").
+  - **`lib/agentic-intake/routeDecision.ts` (new, pure):** `decideRoute` →
+    fast_command / vision_briefing / clarify / deterministic / cloud_planner /
+    local_planner / manual_fallback (capability-aware; describe with no cloud
+    vision → honest manual_fallback, never a text-only planner).
+  - **`lib/agentic-intake/intake.ts` (new, pure):** `planIntake` orchestrator
+    → clarify / proceed (compiled prompt + summary) / passthrough.
+  - **`lib/agentic-intake/runIntake.ts` (new, client):** store adapter with a
+    per-session partial brief (multi-turn) — the only store-aware piece.
+  - **Integration (`app/editor/page.tsx`):** intake runs AFTER `tryAgentCommand`
+    and BEFORE the quick-shortcut/cloud paths. Conservative + additive — it only
+    shepherds fresh creation requests (clarify → reuses `pendingClarify` +
+    `QuickReplies`; proceed → clears stale clarify + hands the compiled prompt
+    to the local-planner fallback); refinements (a plan exists), describe/vision,
+    and fast commands pass straight through unchanged.
+  - **`lib/local-llm/localPlanner.ts`:** `tryLocalPlannerFallback` accepts an
+    optional `ctx.compiledPrompt` and plans from it instead of raw messy text
+    (vision-honesty guard still runs on the original request).
+- **Files affected:** `lib/agentic-intake/{editBrief,capabilityMatrix,inferBrief,
+  questionEngine,promptCompiler,routeDecision,intake,runIntake}.ts` (+
+  `inferBrief.test.ts`, `intake.test.ts`), `lib/local-llm/localPlanner.ts`,
+  `app/editor/page.tsx`, `package.json` (test + test:intake scripts).
+- **Reason:** Real users give vague/messy requests; the app must ask only the
+  missing high-impact questions, infer obvious defaults, build a stable brief,
+  and send a clean compiled prompt to the planner — universally (any video,
+  any goal), with no genre hardcoding and no fake capability claims.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓ (/editor 174 kB;
+  intake is a lazy chunk), `npm test` = **225 pass / 0 fail** (+27 new). Browser/
+  WebGPU + live planner runtime verification still required (sandbox has neither).
+- **Scope honesty:** Phase 1 only. Phase 3 (real visual-effect renderer, burned
+  text overlays, audio SFX, capability-aware render warnings) is NOT done — the
+  capability matrix marks those unsupported and the prompt compiler preserves
+  them as requests, never as rendered.
+
+---
+
 ### 2026-06-19 — Issue #64: professional video-prompt interpreter + all-source compose
 - **Change made:** Messy editing prompts no longer fabricate topics. A new pure
   interpreter extracts structured slots before the specialized detectors run.

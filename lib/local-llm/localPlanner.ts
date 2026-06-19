@@ -84,13 +84,22 @@ interface LocalPlannerJson {
  */
 export async function tryLocalPlannerFallback(
   userRequest: string,
-  ctx: { videoDurationSeconds?: number } = {}
+  ctx: { videoDurationSeconds?: number; compiledPrompt?: string } = {}
 ): Promise<LocalPlanResult> {
   if (isLocalVisionRequest(userRequest)) {
     return { kind: "unsupported", reason: "vision" };
   }
 
-  const quick = quickOfflinePlan(userRequest);
+  // v2.1 — When the agentic intake layer has compiled a clean, structured
+  // brief for this turn, plan from THAT instead of the raw messy text. The
+  // vision-honesty guard above still runs on the original request so a
+  // "describe the video" ask is never mis-handled as an edit.
+  const planningInput =
+    typeof ctx.compiledPrompt === "string" && ctx.compiledPrompt.trim()
+      ? ctx.compiledPrompt.trim()
+      : userRequest;
+
+  const quick = quickOfflinePlan(planningInput);
   if (quick) return quick;
 
   if (!isWebGPUAvailable()) return null;
@@ -99,7 +108,7 @@ export async function tryLocalPlannerFallback(
   try {
     raw = await localChatJson(
       LOCAL_PLANNER_SYSTEM,
-      buildUserPrompt(userRequest, ctx),
+      buildUserPrompt(planningInput, ctx),
       { maxTokens: 1024, temperature: 0.3 }
     );
   } catch {

@@ -579,6 +579,12 @@ export default function Home() {
       pushMessage({ role: "user", content: userRequest });
       const previousPlan = useEditorStore.getState().plan;
 
+      // v2.1 — Agentic intake may compile a clean, structured brief for this
+      // turn. When it does, the local-planner fallback (below) plans from the
+      // compiled prompt instead of the raw messy text. Stays undefined for
+      // passthrough turns so behaviour is unchanged there.
+      let intakeCompiledPrompt: string | undefined;
+
       // ---- Agentic command layer (deterministic-first) ---------------
       // Resolve natural editing commands (source/clip/range/concept/
       // placement references, append-vs-replace-vs-move-vs-remove,
@@ -613,6 +619,64 @@ export default function Home() {
           "agent.command.path.failed",
           { message: (err as Error).message, userRequest },
           `Agent command path errored, falling back: ${(err as Error).message.slice(0, 80)}`
+        );
+      }
+
+      // ---- v2.1 — Agentic intake layer (universal vague-request handling) -
+      // Sits BEFORE the planner and improves the input sent to it. It turns
+      // vague/messy requests ("make this cool", "make a reel") into a guided
+      // question (reusing pendingClarify + QuickReplies), builds a stable
+      // EditBrief across turns, and — when enough info exists — compiles a
+      // clean, professional prompt for the planner. It is conservative and
+      // ADDITIVE: it only shepherds fresh creation requests, never refinements
+      // (a plan already exists), describe/vision asks, or fast commands — all
+      // of which it passes straight through to the unchanged paths below.
+      try {
+        const { runIntake } = await import("@/lib/agentic-intake/runIntake");
+        const intake = runIntake(userRequest, {
+          // The editor always has the /api/agent path; the local planner is
+          // gated by its own flags + WebGPU inside tryLocalPlannerRecovery.
+          cloudAvailable: true,
+          localPlannerAvailable: false,
+          cloudVisionAvailable: true
+        });
+        if (intake.kind === "clarify") {
+          // Ask ONE focused question with option chips. No raw-text echo.
+          pushMessage({
+            role: "assistant",
+            content: intake.message,
+            attachment: { mode: "intake", field: intake.question.id }
+          });
+          setPendingClarify({
+            message: intake.message,
+            questions: [intake.question]
+          });
+          logSession.ai(
+            "intake.clarify",
+            { field: intake.question.id, missing: intake.brief.missing },
+            intake.message
+          );
+          setBusy(false);
+          return;
+        }
+        if (intake.kind === "proceed") {
+          // Enough info — hand a clean compiled prompt to the local-planner
+          // fallback and clear any stale clarify. The cloud planner still runs
+          // on the full conversation; this only improves the offline path.
+          intakeCompiledPrompt = intake.compiledPrompt;
+          useEditorStore.getState().setPendingClarify(null);
+          logSession.ai(
+            "intake.proceed",
+            { route: intake.route.target, intent: intake.brief.intentKind },
+            intake.summary
+          );
+        }
+        // intake.kind === "passthrough" → leave everything to the paths below.
+      } catch (err) {
+        logSession.system(
+          "intake.path.failed",
+          { message: (err as Error).message, userRequest },
+          `Intake layer errored, falling back: ${(err as Error).message.slice(0, 80)}`
         );
       }
 
@@ -697,7 +761,8 @@ export default function Home() {
             "@/lib/local-llm/localPlanner"
           );
           const local = await tryLocalPlannerFallback(req, {
-            videoDurationSeconds: videoMeta?.duration
+            videoDurationSeconds: videoMeta?.duration,
+            compiledPrompt: intakeCompiledPrompt
           });
           if (local && local.kind === "plan") {
             logSession.ai(
