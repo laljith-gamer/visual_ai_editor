@@ -44,6 +44,7 @@ import {
   trimCache
 } from "@/lib/store/cache";
 import { friendlyStorageError } from "@/lib/store/idb";
+import { projectPersistSignature } from "@/lib/store/projectSignature";
 import { sha1String } from "@/lib/util/hash";
 import { logAi, logSystem, logUser } from "@/lib/log/recorders";
 import { summarizeRecentActivity } from "@/lib/log/summarize";
@@ -100,7 +101,6 @@ export default function Home() {
   const memory = useEditorStore((s) => s.memory);
   const plan = useEditorStore((s) => s.plan);
   const highlights = useEditorStore((s) => s.highlights);
-  const messages = useEditorStore((s) => s.messages);
   const recomputeAutoTransitions = useEditorStore((s) => s.recomputeAutoTransitions);
 
   // PR 59 — recompute auto transitions whenever the clip SEQUENCE changes
@@ -141,11 +141,20 @@ export default function Home() {
     }
   }, [events.length, activityDrawerOpen]);
 
-  // Persist when meaningful state transitions happen.
+  // Persist whenever any DURABLE project state changes — not just chat /
+  // plan / highlight COUNT. The signature (a pure, cheap string) covers
+  // sources, missing placeholders, active/selected source, selected clip,
+  // boundary transitions, pending op/exec, mode, inferred chips, tier, last
+  // briefing, memory, status, etc. `progress` is intentionally excluded so a
+  // running pipeline's per-frame ticks don't spam IndexedDB. A debounce
+  // coalesces rapid edits into one write.
+  const persistSignature = useEditorStore((s) => projectPersistSignature(s));
   useEffect(() => {
-    void persist();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlights.length, plan?.scenarios.length, messages.length]);
+    const t = setTimeout(() => {
+      void persist();
+    }, 500);
+    return () => clearTimeout(t);
+  }, [persistSignature, persist]);
 
   // ---- Helper: log AI / system / user events with the active sessionId ---
   const logSession = useMemo(
