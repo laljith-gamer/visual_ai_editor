@@ -43,6 +43,15 @@ export function isWebGPUAvailable(): boolean {
 // load clears the cache so a later retry can start fresh.
 let enginePromise: Promise<MLCEngineInterface> | null = null;
 let loadedModel: string | null = null;
+let engineReady = false;
+
+/** True when the local engine has FINISHED loading and is ready to answer.
+ *  Used by the read-only conversation lane to decide whether it can cheaply
+ *  use the local model for classification/answers WITHOUT triggering a fresh
+ *  multi-hundred-MB model download just for a question. */
+export function isLocalEngineReady(): boolean {
+  return engineReady;
+}
 
 /**
  * Load (or reuse) the local WebLLM engine for `model`. Reports download/
@@ -85,11 +94,13 @@ export async function loadLocalEngine(
       progress: 1,
       text: "Local AI ready"
     });
+    engineReady = true;
     return engine;
   })().catch((err) => {
     // Reset the cache so a later turn can retry from scratch.
     enginePromise = null;
     loadedModel = null;
+    engineReady = false;
     setLocalAIStatus({
       phase: "error",
       progress: 0,
@@ -122,6 +133,30 @@ export async function localChatJson(
     temperature: opts.temperature ?? 0.3,
     max_tokens: opts.maxTokens ?? 1024,
     response_format: { type: "json_object" }
+  });
+  return completion.choices?.[0]?.message?.content ?? "";
+}
+
+/**
+ * Run a single TEXT (free-form, NOT JSON) completion on the local engine.
+ * Used by the read-only conversation lane to produce a natural explanation.
+ * Read-only by contract: the caller's prompt forbids actions, and the answer
+ * is sanity-checked upstream before use.
+ */
+export async function localChatText(
+  system: string,
+  user: string,
+  opts: { maxTokens?: number; temperature?: number } = {}
+): Promise<string> {
+  const engine = await loadLocalEngine();
+  const completion = await engine.chat.completions.create({
+    stream: false,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user }
+    ],
+    temperature: opts.temperature ?? 0.4,
+    max_tokens: opts.maxTokens ?? 320
   });
   return completion.choices?.[0]?.message?.content ?? "";
 }

@@ -17,6 +17,60 @@
 
 ---
 
+### 2026-06-19 — Semantic conversation-intent layer (replaces regex meta guard)
+- **Change made:** Replaced the brittle exact-phrase regex guard in
+  `metaQuestions.ts` with a semantic, situation-understanding conversation
+  layer that decides — like a conversational editor — whether a turn is a
+  READ-ONLY question or a request to CHANGE something, so explanation
+  questions are answered in chat and NEVER mutate the timeline, while real
+  edits still edit.
+  - **`lib/intent/conversationIntent.ts` (new, pure, no runtime imports):** a
+    two-layer classifier. Layer A is grammar-LEVEL (question vs command form,
+    edit-verb POSITION, past-tense vs future-imperative, references to the
+    current edit, capability/effect mentions) — NOT a phrase list; it returns
+    high confidence only on obvious cases. Layer B is an optional text-only
+    LLM classifier (strict JSON, never a plan) used ONLY for ambiguous turns.
+    `ConversationIntent { kind, confidence, readOnly, target, reason,
+    ambiguous }`. Conservative merge: the LLM can't downgrade a read-only turn
+    to a mutation unless very confident — never mutate on ambiguity.
+  - **`lib/agent/readOnlyResponder.ts` (new, pure):** improved, state-grounded
+    answerer. Builds a structured state summary + capability summary; prefers
+    a natural LLM answer (read-only prompt, rejected if it falsely claims an
+    edit) and falls back to a deterministic answer. Honest "did you change my
+    original video → no", capability limits, "No edit has been applied yet.",
+    and an explain-first / offer-to-apply note for ambiguous turns.
+  - **`lib/agent/conversationLane.ts` (new, client bridge):** snapshots the
+    store into the classifier context + responder state, and wires the local
+    LLM ONLY when it's already loaded (never triggers a fresh model download
+    just to answer a question).
+  - **`lib/intent/metaQuestions.ts`:** reduced to a thin compatibility shim
+    over Layer A (kept the `MetaQuestion` type; removed the long regex table).
+  - **`lib/local-llm/webllm.ts`:** added `isLocalEngineReady()` and a
+    free-text `localChatText()` for the optional natural-answer path.
+  - **Integration:** `app/editor/page.tsx` `handleAgent` now runs the async
+    `classifyTurn` + `respondReadOnly` BEFORE every mutation path; on a
+    read-only meta turn it answers, logs `meta.explained`, and returns without
+    touching highlights / plan / transitions / selection / status.
+    `lib/agent/runAgentCommand.ts` keeps a synchronous Layer-A double-safety
+    guard (`classifyTurnSync` + `respondReadOnlySync`).
+- **Files affected:** `lib/intent/conversationIntent.ts` (+ `.test.ts`),
+  `lib/agent/readOnlyResponder.ts` (+ `.test.ts`), `lib/agent/conversationLane.ts`,
+  `lib/intent/metaQuestions.ts` (+ trimmed `.test.ts`), `lib/local-llm/webllm.ts`,
+  `app/editor/page.tsx`, `lib/agent/runAgentCommand.ts`, `package.json`.
+- **Reason:** The regex meta guard only caught fixed phrases and wasn't real
+  understanding. Users phrase explanation/reasoning/capability questions in
+  endless ways ("tell me the reasoning behind this edit", "justify this
+  timeline", "did you change my original video", "why didn't the zoom
+  happen"); these must be understood semantically and answered read-only.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓ (/editor 185 kB),
+  `npm test` = **328 pass / 0 fail**. New semantic tests cover the read-only
+  variants, mutation/control commands (not meta), the ambiguous "explain and
+  fix it" case (read-only, no mutation), visual questions, Layer-B
+  orchestration + safety merge, JSON parsing, and read-only answers (source
+  untouched, capability honesty, empty timeline, LLM action-claim rejection).
+  Browser/WebGPU runtime (the optional local-LLM Layer B / natural answers)
+  still needs a real browser; the deterministic path is fully exercised.
+
 ### 2026-06-19 — Meta question guard (explanation questions never mutate the timeline)
 - **Change made:** Added a deterministic, READ-ONLY meta/explanation guard
   that runs BEFORE every mutation path so questions like "explain why you did
