@@ -823,3 +823,129 @@ export const TRANSITIONS = {
     defaultConfidence: 0.65
   }
 } as const;
+
+
+
+// =====================================================================
+// v2.2 — Dynamic progressive local-analysis budget (lib/analysis/*).
+//
+// Replaces the single fixed ~240-frame cap with a DYNAMIC budget chosen per
+// request. A human editor doesn't scan every frame for every question:
+//   - exact edit / read-only / merge → 0 frames
+//   - "describe this" → a few keyframes
+//   - "best parts" of a short clip → a light scan
+//   - "best parts" of a long video → a coarse scan, then deep ONLY on the
+//     best candidate windows
+//   - "find the red car" → coarse scan first, semantic deep scan on candidates
+//
+// These are SAMPLING GUARDRAILS only — they never inject editorial behaviour
+// (no fixed clip count, no forced duration, no genre table). All frame counts
+// are upper bounds; short videos sample fewer frames naturally. The device
+// tier (DEVICE_TIER) shifts the usable ceiling WITHIN each band. Consumers:
+// lib/analysis/budget.ts (+ executePerSource via an optional budget).
+// =====================================================================
+
+export const ANALYSIS = {
+  /** Quick "describe / what's in this" — a few evenly spread keyframes. */
+  quickDescribe: { minFrames: 5, maxFrames: 12, inferenceWidth: 224, baseEverySeconds: 2.5 },
+  /** Short-video best-parts — a light scan. */
+  quickScan: { minFrames: 24, maxFrames: 80, inferenceWidth: 224, baseEverySeconds: 1.0 },
+  /** Normal best-parts — the default scan for medium videos. */
+  normalScan: { minFrames: 80, maxFrames: 180, inferenceWidth: 320, baseEverySeconds: 1.0 },
+  /** Long-video coarse scan — bounded, evenly spread. */
+  longVideoScan: { minFrames: 180, maxFrames: 360, inferenceWidth: 320, baseEverySeconds: 5.0 },
+  /** Deep visual search — large but ONLY after coarse candidate filtering. */
+  deepScan: { minFrames: 240, maxFrames: 600, inferenceWidth: 384, baseEverySeconds: 0.5 },
+  /** Dense pass run ONLY around the top candidate windows. */
+  denseWindow: { maxCandidateWindows: 16, framesPerWindow: 8 },
+  /** Duration thresholds (seconds) that switch a best-parts scan between the
+   *  short / normal / long bands. */
+  thresholds: {
+    /** At/below this a "best parts" run uses the quick band. */
+    shortVideoSeconds: 30,
+    /** At/above this a "best parts" run uses the long-video coarse band. */
+    longVideoSeconds: 600
+  }
+} as const;
+
+// =====================================================================
+// v2.2 — Device tier (lib/analysis/deviceTier.ts).
+//
+// A coarse local capability estimate (NOT a fingerprint, never sent to the
+// server) used ONLY to shift the analysis frame ceiling. Signals: hardware
+// concurrency, navigator.deviceMemory (when available), WebGPU availability.
+// =====================================================================
+
+export const DEVICE_TIER = {
+  /** Multiplier applied to a band's max frame count per tier. The result is
+   *  clamped back into the band's [min,max], so a tier only shifts the
+   *  usable ceiling — it never invents frames beyond the configured max. */
+  frameFactor: {
+    low: 0.5,
+    mid: 0.8,
+    high: 1.15,
+    unknown: 1.0
+  },
+  /** "high" needs WebGPU AND at least one of these. */
+  highTierMinDeviceMemoryGB: 8,
+  highTierMinHardwareConcurrency: 8,
+  /** "mid" needs at least one of these (else "low"). */
+  midTierMinDeviceMemoryGB: 4,
+  midTierMinHardwareConcurrency: 4
+} as const;
+
+// =====================================================================
+// v2.2 — Clarification policy (lib/analysis/clarificationPolicy.ts).
+//
+// When the first cheap analysis is low-confidence or the request is vague,
+// ASK the user one focused question instead of blindly running expensive
+// deeper analysis. Thresholds are guardrails, not editorial rules.
+// =====================================================================
+
+export const CLARIFY_POLICY = {
+  /** Below this quick-scan confidence (0..1) we ask before deeper analysis. */
+  lowConfidence: 0.35,
+  /** Distinct strong content types in the quick scan at/above this → ask
+   *  which to prioritize (talking vs action vs static, etc.). */
+  multiContentTypeFloor: 2,
+  /** Candidate-window strength (0..1) below this counts as "weak windows". */
+  weakWindowCeiling: 0.3,
+  /** If the best achievable coverage of an explicit target is below this
+   *  fraction, ask whether to broaden the search. Mirrors TARGET_COVERAGE. */
+  underfillAskFraction: 0.5
+} as const;
+
+// =====================================================================
+// v2.2 — Overlap resolver (lib/timeline/overlapResolver.ts).
+//
+// When an incoming clip overlaps an existing same-source clip, never silently
+// drop/replace a meaningful clip when intent is unclear — ask the user.
+// =====================================================================
+
+export const OVERLAP = {
+  /** Overlap ratio (overlap / incoming-duration) at/above which the clips are
+   *  treated as conflicting and the user is asked. Below this they coexist. */
+  conflictRatio: 0.5,
+  /** Minimum overlap (seconds) for a conflict at all — sub-frame touches are
+   *  ignored so adjacent clips that share a boundary don't trip it. */
+  minOverlapSeconds: 0.3
+} as const;
+
+
+
+// =====================================================================
+// v2.2 — Global multi-video planner (lib/analysis/globalVideoPlanner.ts).
+//
+// When several videos are selected, build a GLOBAL plan (roles + order +
+// strategy) before per-source clip picking, so one source doesn't dominate
+// unless the user asked for best-only. Guardrails, not editorial rules.
+// =====================================================================
+
+export const GLOBAL_PLAN = {
+  /** In "balanced" mode, the max fraction of the output any single source
+   *  may take (prevents one video dominating a multi-video edit). */
+  balancedMaxShare: 0.6,
+  /** Motion score (0..1) at/above which a source is considered the likely
+   *  "main action" candidate when good-window counts tie. */
+  mainActionMotionFloor: 0.5
+} as const;

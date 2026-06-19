@@ -17,6 +17,75 @@
 
 ---
 
+### 2026-06-20 — Dynamic progressive local analysis + describe-intent fix
+- **Change made:** Replaced the single fixed ~240-frame analysis cap with a
+  DYNAMIC, purpose-aware budget, and fixed the bug where "Describe what's in
+  this video" was misrouted into the build-a-short pipeline and got stuck in
+  frame scoring. New foundation modules are pure + unit-tested; integration is
+  conservative + incremental (existing flows unchanged by default).
+  - **`lib/analysis/types.ts` (new):** `AnalysisPurpose`, `AnalysisBudget(Input)`,
+    `DeviceTier`, `PromptSpecificity`, `VideoAnalysisLevel`, compact
+    `VideoAnalysisMemory` (+ scene/keyframe/range types). No raw frames/blobs.
+  - **`lib/analysis/budget.ts` (new, tested):** `planAnalysisBudget` — 0 frames
+    for exact/read-only/merge/transcript; 5–12 for quick describe; banded by
+    duration for best-parts (short 24–80 / normal 80–180 / long 180–360);
+    coarse-then-deep for specific visual search; device tier shifts the ceiling
+    within each band; cache reduces new work to 0. A 5s video never gets 240.
+  - **`lib/analysis/deviceTier.ts` (new, tested):** `classifyDeviceTier` (pure)
+    + `detectDeviceTier` (hardwareConcurrency / deviceMemory / WebGPU; no
+    fingerprinting, never sent to the server).
+  - **`lib/analysis/purpose.ts` (new, tested):** `classifyAnalysisPurpose` maps
+    a turn → purpose + specificity (reuses conversationIntent +
+    videoPromptInterpreter; describe→quick_describe, exact edit→none).
+  - **`lib/analysis/videoMemory.ts` (new, tested) + `videoMemoryStore.ts`
+    (idb-keyval, hash-keyed):** compact per-video memory with create/merge/
+    needsLevel/summarize + reuse-by-hash (re-upload reconnects). NO raw bytes.
+  - **`lib/analysis/clarificationPolicy.ts` (new, tested):** `decideClarification`
+    asks ONE focused question before deeper analysis (multi content type,
+    underfill, unclear roles, vague brief, low-confidence quick scan).
+  - **`lib/analysis/globalVideoPlanner.ts` (new, tested):** `planGlobalEdit`
+    infers source roles/order/strategy from generic signals (no genre table),
+    asks style when unclear, and caps any single source in balanced mode.
+  - **`lib/timeline/overlapResolver.ts` (new, tested):** detects same-source
+    overlap conflicts; default is ASK (never silent destructive replace);
+    respects explicit keep-both; supports skip/replace/keep/trim.
+  - **`lib/agent/describeResponder.ts` (new, tested) + `conversationLane.respondDescribe`:**
+    honest, INSTANT local describe from metadata (+ transcript presence) with
+    next-step chips; never claims on-screen subjects without on-device
+    captioning; never mutates the timeline.
+  - **Describe fix (`app/editor/page.tsx`):** the conversation guard now also
+    intercepts `visual_question` → honest describe answer + chips, and RETURNS
+    before any planner / pipeline / mutation path. No more "I'll look for
+    describe moments and build a short" + stuck scoring.
+  - **Dynamic cap (`lib/pipeline/executePerSource.ts`):** the first-pass frame
+    cap is now derived from `planAnalysisBudget` (duration + capability tier),
+    replacing the flat 240. Backward compatible: an optional `analysisBudget`
+    arg overrides; absent → duration-aware default; 240 kept only as a backstop.
+  - **Config (`lib/config.ts`):** `ANALYSIS`, `DEVICE_TIER`, `CLARIFY_POLICY`,
+    `OVERLAP`, `GLOBAL_PLAN` — all thresholds centralized + commented.
+- **Files affected:** `lib/analysis/{types,budget,deviceTier,purpose,videoMemory,
+  videoMemoryStore,clarificationPolicy,globalVideoPlanner}.ts` (+ tests),
+  `lib/timeline/overlapResolver.ts` (+ test), `lib/agent/describeResponder.ts`
+  (+ test), `lib/agent/conversationLane.ts`, `app/editor/page.tsx`,
+  `lib/pipeline/executePerSource.ts`, `lib/config.ts`, `package.json`, `README.md`.
+- **Reason:** Local-only responses were too slow and rigid — a fixed 240-frame
+  cap is wrong for a 5s clip and too shallow for 30 min, and describe questions
+  shouldn't run the full highlight pipeline. The app should act like an editor:
+  inspect quickly, spend analysis only where needed, ask when unsure.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓ (/editor 188 kB),
+  `npm test` = **397 pass / 0 fail** (+69 new). No cloud, no video upload, keys
+  server-only, privacy-first preserved.
+- **NOT done (honest follow-ups):** the new budget/memory/clarification/global-
+  planner/overlap modules are BUILT + TESTED but only the describe fix +
+  dynamic frame cap are wired into the live path. Still to wire: persist
+  `videoMemoryStore` after a scan + read it before (memory reuse end-to-end);
+  route the multi-source run through `globalVideoPlanner`; gate add-clip through
+  `overlapResolver`; run an actual bounded quick-scan when the user taps "Run a
+  quick local scan". Browser/WebGPU runtime verification still required (sandbox
+  has neither).
+
+---
+
 ### 2026-06-19 — Semantic conversation-intent layer (replaces regex meta guard)
 - **Change made:** Replaced the brittle exact-phrase regex guard in
   `metaQuestions.ts` with a semantic, situation-understanding conversation

@@ -9,7 +9,44 @@
 
 ---
 
-## 0. Latest change (2026-06-19) — issue #64 professional video-prompt interpreter
+## 0. Latest change (2026-06-20) — dynamic progressive local analysis + describe fix
+
+Faster, smarter LOCAL responses. Replaced the single fixed ~240-frame cap with
+a DYNAMIC, purpose-aware analysis budget, and fixed the bug where "Describe
+what's in this video" was misrouted into the build-a-short pipeline and got
+stuck in frame scoring. New foundation is pure + unit-tested; integration is
+conservative + incremental.
+
+- **New pure modules (`lib/analysis/*`, all tested):** `budget.ts`
+  (`planAnalysisBudget` — 0 frames for exact/read-only/merge; 5–12 for quick
+  describe; duration-banded best-parts 24–80 / 80–180 / 180–360; coarse→deep
+  for specific search; device tier shifts the ceiling; cache → 0 new work),
+  `deviceTier.ts`, `purpose.ts` (turn → AnalysisPurpose), `videoMemory.ts`
+  (+ `videoMemoryStore.ts` idb-keyval, hash-keyed, NO raw bytes),
+  `clarificationPolicy.ts` (ask one focused question before deep analysis),
+  `globalVideoPlanner.ts` (multi-video roles/order/strategy, no genre table),
+  `types.ts`. Plus `lib/timeline/overlapResolver.ts` (ask-by-default conflict
+  resolution) + `lib/agent/describeResponder.ts` (honest instant describe).
+- **Describe bug FIXED:** `app/editor/page.tsx` `handleAgent` now intercepts
+  `visual_question` (after the read-only guard) → honest local describe answer
+  + next-step chips, and RETURNS before any planner/pipeline/mutation path.
+- **Dynamic frame cap:** `lib/pipeline/executePerSource.ts` derives the
+  first-pass cap from `planAnalysisBudget` (duration + capability tier),
+  replacing the flat 240 (kept only as a backstop). Backward compatible.
+- **Config:** `ANALYSIS`, `DEVICE_TIER`, `CLARIFY_POLICY`, `OVERLAP`,
+  `GLOBAL_PLAN` added to `lib/config.ts` (no magic numbers in logic).
+- **Validation:** typecheck ✓, build ✓ (/editor 188 kB), `npm test` =
+  **397 pass / 0 fail** (+69). No cloud, no video upload, keys server-only.
+- **NOT wired yet (honest):** budget/memory/clarification/global-planner/
+  overlap modules are built + tested but only the describe fix + dynamic cap
+  are on the live path. Follow-ups: persist+reuse video memory end-to-end,
+  route multi-source runs through the global planner, gate add-clip through
+  the overlap resolver, run a real bounded quick-scan on the "deeper scan"
+  chip. See `memory/DYNAMIC_LOCAL_ANALYSIS_2026-06-20.md`.
+
+---
+
+## 0a. Previous change (2026-06-19) — issue #64 professional video-prompt interpreter
 
 Messy real-user editing prompts no longer fabricate meaning. A new pure
 interpreter extracts structured slots BEFORE the specialized detectors run, so
