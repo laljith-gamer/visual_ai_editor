@@ -65,7 +65,7 @@ export default function LaunchPage() {
   // double-mounts in dev don't lose it. The actual `consume` happens
   // inside the effect (clears the slot so refresh doesn't replay).
   const [file] = useState<File | null>(() => peekPendingUpload());
-  const addSource = useEditorStore((s) => s.addSource);
+  const hydrateRestoredSource = useEditorStore((s) => s.hydrateRestoredSource);
 
   // Visible state: smoothed progress, current step, frame thumbs, error.
   const [progress, setProgress] = useState(0);
@@ -215,8 +215,10 @@ export default function LaunchPage() {
         if (cancelled) return;
 
         // ---- 5. Add to library + ready ------------------------------
+        // v2.1 — hydrateRestoredSource reconnects to a restored project by
+        // hash when applicable, otherwise behaves exactly like addSource.
         markStep("ready", "active");
-        const added = addSource(
+        const added = hydrateRestoredSource(
           file!,
           {
             name: file!.name,

@@ -38,6 +38,7 @@ interface DragState {
 export function Timeline() {
   const highlights = useEditorStore((s) => s.highlights);
   const sources = useEditorStore((s) => s.sources);
+  const missingSources = useEditorStore((s) => s.missingSources);
   const activeSourceId = useEditorStore((s) => s.activeSourceId);
   const setActiveSource = useEditorStore((s) => s.setActiveSource);
   const updateHighlight = useEditorStore((s) => s.updateHighlight);
@@ -49,21 +50,47 @@ export function Timeline() {
   const trackRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
 
-  // Resolve a per-source color map once per render. Library order
-  // determines the index — that's stable for a session.
+  // v2.1 — a stable, source-order list combining hydrated sources and
+  // restored-but-missing placeholders. Sorted by addedAt so the S-number
+  // and color of a source don't jump when it is re-uploaded (hydrated).
+  const allSources = useMemo(() => {
+    const combined = [
+      ...sources.map((s) => ({
+        id: s.id,
+        meta: s.meta,
+        addedAt: s.addedAt,
+        missing: false
+      })),
+      ...missingSources.map((p) => ({
+        id: p.id,
+        meta: p.meta,
+        addedAt: p.addedAt,
+        missing: true
+      }))
+    ];
+    return combined.sort((a, b) => a.addedAt - b.addedAt);
+  }, [sources, missingSources]);
+
+  const missingIdSet = useMemo(
+    () => new Set(missingSources.map((p) => p.id)),
+    [missingSources]
+  );
+
+  // Resolve a per-source color map once per render. Combined order
+  // determines the index — stable across hydration for a session.
   const colorById = useMemo(() => {
     const m = new Map<string, string>();
-    sources.forEach((s, i) => {
+    allSources.forEach((s, i) => {
       m.set(s.id, SOURCE_COLORS[i % SOURCE_COLORS.length]);
     });
     return m;
-  }, [sources]);
+  }, [allSources]);
 
   const indexById = useMemo(() => {
     const m = new Map<string, number>();
-    sources.forEach((s, i) => m.set(s.id, i + 1));
+    allSources.forEach((s, i) => m.set(s.id, i + 1));
     return m;
-  }, [sources]);
+  }, [allSources]);
 
   // Scope visible clips to the active source. Older single-source
   // sessions have highlights without a sourceId — those still belong
@@ -76,9 +103,9 @@ export function Timeline() {
     [highlights, activeSourceId]
   );
 
-  const activeSource = sources.find((s) => s.id === activeSourceId) ?? null;
+  const activeEntry = allSources.find((s) => s.id === activeSourceId) ?? null;
   const duration =
-    activeSource?.meta.duration ??
+    activeEntry?.meta.duration ??
     videoMeta?.duration ??
     Math.max(...visibleHighlights.map((h) => h.end), 60);
 
@@ -180,10 +207,12 @@ export function Timeline() {
 
   return (
     <div className={styles.timeline}>
-      {/* Source tabs — only visible when the library has more than one. */}
-      {sources.length > 1 && (
+      {/* Source tabs — visible when the project has more than one source
+          (hydrated or still-missing). Missing sources are shown so the
+          previous arrangement is legible before re-upload. */}
+      {allSources.length > 1 && (
         <div className={styles.tabs}>
-          {sources.map((s, i) => {
+          {allSources.map((s, i) => {
             const isActive = s.id === activeSourceId;
             const c = SOURCE_COLORS[i % SOURCE_COLORS.length];
             const clipsHere = highlights.filter(
@@ -205,14 +234,23 @@ export function Timeline() {
                   );
                   selectClip(onThis[0]?.id ?? null);
                 }}
-                title={`Switch the timeline to "${s.meta.name}"`}
+                title={
+                  s.missing
+                    ? `"${s.meta.name}" is missing — re-upload to restore`
+                    : `Switch the timeline to "${s.meta.name}"`
+                }
               >
                 <span
                   className={styles.tabDot}
-                  style={{ background: c }}
+                  style={{ background: s.missing ? "var(--warn)" : c }}
                   aria-hidden
                 />
                 S{i + 1}
+                {s.missing && (
+                  <span title="source missing" aria-label="source missing">
+                    {"\u26A0"}
+                  </span>
+                )}
                 <span className="muted mono" style={{ fontSize: 10 }}>
                   {clipsHere > 0 ? `(${clipsHere})` : ""}
                 </span>
@@ -228,7 +266,7 @@ export function Timeline() {
         </span>
         <span className="muted">·</span>
         <span className="muted">{formatTime(totalSelected)} on this source</span>
-        {sources.length > 1 && (
+        {allSources.length > 1 && (
           <>
             <span className="muted">·</span>
             <span className="faint">
@@ -261,10 +299,11 @@ export function Timeline() {
           const sid = h.sourceId ?? activeSourceId ?? "";
           const color = colorById.get(sid) ?? "#9ECE6A";
           const idx = indexById.get(sid) ?? 1;
+          const isMissing = missingIdSet.has(sid);
           return (
             <div
               key={h.id}
-              className={`${styles.clip} ${selected ? styles.selected : ""}`}
+              className={`${styles.clip} ${selected ? styles.selected : ""} ${isMissing ? styles.clipMissing : ""}`}
               style={{
                 left: `${left}%`,
                 width: `${width}%`,
@@ -273,41 +312,56 @@ export function Timeline() {
                   color-mix(in srgb, ${color} 22%, transparent))`,
                 borderColor: `color-mix(in srgb, ${color} 70%, transparent)`
               }}
-              onPointerDown={(e) => onMouseDown(e, h, "move")}
+              onPointerDown={(e) => {
+                // Missing-source clips can't be dragged/resized (no media
+                // to scrub against) — they're shown for arrangement only.
+                if (!isMissing) onMouseDown(e, h, "move");
+              }}
               onClick={() => selectClip(h.id)}
               role="button"
               tabIndex={0}
+              title={isMissing ? "Source missing — re-upload to edit/render" : undefined}
             >
-              <div
-                className={`${styles.handle} ${styles.left}`}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  onMouseDown(e, h, "resize-l");
-                }}
-              />
+              {!isMissing && (
+                <div
+                  className={`${styles.handle} ${styles.left}`}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    onMouseDown(e, h, "resize-l");
+                  }}
+                />
+              )}
               <div className={styles.clipBody}>
                 <span className={styles.clipName}>
-                  {sources.length > 1 && (
+                  {allSources.length > 1 && (
                     <span
                       className={styles.sourceBadge}
-                      style={{ background: color }}
+                      style={{ background: isMissing ? "var(--warn)" : color }}
                     >
                       S{idx}
                     </span>
                   )}
                   {h.label ?? "clip"}
                 </span>
-                <span className={`mono ${styles.clipDuration}`}>
-                  {(h.end - h.start).toFixed(1)}s
-                </span>
+                {isMissing ? (
+                  <span className={`mono ${styles.clipDuration}`}>
+                    {"\u26A0"} source missing
+                  </span>
+                ) : (
+                  <span className={`mono ${styles.clipDuration}`}>
+                    {(h.end - h.start).toFixed(1)}s
+                  </span>
+                )}
               </div>
-              <div
-                className={`${styles.handle} ${styles.right}`}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  onMouseDown(e, h, "resize-r");
-                }}
-              />
+              {!isMissing && (
+                <div
+                  className={`${styles.handle} ${styles.right}`}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    onMouseDown(e, h, "resize-r");
+                  }}
+                />
+              )}
             </div>
           );
         })}

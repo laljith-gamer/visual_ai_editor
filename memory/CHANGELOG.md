@@ -17,6 +17,71 @@
 
 ---
 
+### 2026-06-19 — Project history restore (Phase 1 + 2 + 3)
+- **Change made:** Sessions now restore the WHOLE editing project, not just
+  chat. Sources come back as hash-keyed placeholders (no blobs persisted);
+  re-uploading the same file reconnects it to the original source id and the
+  saved timeline becomes usable again — without rebuilding anything.
+  - **`lib/store/projectRestore.ts` (new, pure, tested):** the restore brain.
+    `migrateSessionToManifests` (v1 `videoMeta`/`videoHash` → 1 manifest;
+    v1.6 `sources[]` → manifests; v2 `sourceManifests` as-is — full backward
+    compat), `backfillHighlightSources` (legacy untagged clips → the single
+    source id), `buildRestoredProjectState` (manifests → MISSING placeholders
+    + active/selected ids; never allocates a URL), `resolveUploadIdentity`
+    (HASH-only match → hydrate existing id vs new source — filename is a hint,
+    never identity), `usedMissingSources` / `canRenderTimeline` (render guard),
+    `summarizeSession` (history summary), `buildPersistManifests` (hydrated
+    "available" + missing — nothing lost on a partial-restore re-save).
+  - **Types (`lib/types.ts`):** `PersistedSourceManifest`,
+    `RestoredSourcePlaceholder`, `ProjectSource` union; `Session` extended
+    (optional, backward compatible) with `sourceManifests`, `selectedClipId`,
+    `boundaryTransitions`, `pendingTimelineOp`, `pendingExecution`, `inferred`,
+    `userTier`, `lastBriefing`, `schemaVersion: 2`.
+  - **Store (`hooks/useEditorStore.ts`):** new `missingSources` state +
+    `hydrateRestoredSource` (hash-match → reconnect original id, attach blob/
+    url, restore active/selected; else falls back to `addSource`),
+    `usedMissingSources()`, `canRenderCurrentTimeline()`. `restoreSession`
+    rebuilt on the pure helper (placeholders, not a wiped library; preserves
+    highlights/plan/transitions/selected clip/mode/tier/briefing). `persist`
+    writes the full manifest + state at `schemaVersion: 2`. `removeSource`
+    also drops a missing placeholder on EXPLICIT delete (restore never calls
+    it); `setActiveSource` accepts a missing id (preview blank until re-upload).
+  - **UI — ProjectRail:** "This project needs N missing video(s)" banner,
+    missing-source placeholder cards (filename / duration / aspect / "Missing —
+    re-upload to restore" + Re-upload button), a "Restored previous video: …"
+    confirmation on a hash match, and a richer history list (videos / clips /
+    duration / format / status / missing count / last action).
+  - **UI — Timeline:** missing-source clips render with a dashed "⚠ source
+    missing" marker and are not draggable/resizable; missing sources appear in
+    the source tabs so the previous arrangement stays legible pre-re-upload.
+  - **Render guard (`app/editor/page.tsx`):** `handleRender` blocks with an
+    honest "Re-upload the missing source video before rendering: …" when any
+    clip references an unhydrated source — ffmpeg/mediabunny never sees a
+    missing input.
+  - **Upload paths (`ProjectRail`, `app/launch/page.tsx`):** both now call
+    `hydrateRestoredSource`, so a re-upload reconnects by hash from either entry
+    point; a non-matching file is added as a new source (never a silent swap).
+- **Files affected:** `lib/store/projectRestore.ts` (+ `.test.ts`),
+  `lib/types.ts`, `hooks/useEditorStore.ts`, `components/ProjectRail.tsx`
+  (+`.module.css`), `components/Timeline.tsx` (+`.module.css`),
+  `app/editor/page.tsx`, `app/launch/page.tsx`, `package.json`.
+- **Reason:** History only restored chat; restored timelines were disconnected
+  from their uploads, and a re-upload made a NEW id (orphaning old clips). Users
+  expect "I uploaded this before — if I upload it again, arrange the old
+  timeline automatically." Local-first, no blobs persisted by default, hash is
+  the identity source of truth.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓ (/editor 176 kB),
+  `npm test` = **243 pass / 0 fail** (+18 new restore tests covering migration
+  v1/v1.6/v2, highlight preservation, hash hydrate vs new, render guard,
+  active/selected restore, no-URL placeholder, persist round-trip, summary).
+  Browser runtime verification (real re-upload + render) still required.
+- **Scope honesty:** Phase 4 (opt-in blob persistence + File System Access
+  handles + rendered-output history) is NOT done by design. Test #10 (explicit
+  removeSource drops source + highlights) is covered by existing store
+  behaviour (extended for placeholders), verified via typecheck + manual.
+
+---
+
 ### 2026-06-19 — Agentic intake layer (universal vague-request handling, Phase 1)
 - **Change made:** Added a NEW universal layer BEFORE the existing planner so
   the app behaves like an agentic editor for vague/messy requests ("make this

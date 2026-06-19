@@ -11,6 +11,8 @@ import type {
   IntentMode,
   JobStatus,
   PlanPatch,
+  PersistedSourceManifest,
+  RestoredSourcePlaceholder,
   Session,
   SessionMemory,
   UserTier,
@@ -33,6 +35,14 @@ import {
   loadSession,
   saveSession
 } from "@/lib/store/sessions";
+import {
+  buildRestoredProjectState,
+  buildPersistManifests,
+  resolveUploadIdentity,
+  usedMissingSources as usedMissingSourcesPure,
+  canRenderTimeline,
+  briefingStillValid
+} from "@/lib/store/projectRestore";
 
 interface EditorState {
   // Active session
@@ -48,6 +58,12 @@ interface EditorState {
   activeSourceId: string | null;
   /** Subset of source ids the next AI run is allowed to pull from. */
   selectedSourceIds: string[];
+
+  /** v2.1 — Restored sources whose bytes aren't loaded yet. These keep the
+   *  original source ids so the timeline still references them; the UI
+   *  shows a "re-upload to restore" placeholder. They NEVER carry a blob or
+   *  object URL. Populated by restoreSession; emptied as each is hydrated. */
+  missingSources: RestoredSourcePlaceholder[];
 
   // ----- mirror fields kept in sync with the active source ----------
   // The pipeline + many components still read these directly. v1.6.0
@@ -151,6 +167,22 @@ interface EditorState {
     meta: VideoSourceMeta,
     hash: string
   ) => VideoSource | null;
+  /** v2.1 — Reconnect a re-uploaded file to a restored project. If `hash`
+   *  matches a missing placeholder, the existing source id is hydrated
+   *  (blob + url attached, placeholder removed, active/selected state
+   *  reconnected). Otherwise this behaves like addSource (a new source).
+   *  Returns the resulting runtime source, or null if addSource is at cap. */
+  hydrateRestoredSource: (
+    blob: Blob,
+    meta: VideoSourceMeta,
+    hash: string
+  ) => VideoSource | null;
+  /** v2.1 — Missing placeholders the CURRENT timeline depends on (the
+   *  videos the user must re-upload before this project can render). */
+  usedMissingSources: () => RestoredSourcePlaceholder[];
+  /** v2.1 — False when the timeline is empty or any clip references a
+   *  source whose bytes aren't loaded. The render guard reads this. */
+  canRenderCurrentTimeline: () => boolean;
   removeSource: (id: string) => void;
   setActiveSource: (id: string) => void;
   toggleSourceSelection: (id: string) => void;
@@ -304,6 +336,7 @@ function freshState() {
     sources: [] as VideoSource[],
     activeSourceId: null as string | null,
     selectedSourceIds: [] as string[],
+    missingSources: [] as RestoredSourcePlaceholder[],
     videoBlob: null as Blob | null,
     videoUrl: null as string | null,
     videoMeta: undefined as Session["videoMeta"] | undefined,
@@ -488,12 +521,88 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     return source;
   },
 
+  hydrateRestoredSource: (blob, meta, hash) => {
+    const cur = get();
+    const decision = resolveUploadIdentity(cur.missingSources, hash);
+
+    // No matching missing placeholder → behave like a normal upload. This
+    // also covers the "user uploaded a different file" case: it is added as
+    // a new source and never silently replaces a missing one.
+    if (decision.kind === "new") {
+      return get().addSource(blob, meta, hash);
+    }
+
+    // Hash matched a missing placeholder → reconnect to the ORIGINAL id so
+    // the timeline's clips become playable/renderable again automatically.
+    const ph = decision.placeholder;
+
+    // Guard: if the same id somehow already hydrated, just activate it.
+    const already = cur.sources.find((s) => s.id === ph.id);
+    if (already) {
+      const missingSources = cur.missingSources.filter((p) => p.id !== ph.id);
+      set({ missingSources, updatedAt: Date.now() });
+      return already;
+    }
+
+    const url = URL.createObjectURL(blob);
+    const enrichedMeta: VideoSourceMeta = {
+      ...meta,
+      aspect: meta.aspect ?? aspectLabel(meta.width, meta.height)
+    };
+    const source: VideoSource = {
+      id: ph.id,
+      hash,
+      blob,
+      url,
+      meta: enrichedMeta,
+      addedAt: ph.addedAt
+    };
+    const sources = [...cur.sources, source];
+    const missingSources = cur.missingSources.filter((p) => p.id !== ph.id);
+    // Keep this source selected for AI if it was at save time; otherwise
+    // ensure at least one source stays selected.
+    const selectedSourceIds = cur.selectedSourceIds.includes(ph.id)
+      ? cur.selectedSourceIds
+      : cur.selectedSourceIds.length === 0
+        ? [ph.id]
+        : cur.selectedSourceIds;
+
+    set({ sources, missingSources, selectedSourceIds, updatedAt: Date.now() });
+
+    // Reconnect the preview if this was the active source (or nothing is
+    // currently showing a hydrated source).
+    const activeIsHydrated = cur.sources.some((s) => s.id === cur.activeSourceId);
+    if (cur.activeSourceId === ph.id || !activeIsHydrated) {
+      set({ activeSourceId: ph.id });
+      syncMirrorFields(set, source);
+    }
+    return source;
+  },
+
+  usedMissingSources: () => {
+    const s = get();
+    const hydratedIds = new Set(s.sources.map((x) => x.id));
+    return usedMissingSourcesPure(s.highlights, s.missingSources, hydratedIds);
+  },
+
+  canRenderCurrentTimeline: () => {
+    const s = get();
+    const hydratedIds = new Set(s.sources.map((x) => x.id));
+    return canRenderTimeline(s.highlights, hydratedIds);
+  },
+
   removeSource: (id) => {
     const cur = get();
     const target = cur.sources.find((s) => s.id === id);
-    if (!target) return;
-    URL.revokeObjectURL(target.url);
+    const placeholder = cur.missingSources.find((p) => p.id === id);
+    // Nothing to remove.
+    if (!target && !placeholder) return;
+    if (target) URL.revokeObjectURL(target.url);
     const sources = cur.sources.filter((s) => s.id !== id);
+    // v2.1 — an explicit delete also drops a missing placeholder for that
+    // id. (Restoring missing state never calls removeSource, so a missing
+    // source's clips are preserved until the user explicitly deletes it.)
+    const missingSources = cur.missingSources.filter((p) => p.id !== id);
     const selectedSourceIds = cur.selectedSourceIds.filter((x) => x !== id);
     // Drop highlights that came from this source so we never render
     // against a missing input.
@@ -504,6 +613,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     }
     set({
       sources,
+      missingSources,
       selectedSourceIds,
       activeSourceId,
       highlights,
@@ -521,9 +631,19 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setActiveSource: (id) => {
     const cur = get();
     const target = cur.sources.find((s) => s.id === id);
-    if (!target) return;
-    set({ activeSourceId: id, updatedAt: Date.now() });
-    syncMirrorFields(set, target);
+    if (target) {
+      set({ activeSourceId: id, updatedAt: Date.now() });
+      syncMirrorFields(set, target);
+      return;
+    }
+    // v2.1 — allow making a MISSING placeholder the active source so its
+    // (placeholder) tab/clips can be inspected. The preview pane shows
+    // nothing until the file is re-uploaded; mirror fields are cleared.
+    const placeholder = cur.missingSources.find((p) => p.id === id);
+    if (placeholder) {
+      set({ activeSourceId: id, updatedAt: Date.now() });
+      syncMirrorFields(set, null);
+    }
   },
 
   toggleSourceSelection: (id) => {
@@ -584,6 +704,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       sources: [],
       activeSourceId: null,
       selectedSourceIds: [],
+      missingSources: [],
       videoBlob: null,
       videoUrl: null,
       videoMeta: undefined,
@@ -1158,25 +1279,45 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     const cur = get();
     for (const x of cur.sources) URL.revokeObjectURL(x.url);
     if (cur.renderedUrl) URL.revokeObjectURL(cur.renderedUrl);
+
+    // v2.1 — full project restore. Sources come back as MISSING
+    // placeholders (no blobs — they can't survive a reload); the timeline
+    // keeps referencing them by their original ids. Re-uploading a file
+    // with a matching hash reconnects it (see hydrateRestoredSource).
+    const restored = buildRestoredProjectState(s);
+    const lastBriefing = briefingStillValid(s.lastBriefing, restored.manifests)
+      ? s.lastBriefing ?? null
+      : null;
+
     set({
       sessionId: s.id,
       title: s.title,
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
       sources: [],
-      activeSourceId: null,
-      selectedSourceIds: [],
+      missingSources: restored.missingSources,
+      activeSourceId: restored.activeSourceId,
+      selectedSourceIds: restored.selectedSourceIds,
+      // Mirror fields stay empty until the active source is re-uploaded.
       videoBlob: null,
       videoUrl: null,
       videoMeta: s.videoMeta,
       videoHash: s.videoHash,
       plan: s.plan ?? null,
-      highlights: s.highlights,
-      selectedClipId: s.highlights[0]?.id ?? null,
+      highlights: restored.highlights,
+      selectedClipId: restored.selectedClipId,
+      previousHighlights: null,
+      previousSelectedClipId: null,
+      redoHighlights: null,
+      redoSelectedClipId: null,
+      pendingTimelineOp: s.pendingTimelineOp ?? "replace",
+      boundaryTransitions: s.boundaryTransitions ?? [],
       mode: s.mode ?? null,
-      inferred: [],
+      inferred: s.inferred ?? [],
       pendingClarify: null,
-      userTier: "novice",
+      pendingExecution: s.pendingExecution ?? false,
+      userTier: s.userTier ?? "novice",
+      lastBriefing,
       messages: s.messages,
       status: s.status,
       progress: s.progress,
@@ -1193,30 +1334,48 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
 
   persist: async () => {
     const s = get();
-    const sourcesSummary: VideoSourceSummary[] = s.sources.map((x) => ({
-      id: x.id,
-      hash: x.hash,
-      meta: x.meta,
-      addedAt: x.addedAt
+    // v2.1 — full source manifest = hydrated (available) + still-missing
+    // placeholders, so a partially-restored project never loses the
+    // sources it still needs. No blobs are written.
+    const sourceManifests: PersistedSourceManifest[] = buildPersistManifests(
+      s.sources,
+      s.missingSources
+    );
+    // Keep the legacy summary array for older readers (history count, etc).
+    const sourcesSummary: VideoSourceSummary[] = sourceManifests.map((m) => ({
+      id: m.id,
+      hash: m.hash,
+      meta: m.meta,
+      addedAt: m.addedAt
     }));
     await saveSession({
       id: s.sessionId,
       title: s.title,
       createdAt: s.createdAt,
       updatedAt: Date.now(),
+      schemaVersion: 2,
       videoMeta: s.videoMeta,
       videoHash: s.videoHash,
       sources: sourcesSummary.length > 0 ? sourcesSummary : undefined,
+      sourceManifests: sourceManifests.length > 0 ? sourceManifests : undefined,
       selectedSourceIds:
         s.selectedSourceIds.length > 0 ? s.selectedSourceIds : undefined,
       activeSourceId: s.activeSourceId ?? undefined,
       plan: s.plan ?? undefined,
       memory: s.memory,
       highlights: s.highlights,
+      selectedClipId: s.selectedClipId,
+      boundaryTransitions:
+        s.boundaryTransitions.length > 0 ? s.boundaryTransitions : undefined,
+      pendingTimelineOp: s.pendingTimelineOp,
+      pendingExecution: s.pendingExecution || undefined,
       messages: s.messages,
       status: s.status,
       progress: s.progress,
-      mode: s.mode ?? undefined
+      mode: s.mode ?? undefined,
+      inferred: s.inferred.length > 0 ? s.inferred : undefined,
+      userTier: s.userTier,
+      lastBriefing: s.lastBriefing ?? undefined
     });
     await s.refreshHistory();
   }

@@ -2,6 +2,8 @@
 // Shared types — single source of truth for the whole app.
 // =====================================================================
 
+import type { BoundaryTransition } from "./transitions/types";
+
 // ---------------------------------------------------------------------
 // Plan & pipeline
 // ---------------------------------------------------------------------
@@ -222,6 +224,56 @@ export interface VideoSourceSummary {
   addedAt: number;
 }
 
+// ---------------------------------------------------------------------
+// Project history restore (v2.1) — persistent source manifest
+// ---------------------------------------------------------------------
+
+/**
+ * Persisted record of one source in a project. Stored in the session
+ * snapshot so a restored project remembers EXACTLY which uploads it used
+ * (by hash + metadata) without keeping the heavy video bytes. The blob and
+ * object URL are deliberately NOT here — they cannot survive a reload, so
+ * the user re-uploads the same file and we reconnect it by `hash`.
+ *
+ * `status` is the source's availability AT SAVE TIME ("available" = a live
+ * blob was attached; "missing" = it was a placeholder awaiting re-upload).
+ * It is a hint only — on the NEXT load every source starts missing until
+ * re-uploaded, because we never persist blobs by default.
+ */
+export interface PersistedSourceManifest {
+  id: string;
+  hash: string;
+  meta: VideoSourceMeta;
+  addedAt: number;
+  /** Filename last seen for this source — a display hint, NEVER an
+   *  identity key (filenames are weak; the hash is the source of truth). */
+  lastKnownName: string;
+  status?: "missing" | "available";
+}
+
+/**
+ * A restored source whose bytes are not (yet) in memory. The timeline can
+ * still reference it by `id`; the UI shows a "re-upload to restore"
+ * placeholder. It carries `missing: true` so the union with a hydrated
+ * `VideoSource` is unambiguous. No `blob`/`url` — by construction it never
+ * creates an object URL.
+ */
+export interface RestoredSourcePlaceholder {
+  id: string;
+  hash: string;
+  meta: VideoSourceMeta;
+  addedAt: number;
+  missing: true;
+}
+
+/** A union of "have the bytes" vs "need a re-upload". Kept as a type for
+ *  call sites that want to treat both uniformly (display, identity). The
+ *  store holds the two states in separate arrays for change-detection
+ *  simplicity, but this models the conceptual relationship. */
+export type ProjectSource =
+  | (VideoSource & { status?: "available"; missing?: false })
+  | RestoredSourcePlaceholder;
+
 
 
 /** Memory chips persisted across edits in a session. */
@@ -266,6 +318,10 @@ export interface Session {
    *  present, takes precedence over the legacy single `videoMeta` /
    *  `videoHash` pair, which we keep for restoring older sessions. */
   sources?: VideoSourceSummary[];
+  /** v2.1 — full persistent source manifest (metadata + hash + last name +
+   *  availability). Supersedes `sources` for restore; `sources` is still
+   *  written for backward-compatible readers. */
+  sourceManifests?: PersistedSourceManifest[];
   /** v1.6.0 — IDs of sources the user had selected for AI use at save time. */
   selectedSourceIds?: string[];
   /** v1.6.0 — which source was active in the preview pane. */
@@ -273,11 +329,33 @@ export interface Session {
   plan?: EditPlan;
   memory: SessionMemory;
   highlights: Highlight[];
+  /** v2.1 — clip selected on the timeline at save time. */
+  selectedClipId?: string | null;
+  /** v2.1 — per-boundary transitions at save time. */
+  boundaryTransitions?: BoundaryTransition[];
+  /** v2.1 — how the next pipeline run should join the timeline. */
+  pendingTimelineOp?: "append" | "replace";
+  /** v2.1 — a plan was awaiting a "Run analysis" confirmation. */
+  pendingExecution?: boolean;
   messages: ChatMessage[];
   status: JobStatus;
   progress: number;
   /** Most recent intent the planner classified for this session. */
   mode?: IntentMode;
+  /** v2.1 — inferred fields surfaced as chips at save time. */
+  inferred?: InferredField[];
+  /** v2.1 — classified user tier at save time. */
+  userTier?: UserTier;
+  /** v2.1 — most recent briefing (safe to restore: ids + ranges only). */
+  lastBriefing?: {
+    id: string;
+    sourceId: string;
+    sourceName?: string;
+    bestParts: BestPart[];
+    ts: number;
+  } | null;
+  /** v2.1 — schema version. Absent / 1 = legacy; 2 = full project restore. */
+  schemaVersion?: 1 | 2;
 }
 
 export type ChatRole = "user" | "assistant" | "system";
