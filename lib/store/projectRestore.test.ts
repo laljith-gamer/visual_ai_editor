@@ -288,6 +288,48 @@ test("summarizeSession reports sources, clips, duration, format, last action", (
   assert.equal(sum.totalDurationSeconds, 13);
   assert.equal(sum.format, "vertical");
   assert.equal(sum.lastAction, "make a reel");
+  // v2.1 fix — no blobs persisted, so both sources need re-upload on a
+  // fresh load. The legacy `sources[]` migrate as "missing" at save time.
+  assert.equal(sum.restoreNeededCount, 2);
+  assert.equal(sum.saveTimeMissingCount, 2);
+});
+
+// #12 — sessions with sourceManifests report restoreNeededCount = sourceCount
+test("summarizeSession: restoreNeededCount equals sourceCount (no blob persistence)", () => {
+  const session = baseSession({
+    schemaVersion: 2,
+    sourceManifests: [
+      // Even a source saved as "available" still needs re-upload on reload.
+      { id: "src_a", hash: "h_a", meta: meta("a.mp4"), addedAt: 10, lastKnownName: "a.mp4", status: "available" },
+      { id: "src_b", hash: "h_b", meta: meta("b.mp4"), addedAt: 20, lastKnownName: "b.mp4", status: "missing" }
+    ]
+  });
+  const sum = summarizeSession(session);
+  assert.equal(sum.sourceCount, 2);
+  assert.equal(sum.restoreNeededCount, 2);
+  // Only the one saved as a placeholder counts as save-time missing.
+  assert.equal(sum.saveTimeMissingCount, 1);
+});
+
+// #13 — legacy sessions without sourceManifests still summarize correctly
+test("summarizeSession: legacy v1 session (videoMeta/videoHash) summarizes", () => {
+  const session = baseSession({
+    videoMeta: { name: "old.mp4", size: 2048, duration: 90, width: 1280, height: 720 },
+    videoHash: "h_legacy",
+    highlights: [hl("c1"), hl("c2")]
+  });
+  const sum = summarizeSession(session);
+  assert.equal(sum.sourceCount, 1);
+  assert.equal(sum.restoreNeededCount, 1);
+  assert.equal(sum.clipCount, 2);
+});
+
+test("summarizeSession: a session with no sources needs no re-upload", () => {
+  const session = baseSession({ messages: [] });
+  const sum = summarizeSession(session);
+  assert.equal(sum.sourceCount, 0);
+  assert.equal(sum.restoreNeededCount, 0);
+  assert.equal(sum.saveTimeMissingCount, 0);
 });
 
 // Misc guards -----------------------------------------------------------

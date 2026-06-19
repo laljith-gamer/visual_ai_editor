@@ -324,8 +324,14 @@ export interface SessionSummary {
   title: string;
   updatedAt: number;
   sourceCount: number;
-  /** Sources that were already missing (no blob) at save time. */
-  missingCount: number;
+  /** Sources that were ALREADY missing (a placeholder, no blob) at save
+   *  time — i.e. the project was saved while partially un-restored. */
+  saveTimeMissingCount: number;
+  /** Sources the user must re-upload after a FRESH load. Because we never
+   *  persist blobs by default, this equals `sourceCount` whenever there are
+   *  any sources — every source needs re-providing on the next open. (A
+   *  future blob / File System Access persistence feature would lower it.) */
+  restoreNeededCount: number;
   clipCount: number;
   totalDurationSeconds: number;
   format?: string;
@@ -337,7 +343,12 @@ export interface SessionSummary {
 /** Build a project-level summary for the history list. Pure. */
 export function summarizeSession(session: Session): SessionSummary {
   const manifests = migrateSessionToManifests(session);
-  const missingCount = manifests.filter((m) => m.status === "missing").length;
+  const sourceCount = manifests.length;
+  const saveTimeMissingCount = manifests.filter((m) => m.status === "missing").length;
+  // No blobs are persisted, so on a fresh load EVERY source needs a
+  // re-upload. Don't pretend "0 missing" just because they were
+  // "available" at save time.
+  const restoreNeededCount = sourceCount;
   const highlights = session.highlights ?? [];
   const totalDurationSeconds = highlights.reduce(
     (acc, h) => acc + Math.max(0, h.end - h.start),
@@ -360,8 +371,9 @@ export function summarizeSession(session: Session): SessionSummary {
     id: session.id,
     title: session.title,
     updatedAt: session.updatedAt,
-    sourceCount: manifests.length,
-    missingCount,
+    sourceCount,
+    saveTimeMissingCount,
+    restoreNeededCount,
     clipCount: highlights.length,
     totalDurationSeconds,
     format: session.plan?.format,

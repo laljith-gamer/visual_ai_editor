@@ -408,11 +408,14 @@ export function ProjectRail() {
                             {labelStatus(sum.status)}
                           </span>
                         )}
-                        {sum.missingCount > 0 && (
+                        {sum.restoreNeededCount > 0 && (
                           <span
                             className={`${styles.historyChip} ${styles.historyChipWarn}`}
+                            title="Videos aren't stored in the browser — re-upload them to restore this project"
                           >
-                            {sum.missingCount} missing
+                            {sum.restoreNeededCount === sum.sourceCount
+                              ? "needs re-upload"
+                              : `${sum.restoreNeededCount} need re-upload`}
                           </span>
                         )}
                       </span>

@@ -17,6 +17,50 @@
 
 ---
 
+### 2026-06-19 — Project history restore: full-snapshot autosave (runtime fix)
+- **Change made:** Fixed the runtime failure where restored projects were
+  stale/wrong after reload. Root cause was NOT the hash matching — it was that
+  autosave only watched `highlights.length`, `plan?.scenarios.length`, and
+  `messages.length`, so most durable project changes were never written.
+  - **`lib/store/projectSignature.ts` (new, pure, tested):**
+    `projectPersistSignature(state)` builds a stable string over ALL durable
+    project state — sessionId, title, source ids+hashes+names+addedAt, missing
+    placeholder ids+hashes, activeSourceId, selectedSourceIds, a full plan
+    identity, highlight id/sourceId/start/end/label, selectedClipId, boundary
+    transitions, pendingTimelineOp, pendingExecution, mode, inferred chips,
+    userTier, lastBriefing id/sourceId/part-count, messages length+last id+ts,
+    memory, and status. `progress` is INTENTIONALLY excluded so per-frame
+    pipeline ticks never trigger a write.
+  - **`app/editor/page.tsx`:** autosave now watches the signature
+    (`useEditorStore((s) => projectPersistSignature(s))`) and persists on a
+    500ms debounce. Removed the narrow `[highlights.length, plan?.scenarios
+    .length, messages.length]` effect (and the now-unused `messages` selector).
+    This catches source upload/hydration, missing-source changes, active/
+    selected source, selected clip, boundary transitions, pending op/exec,
+    mode, tier, inferred, last briefing, memory, and restore — without spamming
+    IndexedDB on progress and without persisting blobs.
+  - **`lib/store/projectRestore.ts` — `SessionSummary` / `summarizeSession`:**
+    replaced the misleading single `missingCount` with `sourceCount`,
+    `saveTimeMissingCount` (placeholders at save time) and `restoreNeededCount`
+    (= `sourceCount` whenever there are sources, because blobs aren't persisted
+    — every source needs re-upload on a fresh load).
+  - **`components/ProjectRail.tsx`:** history now shows "needs re-upload" (or
+    "N need re-upload") instead of wrongly showing "0 missing".
+- **Files affected:** `lib/store/projectSignature.ts` (+ `.test.ts`),
+  `app/editor/page.tsx`, `lib/store/projectRestore.ts` (+ `.test.ts`),
+  `components/ProjectRail.tsx`, `package.json` (test scripts).
+- **Reason:** Restore "worked in memory" but the updated project state wasn't
+  being saved because autosave watched only chat/plan/highlight COUNT, so a
+  reload/history-refresh showed stale data. The existing pure restore helpers
+  were correct and were kept; only the persistence TRIGGER and the history
+  missing-count were wrong.
+- **Validation:** `npm run typecheck` ✓, `npm run build` ✓ (/editor 177 kB),
+  `npm test` = **268 pass / 0 fail** (+25 new: signature changes for every
+  durable field, progress-only no-op, and `restoreNeededCount` summary cases).
+  Browser reload/restore runtime verification still recommended.
+
+---
+
 ### 2026-06-19 — Project history restore (Phase 1 + 2 + 3)
 - **Change made:** Sessions now restore the WHOLE editing project, not just
   chat. Sources come back as hash-keyed placeholders (no blobs persisted);
