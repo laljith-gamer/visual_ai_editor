@@ -2,9 +2,9 @@
 
 > **Read this first.** This folder is the handoff brain for the repo. A fresh AI/helper session should read this file before making changes, then follow the reading order below.
 >
-> Last organized: **2026-06-19** — issue #64 professional video-prompt
-> interpreter note indexed (normalize + slot parsers + meaning guard,
-> all-source compose). Issue #62 best-picks fix also indexed.
+> Last organized: **2026-06-20** — editor stage preview/timeline scroll-layout
+> fix indexed (`EditorStage` fixed two-row layout + independent preview/timeline
+> body scrolling). Previous issue #64 / #62 notes remain indexed below.
 
 ---
 
@@ -76,6 +76,12 @@ These files are snapshots. They explain how the project reached the current stat
 | File | Use when you need |
 |------|-------------------|
 | `RUNTIME_CONSOLE_FIXES_2026-06-17.md` | DevTools/runtime warning triage: manifest 401, Canvas2D readback hint, SigLIP dtype warning. |
+
+### UI / layout fixes
+
+| File | Use when you need |
+|------|-------------------|
+| `EDITOR_STAGE_SCROLL_LAYOUT_2026-06-20.md` | Editor preview/timeline layout fix: fixed two-row `EditorStage`, independent preview/timeline scrolling, capped timeline body, larger preview video minimum height, and mobile fallback. |
 
 ### Agentic editing layer
 
