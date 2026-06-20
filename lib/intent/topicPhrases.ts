@@ -27,7 +27,9 @@ const EXTRA_NON_TOPIC = new Set<string>([
   "specific", "particular", "certain", "exact", "some", "any", "thing",
   // acquisition / search verbs (never a subject)
   "find", "finding", "search", "searching", "locate", "look", "looking",
-  "want", "need", "give", "get", "show", "pick", "grab"
+  "want", "need", "give", "get", "show", "pick", "grab",
+  // scope words (never a content subject)
+  "current", "selected", "existing", "timeline"
 ]);
 
 const NUMBER_WORDS = new Set<string>([

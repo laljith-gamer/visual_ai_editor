@@ -69,7 +69,12 @@ test("latest explicit duration wins on a passthrough creation turn", () => {
   assert.equal(r.latestDurationSeconds, 120);
 });
 
-test("'yes do it' with NOTHING pending is not confirm (passthrough → nudge handled elsewhere)", () => {
+test("'yes do it' with NOTHING pending → confirm_pending (router answers honestly, never a search)", () => {
   const r = classifyEditorTurn("yes do it", ctx({ hasPendingAction: false }));
-  assert.notEqual(r.kind, "confirm_pending");
+  assert.equal(r.kind, "confirm_pending");
+});
+
+test("'yes' is NOT hijacked when a planner run / clarify is parked", () => {
+  const r = classifyEditorTurn("yes", ctx({ hasPendingAction: false, hasPendingExecution: true }));
+  assert.equal(r.kind, "passthrough");
 });

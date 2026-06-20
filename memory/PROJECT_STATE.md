@@ -9,7 +9,43 @@
 
 ---
 
-## 0. Latest change (2026-06-20) — dynamic local analysis WIRED LIVE
+## 0. Latest change (2026-06-20) — editor-first turn routing (refinement fix)
+
+Fixed a real failing refinement conversation where the app was planner-first
+(vague "find a specific moment" built a 1s short; 120s→37s reported as success;
+"remove cutscene / only fighting" ran a NEW append search and dead-ended on
+"overlap — nothing to add"; "Removed that clip … Want me to go ahead?" was
+self-contradictory; "yes do it" became "look for yes moments"; undo claimed
+"nothing to undo"; a single-video refine asked for a second video; "trim to
+fit" became a search). The fix is a GENERIC editor-turn routing layer that runs
+BEFORE the planner — no hardcoded phrases, no game/entity/genre tables.
+
+- **New pure modules:** `lib/intent/editingNormalize.ts` (generic typo
+  correction to an editing lexicon — combact→combat, cutsecene→cutscene),
+  `topicPhrases.ts` (preserve content phrase GROUPS, not token soup),
+  `targetDurationMemory.ts` (latest explicit duration wins + trim-to-fit
+  detection), `refinementIntent.ts` (remove/keep-only/filter/trim/scope),
+  `editorTurnIntent.ts` (the router brain), `lib/timeline/trimToTarget.ts`.
+- **Router wired into `handleAgent`** before the conversation guard/planner:
+  confirm/cancel pending action, trim-to-target, refine/filter (ask first +
+  pending action + clean REPLACE on confirm), clarify-missing-moment, scope
+  resolution, "render anyway" override; keeps `activeTargetSeconds` in sync.
+- **Store:** `pendingAction` (refilter | swap_timeline), `activeTargetSeconds`,
+  `trimTimelineToTarget` (snapshots undo).
+- **Orchestrator:** low-confidence clarify is no longer self-contradictory and
+  never claims an un-performed mutation (undo guarantee).
+- **runPipeline:** append overlap offers a one-tap REPLACE instead of a
+  dead-end; coverage review runs on append too; weak results → needs_review
+  with options; render guard blocks weak/underfilled renders unless "render
+  anyway".
+- **Tests:** new `test:editor` (52 tests incl. conversation regression).
+  typecheck ✓, build ✓ (`/editor` 204 kB), `npm test` = 484 pass / 0 fail.
+- See `memory/EDITOR_REFINEMENT_ROUTING_2026-06-20.md`. Browser verification of
+  the live refine/trim/swap/render-guard flows still pending.
+
+---
+
+## 0. Previous change (2026-06-20) — dynamic local analysis WIRED LIVE
 
 Wired the dynamic-analysis foundation into the real editor flow (the previous
 2026-06-20 PR built + tested it but left most foundation-only). Users now feel

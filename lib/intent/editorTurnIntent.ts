@@ -40,6 +40,10 @@ export interface EditorTurnContext {
   clipCount: number;
   /** A concrete pending action ("…go ahead?") is awaiting a reply. */
   hasPendingAction: boolean;
+  /** A planner run is parked awaiting a "Run analysis" / "yes" (don't hijack). */
+  hasPendingExecution?: boolean;
+  /** A free-form clarify is awaiting an answer (don't hijack a plain "yes"). */
+  hasPendingClarify?: boolean;
   /** Number of uploaded sources (decides current-vs-multi behaviour). */
   sourceCount: number;
   /** The active target duration carried from earlier turns. */
@@ -94,26 +98,28 @@ export function classifyEditorTurn(text: string, ctx: EditorTurnContext): Editor
   const fast = classifyFastCommand(raw.replace(/[,;]+/g, " ").replace(/\s+/g, " ").trim());
   const refine = detectRefinement(raw);
 
-  // 1) PENDING ACTION replies win — resolve before anything else.
-  if (ctx.hasPendingAction) {
-    if (fast?.kind === "affirm") {
-      return { kind: "confirm_pending", ...base, confidence: 0.95, normalizedText: refine.normalizedText || raw };
-    }
-    if (fast?.kind === "cancel") {
-      return { kind: "cancel_pending", ...base, confidence: 0.95 };
-    }
-    // A scope answer ("from current video clips") confirms a pending action
-    // with that scope rather than starting over.
-    if (refine.kind === "scope_only") {
-      return {
-        kind: "scope_resolution",
-        ...base,
-        scope: refine.scope,
-        confidence: 0.9,
-        normalizedText: refine.normalizedText
-      };
-    }
-    // Otherwise the user moved on — fall through (router abandons pending).
+  // 1) Confirm / cancel replies win — resolve before anything else.
+  //    A bare affirmation confirms our concrete pending action. With nothing
+  //    pending at all it's a stray "yes" the router answers honestly (goal 7)
+  //    — NEVER a search. But when a planner run / free-form clarify is parked
+  //    we must NOT hijack the "yes" (the existing run-plan flow needs it).
+  const nothingElsePending = !ctx.hasPendingExecution && !ctx.hasPendingClarify;
+  if (fast?.kind === "affirm" && (ctx.hasPendingAction || nothingElsePending)) {
+    return { kind: "confirm_pending", ...base, confidence: 0.95, normalizedText: refine.normalizedText || raw };
+  }
+  if (fast?.kind === "cancel" && (ctx.hasPendingAction || nothingElsePending)) {
+    return { kind: "cancel_pending", ...base, confidence: 0.95 };
+  }
+  // A scope answer ("from current video clips") confirms a pending action
+  // with that scope rather than starting over.
+  if (ctx.hasPendingAction && refine.kind === "scope_only") {
+    return {
+      kind: "scope_resolution",
+      ...base,
+      scope: refine.scope,
+      confidence: 0.9,
+      normalizedText: refine.normalizedText
+    };
   }
 
   // 2) Trim-to-target is a direct timeline op (never a search).

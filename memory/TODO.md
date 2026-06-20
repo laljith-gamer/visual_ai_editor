@@ -8,6 +8,27 @@
 
 ## High priority
 
+- [ ] **Manual browser test — editor-first refinement routing (2026-06-20,
+      after deploy).** Needs a real browser. Verify the live flows the unit
+      tests can't cover:
+      1. "Find a specific moment" (no subject) → asks which moment, no clip
+         built.
+      2. "remove cutscene, only fighting" with clips present → asks first;
+         "Yes, do it" re-picks (REPLACE, not append) and "undo" restores.
+      3. "remove all boring parts make it 1 min" → refines current video at
+         60s; never asks for a second video.
+      4. "from current video clips" after a pending refine → proceeds at the
+         kept 60s target.
+      5. "trim to fit" → trims current timeline to the active target; "undo"
+         restores; no planner/search runs.
+      6. A 120s request that yields ~37s → needs_review (not "ready"); plain
+         "render" warns; "render anyway" proceeds.
+      7. New picks that all overlap → one-tap "replace / keep" (no "nothing to
+         add" dead-end).
+      8. "give me red boy and wukong fight … 2 min" → genuine search, target
+         120s, typo "combact" handled.
+      See `memory/EDITOR_REFINEMENT_ROUTING_2026-06-20.md`.
+
 - [ ] **Manual browser test — dynamic analysis WIRED (2026-06-20, after
       deploy).** Needs a real browser (no GPU/decode in sandbox). Verify the
       six live behaviours:
@@ -236,6 +257,17 @@
       feature work; no big rewrite.
 
 ## Completed
+
+- [x] (2026-06-20) **Editor-first turn routing (refinement fix).** New generic
+      pre-planner router (`lib/intent/editorTurnIntent` + `refinementIntent` +
+      `topicPhrases` + `editingNormalize` + `targetDurationMemory` +
+      `lib/timeline/trimToTarget`) so refine/control turns route as editor
+      operations, never random searches. Store `pendingAction` +
+      `activeTargetSeconds` + `trimTimelineToTarget`; orchestrator clarify
+      de-contradicted; deriveIntent typo-normalized; append-overlap swap +
+      coverage-on-append + weak→needs_review + render guard. +52 tests
+      (`test:editor`), `npm test` = 484. typecheck + build ✓. Browser run
+      pending. See `memory/EDITOR_REFINEMENT_ROUTING_2026-06-20.md`.
 
 - [x] (2026-06-20) **Dynamic local analysis — WIRED LIVE.** Quick-scan command
       (`quickScanCommand`/`quickScanResult`/`quickScan`) scans on-device +

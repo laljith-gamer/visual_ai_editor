@@ -220,7 +220,7 @@ export default function Home() {
   >(null);
   // Same forward-reference pattern for render, so the agentic fast-command
   // path can trigger the real render without reordering the component.
-  const handleRenderRef = useRef<(() => void) | null>(null);
+  const handleRenderRef = useRef<((opts?: { force?: boolean }) => void) | null>(null);
   // Export/download of the rendered short (chat "export" command reuses
   // the same path as the Export button).
   const exportShort = useExport();
@@ -1132,6 +1132,16 @@ export default function Home() {
         useEditorStore.getState().setPendingOverlap(null);
       }
 
+      // ---- v2.3 — "render anyway" override -------------------------------
+      // Plain "render" respects the needs_review guard (weak/underfilled
+      // results aren't shipped silently). An explicit "render anyway" forces
+      // it through. Must run before the planner so it never becomes a search.
+      if (/^\s*render\s+(?:it\s+)?(?:anyway|regardless|now|as[\s-]?is)\b[\s.!?]*$/i.test(userRequest)) {
+        handleRenderRef.current?.({ force: true });
+        setBusy(false);
+        return;
+      }
+
       // ---- v2.3 — Editor-first turn routing (BEFORE the planner) ---------
       // Classify the turn like an editor: confirm/cancel a pending action,
       // refine/filter the current timeline, trim to the active target,
@@ -1145,6 +1155,8 @@ export default function Home() {
           hasTimeline: st0.highlights.length > 0,
           clipCount: st0.highlights.length,
           hasPendingAction: Boolean(st0.pendingAction),
+          hasPendingExecution: st0.pendingExecution,
+          hasPendingClarify: Boolean(st0.pendingClarify),
           sourceCount: st0.sources.length,
           priorTargetSeconds: st0.activeTargetSeconds
         });
@@ -3331,7 +3343,7 @@ export default function Home() {
   // Keep the render ref current so the agentic fast-command path
   // ("render" / "export") can trigger the real render.
   useEffect(() => {
-    handleRenderRef.current = () => void handleRender();
+    handleRenderRef.current = (opts) => void handleRender(opts);
   }, [handleRender]);
 
   const isRendering =
