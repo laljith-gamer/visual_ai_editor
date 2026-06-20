@@ -17,7 +17,38 @@
 
 ---
 
-### 2026-06-20 — Dynamic local analysis WIRED LIVE
+### 2026-06-20 — Editor-first turn routing (refinement conversation fix)
+- **Change made:** Added a GENERIC editor-turn routing layer that runs BEFORE
+  the planner so refinement/control turns route as editor operations instead
+  of random visual searches. Fixes: vague "find a specific moment" now asks
+  (no 1s short); a 120s request yielding 37s → needs_review (not "ready");
+  "remove cutscene / only fighting" → ask-then-clean-REPLACE refine (no append
+  dead-end); the self-contradictory "Removed that clip … Want me to go ahead?"
+  is gone; "yes do it" resolves a concrete pending action (never "look for yes
+  moments"); claimed mutations always snapshot so undo works; a single-video
+  "remove boring parts … 1 min" refines the current timeline (no second-video
+  ask); "from current video clips" resolves scope + keeps the 60s target;
+  "trim to fit" is a direct trim to the active target; latest explicit duration
+  wins; editing typos (combact/cutsecene/comabt) normalize generically; content
+  phrases ("red boy", "wukong fight") are preserved instead of token soup; weak
+  results aren't auto-rendered (render guard + "render anyway").
+- **Files affected:** new `lib/intent/{editingNormalize,topicPhrases,
+  targetDurationMemory,refinementIntent,editorTurnIntent}.ts` (+ tests +
+  `editorTurnRouting.regression.test.ts`), new `lib/timeline/trimToTarget.ts`
+  (+ test); `lib/config.ts` (`EDITOR_TURN`); `lib/agent/orchestrator.ts`
+  (clarify message), `lib/plan/deriveIntent.ts` (typo normalization);
+  `hooks/useEditorStore.ts` (`pendingAction`, `activeTargetSeconds`,
+  `trimTimelineToTarget`); `app/editor/page.tsx` (router + render-anyway +
+  append-overlap swap + coverage/weak review + render guard); `package.json`
+  (`test:editor` + main `test`).
+- **Reason:** The app was planner-first; real refinement conversations failed.
+  Make it act like an editor — ask when unsure, never mutate silently, reuse
+  the timeline, honor the latest target, and be honest about weak results.
+- **Validation:** typecheck ✓, build ✓ (`/editor` 204 kB), `npm test` = 484
+  pass / 0 fail (`test:editor` = 52). Browser verification of the live flows
+  still pending (no GPU/decode in sandbox). No hardcoded phrases / genre tables.
+
+
 - **Change made:** Wired the dynamic-analysis foundation (built + tested in the
   earlier 2026-06-20 PR) into the real editor flow so users feel it. Now live:
   (1) the "Run a quick local scan" command runs a bounded, model-free,

@@ -18,9 +18,12 @@
 // domain knowledge (e.g. cooking-specific exclusions) — that nuance is the
 // LLM's job; here we only derive generic, honest constraints.
 //
-// Dependency-free on purpose (no "@/..." imports) so it can be unit-tested
-// directly with `node --test --experimental-strip-types`.
+// Dependency-light on purpose. The only import is the PURE editing-typo
+// normalizer (which reads pure config) so search typos like "combact" →
+// "combat" are fixed before tokenization. Unit-tested with `node --test`.
 // =====================================================================
+
+import { normalizeEditingText } from "../intent/editingNormalize";
 
 /** Mirrors PLAN_BOUNDS.targetShortSeconds in lib/config.ts. Kept inline so
  *  this module stays import-free and testable. */
@@ -208,7 +211,10 @@ export function deriveActionableIntent(
   _ctx: { hasVideo?: boolean } = {}
 ): ActionableIntent {
   const text = (userText || "").trim();
-  const lower = text.toLowerCase();
+  // Fix obvious editing-vocabulary typos first ("combact" → "combat",
+  // "cutsecene" → "cutscene") so they don't survive as broken subject
+  // tokens. Real content subjects are preserved (see editingNormalize).
+  const lower = normalizeEditingText(text).normalized;
 
   const targetSeconds = parseDuration(text);
   const format = detectFormat(text);
