@@ -27,6 +27,26 @@ import {
 } from "@/lib/pipeline/executePerSource";
 import { assessTargetCoverage } from "@/lib/pipeline/coverage";
 import { VIDEO_PROMPT } from "@/lib/config";
+import { detectQuickScanCommand } from "@/lib/analysis/quickScanCommand";
+import { classifyAnalysisPurpose } from "@/lib/analysis/purpose";
+import { planAnalysisBudget } from "@/lib/analysis/budget";
+import type { AnalysisPurpose } from "@/lib/analysis/types";
+import { detectDeviceTier } from "@/lib/analysis/deviceTier";
+import { decideClarification } from "@/lib/analysis/clarificationPolicy";
+import { planGlobalEdit } from "@/lib/analysis/globalVideoPlanner";
+import { deriveGlobalPlanRequest } from "@/lib/analysis/globalPlanRequest";
+import { summarizeSourceForPlanning } from "@/lib/analysis/videoMemory";
+import { buildDescribeResponse } from "@/lib/agent/describeResponder";
+import {
+  cacheSignalsForHash,
+  getCachedVideoMemory,
+  primeVideoMemory,
+  recordVideoMemory
+} from "@/lib/analysis/videoMemoryManager";
+import { buildHighlightMemoryPatch } from "@/lib/analysis/memorySignals";
+import { parseOverlapResolution } from "@/lib/timeline/overlapIntent";
+import { resolveAddConflict, type AddConflict } from "@/lib/timeline/overlapFlow";
+import { addClips } from "@/lib/timeline/operations";
 import { buildComposeSubPlan, buildComposeOutputPlan } from "@/lib/plan/composeSubPlan";
 import {
   resolveComposeSources,
@@ -156,6 +176,19 @@ export default function Home() {
     }, 500);
     return () => clearTimeout(t);
   }, [persistSignature, persist]);
+
+  // ---- v2.2 — Prime persisted video-analysis memory by hash ---------------
+  // When a source is uploaded / rehydrated, load any compact analysis memory
+  // we saved for that exact file (keyed by content hash, so a re-upload
+  // reconnects). This populates the synchronous in-memory cache the describe
+  // responder + budget planner read, so a second visit/prompt reuses what we
+  // already learned instead of re-scanning. No raw bytes are loaded — only
+  // the compact derived memory.
+  const sourceHashKey = useEditorStore((s) => s.sources.map((x) => x.hash).join("|"));
+  useEffect(() => {
+    const hashes = useEditorStore.getState().sources.map((x) => x.hash);
+    for (const h of hashes) void primeVideoMemory(h);
+  }, [sourceHashKey]);
 
   // ---- Helper: log AI / system / user events with the active sessionId ---
   const logSession = useMemo(
@@ -306,6 +339,31 @@ export default function Home() {
       const userTier = state.userTier;
       const t0 = Date.now();
 
+      // v2.2 — Dynamic, memory-aware analysis budget. Classify the request
+      // purpose from the latest user turn, then per source read any cached
+      // video memory and pass a duration + device-tier + cache aware budget
+      // into the executor (replaces the flat 240-frame cap). Exact / control /
+      // read-only requests never reach this path (handled upstream).
+      const deviceTier = (() => {
+        try {
+          return detectDeviceTier();
+        } catch {
+          return "unknown" as const;
+        }
+      })();
+      const lastUserText =
+        [...state.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+      const purposeResult = classifyAnalysisPurpose(lastUserText, {
+        sourceCount: eligible.length,
+        hasTimeline: state.highlights.length > 0
+      });
+      const analysisPurpose: AnalysisPurpose =
+        purposeResult.purpose === "specific_visual_search" ||
+        purposeResult.purpose === "deep_story"
+          ? purposeResult.purpose
+          : "normal_highlights";
+      let anyCachedReuse = false;
+
       try {
         const perSource: Array<{
           sourceName: string;
@@ -323,12 +381,47 @@ export default function Home() {
           const src = eligible[i];
           const baseProgress = i / eligible.length;
           const slot = 1 / eligible.length;
+
+          // Per-source memory-aware budget. The duration band + device tier
+          // set a bounded cap; cached memory drops the cap toward reuse.
+          const sig = cacheSignalsForHash(src.hash);
+          const budgetCommon = {
+            durationSeconds: src.meta.duration,
+            width: src.meta.width,
+            height: src.meta.height,
+            sourceCount: eligible.length,
+            purpose: analysisPurpose,
+            deviceTier,
+            userSpecifiedDuration: activePlan.userSpecifiedDuration,
+            targetSeconds: activePlan.targetShortSeconds,
+            promptSpecificity: purposeResult.specificity
+          };
+          const budgetWithCache = planAnalysisBudget({
+            ...budgetCommon,
+            hasCachedQuickScan: sig.hasCachedQuickScan,
+            hasCachedDeepScan: sig.hasCachedDeepScan
+          });
+          const reuse = budgetWithCache.maxFrames === 0;
+          if (reuse) anyCachedReuse = true;
+          // When memory says "reuse", still pass a bounded duration-aware cap
+          // so a prediction-cache MISS doesn't fall back to the flat 240
+          // backstop. The signature-keyed prediction cache is what actually
+          // skips re-sampling on a true reuse.
+          const analysisBudget = reuse
+            ? planAnalysisBudget({
+                ...budgetCommon,
+                hasCachedQuickScan: false,
+                hasCachedDeepScan: false
+              })
+            : budgetWithCache;
+
           const result = await executeForSource({
             source: src,
             plan: activePlan,
             mode,
             capTier: cap.tier,
             userTier,
+            analysisBudget,
             log: logSession,
             progress: {
               setStatus: (s, detail) =>
@@ -356,6 +449,42 @@ export default function Home() {
         // Merge + cap to plan budget. mergeAcrossSources also handles
         // moment-mode ("pick the single winner across sources").
         const merged = mergeAcrossSources(aggregate, activePlan, mode);
+
+        // v2.2 — Persist what we learned into compact video memory so the
+        // next prompt can reuse it (structural windows + confidence + level;
+        // NEVER raw frames). Best-effort; never blocks the run. A semantic
+        // (SigLIP) pass records level 3; a motion/saliency-only run level 2.
+        const hadSemanticPass =
+          activePlan.scenarios.length > 0 &&
+          !(activePlan.signals && activePlan.signals.semantic === 0);
+        for (let i = 0; i < eligible.length; i++) {
+          const src = eligible[i];
+          const r = aggregate[i];
+          if (!r) continue;
+          const patch = buildHighlightMemoryPatch({
+            durationSeconds: src.meta.duration,
+            highlights: r.highlights.map((h) => ({
+              start: h.start,
+              end: h.end,
+              score: h.score,
+              label: h.label
+            })),
+            scoreMax: r.scoreMax,
+            weakOnly: r.weakOnly,
+            hadSemanticPass
+          });
+          void recordVideoMemory(
+            {
+              videoHash: src.hash,
+              sourceId: src.id,
+              sourceName: src.meta.name,
+              durationSeconds: src.meta.duration,
+              width: src.meta.width,
+              height: src.meta.height
+            },
+            patch
+          );
+        }
 
         if (merged.highlights.length === 0) {
           // v1.7.1 — append runs are softer about empty results. The
@@ -512,6 +641,12 @@ export default function Home() {
               ` Want me to use the ${lastBriefing.bestParts.length} moments I identified earlier instead? Say "use the briefing".`;
           }
         }
+        if (anyCachedReuse) {
+          pushMessage({
+            role: "assistant",
+            content: "Using the cached scan from this video to speed things up."
+          });
+        }
         pushMessage({ role: "assistant", content: summary });
 
         // v1.7.1 — Soft over-budget notice. When the user has set an
@@ -582,12 +717,201 @@ export default function Home() {
     ]
   );
 
+  // ---- v2.2 — Quick local scan command runner -----------------------------
+  // Runs a bounded, model-free structural scan of the active source, persists
+  // the resulting compact memory (videoMemoryManager), and answers with an
+  // honest structural description + next-step chips. NEVER creates timeline
+  // clips, NEVER calls the planner, NEVER uploads or stores raw frames.
+  const runLocalScanCommand = useCallback(
+    async (deep: boolean) => {
+      const st = useEditorStore.getState();
+      const active =
+        st.sources.find((s) => s.id === st.activeSourceId) ?? st.sources[0] ?? null;
+      if (!active) {
+        pushMessage({
+          role: "assistant",
+          content: "Upload a video into the rail first, then I can run a quick local scan."
+        });
+        setStatus("idle", undefined);
+        return;
+      }
+      let tier: ReturnType<typeof detectDeviceTier> = "unknown";
+      try {
+        tier = detectDeviceTier();
+      } catch {
+        tier = "unknown";
+      }
+      try {
+        setStatus(
+          "scoring",
+          deep ? "Running a deeper local scan\u2026" : "Quick scanning video structure\u2026"
+        );
+        setProgress(0.05);
+        const { runQuickScan } = await import("@/lib/analysis/quickScan");
+        const res = await runQuickScan({
+          source: {
+            id: active.id,
+            hash: active.hash,
+            blob: active.blob,
+            meta: {
+              name: active.meta.name,
+              duration: active.meta.duration,
+              width: active.meta.width,
+              height: active.meta.height
+            }
+          },
+          deviceTier: tier,
+          deep,
+          onProgress: (p) => setProgress(0.05 + p * 0.9)
+        });
+
+        const hasTranscript = Boolean(st.transcripts?.[active.hash]);
+        const describe = buildDescribeResponse({
+          hasVideo: true,
+          sourceName: active.meta.name,
+          durationSeconds: active.meta.duration,
+          width: active.meta.width,
+          height: active.meta.height,
+          hasTranscript,
+          memory: res.memory,
+          deviceTier: tier
+        });
+
+        // After the cheap scan, ask one focused question only if the result
+        // is genuinely inconclusive (low confidence / weak windows).
+        const clar = decideClarification({
+          purpose: "quick_describe",
+          promptSpecificity: deep ? "normal" : "simple",
+          sourceCount: st.sources.length,
+          quickScanConfidence: res.summary.confidence,
+          detectedContentTypes: res.summary.contentTypes,
+          candidateWindowStrength: res.summary.candidateStrength
+        });
+        const message = clar.shouldAsk ? clar.message ?? describe.message : describe.message;
+        const suggestions = clar.shouldAsk
+          ? clar.suggestions ?? describe.suggestions
+          : describe.suggestions;
+
+        const header = `Done \u2014 ${deep ? "deeper" : "quick"} local scan of "${active.meta.name}" (${res.frameCount} keyframe${res.frameCount === 1 ? "" : "s"}, on-device, no cloud).`;
+        pushMessage({
+          role: "assistant",
+          content: `${header}\n\n${message}`,
+          attachment: { mode: "describe", suggestions }
+        });
+        if (suggestions.length > 0) {
+          setPendingClarify({
+            message,
+            questions: [
+              { id: "scan-next", prompt: message, suggestions, kind: "single-choice" }
+            ]
+          });
+        }
+        setStatus(st.highlights.length > 0 ? "ready" : "idle", undefined);
+        setProgress(0);
+        logSession.ai(
+          "analysis.quickScan",
+          {
+            deep,
+            frames: res.frameCount,
+            level: res.memory.level,
+            confidence: res.summary.confidence,
+            contentTypes: res.summary.contentTypes
+          },
+          `${deep ? "Deeper" : "Quick"} local scan: ${res.frameCount} frames, level ${res.memory.level}`
+        );
+      } catch (err) {
+        const msg = friendlyStorageError(err) ?? (err as Error).message;
+        pushMessage({
+          role: "assistant",
+          content: `I couldn't finish the local scan: ${msg}`
+        });
+        setStatus(useEditorStore.getState().highlights.length > 0 ? "ready" : "idle", undefined);
+        setProgress(0);
+        logSession.system(
+          "analysis.quickScan.failed",
+          { message: msg },
+          `Quick scan failed: ${msg.slice(0, 80)}`
+        );
+      }
+    },
+    [pushMessage, setStatus, setProgress, setPendingClarify, logSession]
+  );
+
   // ---- Submit a chat turn -------------------------------------------------
   const handleAgent = useCallback(
     async (userRequest: string) => {
       setBusy(true);
       pushMessage({ role: "user", content: userRequest });
       const previousPlan = useEditorStore.getState().plan;
+
+      // ---- v2.2 — Quick local scan command (deterministic, LOCAL-only) ----
+      // "Run a quick local scan" / "scan this video" / "deeper scan" run a
+      // bounded, model-free structural scan (motion + saliency over a few
+      // keyframes), build + PERSIST compact video memory (so the next prompt
+      // reuses it), and answer with an honest structural description + next
+      // steps. It NEVER creates timeline clips and NEVER reaches the planner.
+      // Runs before the describe guard so the chip actually triggers a scan.
+      const scanCmd = detectQuickScanCommand(userRequest);
+      if (scanCmd) {
+        await runLocalScanCommand(scanCmd.kind === "deep");
+        setBusy(false);
+        return;
+      }
+
+      // ---- v2.2 — Resolve a parked overlap conflict ----------------------
+      // If a previous add asked "this clip overlaps an existing one — keep
+      // both / replace / trim?", a reply that names a resolution is applied
+      // here (snapshotting the timeline for undo). A reply that is NOT a
+      // resolution abandons the pending overlap and flows on as a new turn.
+      const pendingOverlap = useEditorStore.getState().pendingOverlap;
+      if (pendingOverlap) {
+        const resolution = parseOverlapResolution(userRequest);
+        if (resolution) {
+          const current = useEditorStore.getState().highlights;
+          const item: AddConflict = {
+            incoming: pendingOverlap.incoming,
+            conflict: {
+              incomingClipId: "__incoming__",
+              existingClipId: pendingOverlap.existingClipId,
+              sourceId: pendingOverlap.incoming.sourceId ?? "",
+              overlapSeconds: pendingOverlap.overlapSeconds,
+              overlapRatio: 1,
+              incomingRange: {
+                start: pendingOverlap.incoming.start,
+                end: pendingOverlap.incoming.end
+              },
+              existingRange: pendingOverlap.existingRange
+            }
+          };
+          const resolved = resolveAddConflict(item, resolution);
+          let next = current;
+          if (resolved.removeExistingId) {
+            next = next.filter((h) => h.id !== resolved.removeExistingId);
+          }
+          if (resolved.toAdd) {
+            next = addClips(next, [resolved.toAdd], pendingOverlap.placementIndex).highlights;
+          }
+          if (next !== current) setHighlights(next);
+          useEditorStore.getState().setPendingOverlap(null);
+          setPendingClarify(null);
+          pushMessage({
+            role: "assistant",
+            content: resolved.note ?? "Done.",
+            attachment: { mode: "agent", kind: "overlap" }
+          });
+          const after = useEditorStore.getState().highlights;
+          setStatus(after.length > 0 ? "ready" : "idle", undefined);
+          logSession.ai(
+            "agent.overlap.resolved",
+            { resolution: resolved.applied },
+            `Resolved overlap: ${resolved.applied}`
+          );
+          setBusy(false);
+          return;
+        }
+        // Not a resolution — abandon the pending overlap and continue.
+        useEditorStore.getState().setPendingOverlap(null);
+      }
 
       // v2.1 — Agentic intake may compile a clean, structured brief for this
       // turn. When it does, the local-planner fallback (below) plans from the
@@ -1865,25 +2189,102 @@ export default function Home() {
           }>;
           let unresolved: ComposeSourceSelection[];
           if (compose.sourceScope === "all") {
-            const eligible = resolvable.slice(0, VIDEO_PROMPT.maxComposeSources);
-            const numSrc = eligible.length;
-            const perSourceDuration =
-              compose.targetSeconds && compose.targetSeconds > 0
-                ? compose.targetSeconds / numSrc
-                : undefined;
-            resolved = eligible.map((source, i) => ({
-              source,
-              selection: {
-                sourceRef: { type: "index", index: i },
-                query: compose.allSourcesTopic ?? "",
-                role: "segment" as ComposeRole,
-                order: i + 1,
-                ...(perSourceDuration
-                  ? { durationSeconds: perSourceDuration }
-                  : {})
-              }
-            }));
+            const eligibleAll = resolvable.slice(0, VIDEO_PROMPT.maxComposeSources);
+            const srcById = new Map(allSources.map((s) => [s.id, s]));
+
+            // v2.2 — GLOBAL multi-video planning. Build a per-source planning
+            // summary from cached video memory (generic signals: motion +
+            // strong-window count, NO genre table), infer roles/order/shares,
+            // and — when the brief is genuinely vague — ASK (story vs montage)
+            // BEFORE running any expensive per-source analysis.
+            const purposeForPlan = classifyAnalysisPurpose(userRequest, {
+              sourceCount: eligibleAll.length,
+              hasTimeline: composeStore.highlights.length > 0
+            });
+            const summaries = eligibleAll.map((e) => {
+              const src = srcById.get(e.id);
+              const mem = src ? getCachedVideoMemory(src.hash) : null;
+              if (mem) return summarizeSourceForPlanning(mem);
+              return {
+                sourceId: e.id,
+                videoHash: src?.hash ?? "",
+                name: e.name,
+                durationSeconds: src?.meta.duration ?? 0,
+                level: 0 as const,
+                confidence: 0,
+                motion: "unknown" as const,
+                goodWindowCount: 0,
+                goodWindows: []
+              };
+            });
+            const globalPlan = planGlobalEdit(
+              summaries,
+              deriveGlobalPlanRequest(userRequest, purposeForPlan.specificity)
+            );
+            if (globalPlan.needsClarification && globalPlan.clarification) {
+              pushMessage({
+                role: "assistant",
+                content: globalPlan.clarification.message,
+                attachment: { mode: "intake" }
+              });
+              setPendingClarify({
+                message: globalPlan.clarification.message,
+                questions: [
+                  {
+                    id: "global-style",
+                    prompt: globalPlan.clarification.message,
+                    suggestions: globalPlan.clarification.suggestions,
+                    kind: "single-choice"
+                  }
+                ]
+              });
+              setStatus(composeStore.highlights.length > 0 ? "ready" : "idle", undefined);
+              setProgress(0);
+              logSession.ai(
+                "global.plan.clarify",
+                { sources: eligibleAll.length, strategy: globalPlan.strategy },
+                globalPlan.clarification.message
+              );
+              return;
+            }
+
+            // Order sources per the global plan; size each source's
+            // contribution by its planned target share (balanced mode caps
+            // any single source so one video can't dominate).
+            const orderIndex = new Map(globalPlan.order.map((id, i) => [id, i]));
+            const ordered = [...eligibleAll].sort(
+              (a, b) => (orderIndex.get(a.id) ?? 0) - (orderIndex.get(b.id) ?? 0)
+            );
+            const shareById = new Map(globalPlan.roles.map((r) => [r.sourceId, r.targetShare]));
+            const evenShare = ordered.length > 0 ? 1 / ordered.length : 1;
+            resolved = ordered.map((source, i) => {
+              const share = shareById.get(source.id) ?? evenShare;
+              const perSourceDuration =
+                compose.targetSeconds && compose.targetSeconds > 0
+                  ? compose.targetSeconds * share
+                  : undefined;
+              return {
+                source,
+                selection: {
+                  sourceRef: { type: "index" as const, index: source.index },
+                  query: compose.allSourcesTopic ?? "",
+                  role: "segment" as ComposeRole,
+                  order: i + 1,
+                  ...(perSourceDuration ? { durationSeconds: perSourceDuration } : {})
+                }
+              };
+            });
             unresolved = [];
+            logSession.ai(
+              "global.plan.applied",
+              {
+                sources: ordered.length,
+                strategy: globalPlan.strategy,
+                order: globalPlan.order,
+                shares: globalPlan.roles.map((r) => ({ id: r.sourceId, role: r.role, share: r.targetShare }))
+              },
+              `Global plan: ${globalPlan.strategy} (${ordered.length} sources)`
+            );
           } else {
             const r = resolveComposeSources(compose.sources, resolvable);
             resolved = r.resolved;
@@ -2446,6 +2847,7 @@ export default function Home() {
       setPendingExecution,
       setUserTier,
       runPipeline,
+      runLocalScanCommand,
       logSession
     ]
   );

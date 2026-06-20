@@ -22,6 +22,7 @@ import type {
 } from "@/lib/types";
 import type { Transcript } from "@/lib/audio/types";
 import type { BoundaryTransition } from "@/lib/transitions/types";
+import type { NewClipInput } from "@/lib/timeline/operations";
 import { normalizeTransitionDuration } from "@/lib/transitions/types";
 import { mapTransition } from "@/lib/transitions/map";
 import { buildAutoBoundaryTransitions } from "@/lib/transitions/timeline";
@@ -106,6 +107,18 @@ interface EditorState {
   mode: IntentMode | null;
   inferred: InferredField[];
   pendingClarify: { message: string; questions: ClarifyQuestion[] } | null;
+
+  /** v2.2 — A detected same-source overlap conflict awaiting the user's
+   *  explicit choice (skip / replace / keep both / trim). The incoming clip
+   *  is parked here (NOT yet on the timeline) so it's never resolved
+   *  silently or destructively. Cleared once resolved or abandoned. */
+  pendingOverlap: {
+    incoming: NewClipInput;
+    placementIndex?: number;
+    existingClipId: string;
+    existingRange: { start: number; end: number };
+    overlapSeconds: number;
+  } | null;
 
   /** v1.4.0 — user tier as classified by the LLM on the most recent
    *  agent turn. Drives adaptive selection in events.ts / highlights.ts
@@ -280,6 +293,8 @@ interface EditorState {
     p: { message: string; questions: ClarifyQuestion[] } | null
   ) => void;
   setPendingExecution: (v: boolean) => void;
+  /** v2.2 — Park / clear a pending overlap conflict. */
+  setPendingOverlap: (p: EditorState["pendingOverlap"]) => void;
   /** v1.4.0 — set after each agent turn that returned a tier. */
   setUserTier: (tier: UserTier) => void;
 
@@ -353,6 +368,7 @@ function freshState() {
     mode: null as IntentMode | null,
     inferred: [] as InferredField[],
     pendingClarify: null as EditorState["pendingClarify"],
+    pendingOverlap: null as EditorState["pendingOverlap"],
     pendingExecution: false,
     userTier: "novice" as UserTier,
     lastBriefing: null as EditorState["lastBriefing"],
@@ -717,6 +733,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       mode: null,
       inferred: [],
       pendingClarify: null,
+      pendingOverlap: null,
       pendingExecution: false,
       renderedBlob: null,
       renderedUrl: null,
@@ -1179,6 +1196,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setInferred: (fields) => set({ inferred: fields }),
   setPendingClarify: (p) => set({ pendingClarify: p }),
   setPendingExecution: (v) => set({ pendingExecution: v }),
+  setPendingOverlap: (p) => set({ pendingOverlap: p }),
   setUserTier: (tier) => set({ userTier: tier }),
 
   setLastBriefing: (b) => set({ lastBriefing: b, updatedAt: Date.now() }),

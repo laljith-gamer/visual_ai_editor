@@ -21,6 +21,7 @@ import {
 import { answerReadOnly, deterministicAnswer, type ReadOnlyState } from "@/lib/agent/readOnlyResponder";
 import { buildDescribeResponse, type DescribeResponse } from "@/lib/agent/describeResponder";
 import { detectDeviceTier } from "@/lib/analysis/deviceTier";
+import { getCachedVideoMemory } from "@/lib/analysis/videoMemoryManager";
 
 /** Snapshot the live store into the classifier's context. */
 export function buildConversationContext(): ConversationContext {
@@ -139,9 +140,9 @@ export function respondReadOnlySync(intent: ConversationIntent, text: string): s
 /**
  * Build an honest, INSTANT response to a "describe this video" turn from the
  * live store. NEVER mutates state and NEVER runs the highlight pipeline — it
- * answers from metadata (+ transcript presence) and offers next-step chips.
- * Cached analysis-memory lookup is a follow-up; for now it reports honestly
- * that no scan has run.
+ * answers from metadata (+ transcript presence) and, when a local scan has
+ * already run, from the cached structural VideoAnalysisMemory (so a describe
+ * after a quick scan is richer + honest about local limits).
  */
 export function respondDescribe(): DescribeResponse {
   const s = useEditorStore.getState();
@@ -160,7 +161,7 @@ export function respondDescribe(): DescribeResponse {
     width: active?.meta.width,
     height: active?.meta.height,
     hasTranscript,
-    memory: null,
+    memory: active ? getCachedVideoMemory(active.hash) : null,
     deviceTier
   });
 }

@@ -8,28 +8,35 @@
 
 ## High priority
 
-- [ ] **Wire the dynamic-analysis foundation end-to-end (2026-06-20).** The
-      pure modules (`lib/analysis/*`, `lib/timeline/overlapResolver`,
-      `lib/agent/describeResponder`) are built + tested, and the describe fix +
-      dynamic frame cap are live. Remaining incremental wiring:
-      1. Persist `videoMemoryStore` after a scan + read it before scanning
-         (memory reuse; cache-hit budget → 0 new frames).
-      2. Route multi-source runs through `globalVideoPlanner` (roles/order/
-         shares) instead of the flat per-source merge.
-      3. Gate the add-clip / agent add path through `overlapResolver` (ask on
-         ambiguous overlap; respect keep-both; never silent replace).
-      4. Run a real bounded quick-scan (Level 1–3 progressive passes) when the
-         user taps "Run a quick local scan" / "deeper local scan", writing the
-         result into video memory.
-      5. Surface `decideClarification` after the first quick scan for vague /
-         low-confidence creative prompts.
-      See `memory/DYNAMIC_LOCAL_ANALYSIS_2026-06-20.md`.
-- [ ] **Manual browser test — describe + dynamic budget (2026-06-20, after
-      deploy).** "Describe what's in this video" → honest instant answer + chips
-      (quick scan / motion reel / find specific), NO timeline change, NO stuck
-      scoring. "Add first 30 seconds" → instant, no frame analysis. "Pick best
-      parts" on a 10s vs 30-min video → far fewer frames on the short clip,
-      deeper (still bounded) coarse scan on the long one. Needs a real browser.
+- [ ] **Manual browser test — dynamic analysis WIRED (2026-06-20, after
+      deploy).** Needs a real browser (no GPU/decode in sandbox). Verify the
+      six live behaviours:
+      1. "Run a quick local scan" / "scan this video" → a bounded on-device
+         scan runs, an honest STRUCTURAL description appears, NO timeline clips
+         are created; refresh the page and "describe this video" still recalls
+         the scan (memory persisted by hash).
+      2. "Pick the best parts" then the SAME ask again → second run shows
+         "Using the cached scan from this video" and samples fewer/no new
+         frames; a 10s vs 30-min video samples far fewer frames on the short.
+      3. "Add first 30 seconds" → instant, no scan, under 1s.
+      4. Add a clip overlapping an existing same-source clip → it ASKS
+         (skip/replace/keep both/trim); "keep both" / "replace the old one" /
+         "trim overlap" each apply correctly and undo restores; nothing is
+         silently dropped/replaced.
+      5. Multi-video "make a cinematic story from all videos" → story order;
+         "make it cool from all videos" → asks story vs montage BEFORE scanning;
+         "make a reel from all videos" → balanced, no single source dominates.
+      6. Low-confidence quick scan → offers "scan deeper / motion reel".
+      See `memory/DYNAMIC_LOCAL_ANALYSIS_WIRING_2026-06-20.md`.
+
+- [ ] **Follow-up — deeper dynamic-analysis reuse (next).** (a) Seed scoring /
+      window detection from `knownGoodWindows` so a cached structural scan
+      reduces work for a DIFFERENT query (today reuse mainly helps describe +
+      the same-signature prediction cache). (b) Route NON-compose multi-source
+      runs through `globalVideoPlanner` too (currently the all-sources compose
+      path only; `mergeAcrossSources` is otherwise unchanged). (c) A dedicated
+      coarse-then-deep two-pass executor for `specific_visual_search` /
+      `deep_story` (they currently use the best-parts budget bands).
 
 - [ ] **Manual browser test — issue #64 messy compose prompts (after deploy).**
       Upload 2–3 videos, ask `atleast sect 5 clip from all and make it as
@@ -230,7 +237,21 @@
 
 ## Completed
 
-- [x] (2026-06-19) **Auto transition picking (issue #57, PR 59 layer).**
+- [x] (2026-06-20) **Dynamic local analysis — WIRED LIVE.** Quick-scan command
+      (`quickScanCommand`/`quickScanResult`/`quickScan`) scans on-device +
+      persists level-1 memory + answers honestly, no clips. Video memory
+      end-to-end (`videoMemoryManager` sync cache + idb; primed by hash;
+      describe reads it). `runPipeline` classifies purpose + builds memory-aware
+      `planAnalysisBudget` per source + persists `buildHighlightMemoryPatch` +
+      "Using cached scan" copy. `decideClarification` after low-confidence scan
+      + multi-video style. `globalVideoPlanner` wired into the all-sources
+      compose path (clarify story/montage, balanced shares). Overlap resolver
+      gates `add_clips` (`overlapIntent`/`overlapFlow` + store `pendingOverlap`):
+      ambiguous → ask, never silent. +35 tests (`npm test` = 432). typecheck +
+      build ✓ (`/editor` 199 kB). Browser run still pending. See
+      `memory/DYNAMIC_LOCAL_ANALYSIS_WIRING_2026-06-20.md`.
+
+
       Offline, deterministic, evidence-based selector (no genre tables):
       `lib/transitions/{features,auto,timeline}.ts` + `TRANSITIONS.autoPick`
       config + extended `BoundaryTransition`. Store `boundaryTransitions`

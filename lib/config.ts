@@ -949,3 +949,38 @@ export const GLOBAL_PLAN = {
    *  "main action" candidate when good-window counts tie. */
   mainActionMotionFloor: 0.5
 } as const;
+
+
+// =====================================================================
+// v2.2 — Quick local scan (lib/analysis/quickScanResult.ts + the editor's
+// "Run a quick local scan" command path).
+//
+// A bounded, LOCAL, model-free pass: sample a few keyframes, read their
+// (already-computed) motion + saliency, and derive a compact structural
+// memory (motion/saliency peaks, static ranges, candidate windows). These
+// are SAMPLING/STRUCTURE guardrails only — no genre table, no fixed clip
+// count, no fabricated captions. The scan only reports STRUCTURE, never
+// claims to name on-screen subjects.
+// =====================================================================
+
+export const QUICK_SCAN = {
+  /** A frame's motion (0..1) at/above this is a "motion peak". */
+  motionPeakFloor: 0.45,
+  /** A frame's saliency (0..1) at/above this is a "busy/varied" frame. */
+  saliencyPeakFloor: 0.6,
+  /** A frame with motion at/below this AND saliency at/below the floor is
+   *  treated as a static / low-interest moment. */
+  staticMotionCeiling: 0.12,
+  /** Combined interest = motionWeight*motion + saliencyWeight*saliency. */
+  motionWeight: 0.6,
+  saliencyWeight: 0.4,
+  /** Combined-interest score (0..1) at/above which a keyframe seeds a
+   *  "known good" candidate window. */
+  goodWindowFloor: 0.5,
+  /** Caps so the stored memory stays compact (NO raw frames either way). */
+  maxKeyframes: 16,
+  maxWindows: 12,
+  /** A scan is "low confidence" (→ may ask to scan deeper) when the best
+   *  combined-interest score is below this. Mirrors CLARIFY_POLICY. */
+  lowConfidenceCeiling: 0.35
+} as const;
