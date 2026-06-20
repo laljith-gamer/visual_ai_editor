@@ -12,6 +12,7 @@ import { QuotaBanner } from "@/components/QuotaBanner";
 import { useEditorStore, scenariosChanged } from "@/hooks/useEditorStore";
 import { useFFmpeg } from "@/hooks/useFFmpeg";
 import { useCapability } from "@/hooks/useCapability";
+import { useChatBrainPreload } from "@/hooks/useChatBrainPreload";
 import { useActivityLog } from "@/hooks/useActivityLog";
 import { useExport } from "@/hooks/useExport";
 import { sampleFrames } from "@/lib/pipeline/sample";
@@ -116,6 +117,11 @@ export default function Home() {
 
   const sessionId = useEditorStore((s) => s.sessionId);
   const events = useActivityLog(sessionId);
+
+  // v2.5 — warm the text-only chat brain in the background once the editor is
+  // ready / once a source exists. Non-blocking; deterministic mode otherwise.
+  const hasAnySource = useEditorStore((s) => s.sources.length > 0);
+  useChatBrainPreload({ uploadStarted: hasAnySource });
 
   const videoBlob = useEditorStore((s) => s.videoBlob);
   const videoMeta = useEditorStore((s) => s.videoMeta);
@@ -1294,8 +1300,8 @@ export default function Home() {
       try {
         const st1 = useEditorStore.getState();
         if (st1.pendingClarify && st1.pendingClarify.questions.length > 0) {
-          const { resolvePendingAnswer } = await import("@/lib/agentic-intake/pendingAnswerResolver");
-          const { clearIntakeBrief, runIntake: runIntakeImport } = await import("@/lib/agentic-intake/runIntake");
+          const { resolvePendingAnswerWithBrain } = await import("@/lib/agentic-intake/llmPendingAnswerResolver");
+          const { runIntake: runIntakeImport } = await import("@/lib/agentic-intake/runIntake");
           const q = st1.pendingClarify.questions[0];
 
           // Map question id to the brief field it targets.
@@ -1312,10 +1318,36 @@ export default function Home() {
           };
           const targetField = fieldMap[q.id];
           if (targetField) {
-            const resolved = resolvePendingAnswer(userRequest, {
-              question: q,
-              targetField
-            });
+            // Build the PRIVACY-SAFE text state for the (optional) brain
+            // fallback — compact labels only, never media.
+            const msgs = st1.messages;
+            let prevAssistant: string | undefined;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === "assistant") {
+                prevAssistant = msgs[i].content;
+                break;
+              }
+            }
+            const { answer: resolved, usedBrain } = await resolvePendingAnswerWithBrain(
+              userRequest,
+              { question: q, targetField },
+              {
+                previousAssistantMessage: prevAssistant ?? st1.pendingClarify.message,
+                pendingActionKind: st1.pendingAction?.kind ?? null,
+                activeTargetSeconds: st1.activeTargetSeconds ?? null,
+                timelineClipCount: st1.highlights.length,
+                selectedSourceCount: st1.selectedSourceIds.length
+              }
+            );
+            if (usedBrain) {
+              logSession.ai(
+                resolved && resolved.method === "llm" ? "intent.llm.used" : "intent.llm.fallback",
+                { field: targetField, method: resolved?.method ?? "none" },
+                resolved && resolved.method === "llm"
+                  ? `Chat brain resolved "${targetField}": ${resolved.summary}`
+                  : `Chat brain consulted; used deterministic ${resolved?.method ?? "none"}`
+              );
+            }
             if (resolved && resolved.confidence >= 0.6) {
               // The user answered the question. Clear the pending clarify and
               // re-run intake with context that includes the answer — this
@@ -1330,21 +1362,44 @@ export default function Home() {
                 cloudVisionAvailable: true
               });
               if (intake2.kind === "clarify") {
-                // Next question (NOT the same one) — ask it.
-                pushMessage({
-                  role: "assistant",
-                  content: intake2.message,
-                  attachment: { mode: "intake", field: intake2.question.id }
-                });
-                setPendingClarify({
-                  message: intake2.message,
-                  questions: [intake2.question]
-                });
-                logSession.ai(
-                  "intake.answer.resolved",
-                  { answeredField: targetField, nextField: intake2.question.id, method: resolved.method },
-                  `Resolved "${targetField}" via ${resolved.method}: ${resolved.summary}`
-                );
+                // Anti-loop guard: NEVER re-ask the same question the user
+                // just answered. If intake still wants the same field, the
+                // answer didn't merge cleanly — proceed with what we have
+                // instead of looping.
+                if (intake2.question.id === q.id) {
+                  logSession.ai(
+                    "intake.loop.prevented",
+                    { field: targetField, method: resolved.method },
+                    `Prevented re-asking "${q.id}" after a usable ${resolved.method} answer; proceeding.`
+                  );
+                  if (intake2.brief) {
+                    const { compileBriefPrompt } = await import("@/lib/agentic-intake/promptCompiler");
+                    try {
+                      intakeCompiledPrompt = compileBriefPrompt(intake2.brief);
+                    } catch {
+                      intakeCompiledPrompt = userRequest;
+                    }
+                  }
+                  // fall through to the planner
+                } else {
+                  // Next (DIFFERENT) question — ask it.
+                  pushMessage({
+                    role: "assistant",
+                    content: intake2.message,
+                    attachment: { mode: "intake", field: intake2.question.id }
+                  });
+                  setPendingClarify({
+                    message: intake2.message,
+                    questions: [intake2.question]
+                  });
+                  logSession.ai(
+                    "intake.answer.resolved",
+                    { answeredField: targetField, nextField: intake2.question.id, method: resolved.method },
+                    `Resolved "${targetField}" via ${resolved.method}: ${resolved.summary}`
+                  );
+                  setBusy(false);
+                  return;
+                }
               } else if (intake2.kind === "proceed") {
                 intakeCompiledPrompt = intake2.compiledPrompt;
                 logSession.ai(
@@ -1354,12 +1409,7 @@ export default function Home() {
                 );
                 // Fall through to planner with the compiled prompt.
               }
-              // If passthrough, also fall through.
-              if (intake2.kind === "clarify") {
-                setBusy(false);
-                return;
-              }
-              // proceed / passthrough → continue to the planner below.
+              // proceed / passthrough / loop-prevented → continue to planner.
             }
           }
         }

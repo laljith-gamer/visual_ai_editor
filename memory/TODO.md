@@ -8,6 +8,25 @@
 
 ## High priority
 
+- [ ] **Manual browser test — chat brain preload + dynamic clips (2026-06-20,
+      v2.5).** Needs a real browser + a configured provider key (no GPU/decode
+      and no provider in sandbox). Verify:
+      1. With a provider key set, the `ChatBrainBadge` goes idle → warming →
+         ready shortly after the editor loads / first upload; with NO key it
+         shows "unavailable" and the app still works deterministically.
+      2. A clearly-typed clarify answer resolves WITHOUT consulting the brain
+         (deterministic-first); only an ambiguous free-text answer triggers the
+         LLM fallback (`intent.llm.used`); a usable answer NEVER re-asks the
+         same question (`intake.loop.prevented`).
+      3. Deterministic commands (undo/redo/render/export/trim, yes/no with a
+         pending action) never call the brain and stay instant.
+      4. Network panel: the `/api/agent/intent` request body contains ONLY
+         compact text (no frames/blobs/paths/keys).
+      5. A reel from a long video produces clips of VARYING length (some ~1s,
+         some longer), not a row of identical ~3s blocks; a short video can
+         yield ~1s clips; an explicit min/max is still honored.
+      See `memory/CHAT_BRAIN_PRELOAD_2026-06-20.md`.
+
 - [ ] **Manual browser test — free-text chat routing (2026-06-20).** Verify:
       1. "Describe what's in this video" → describe response, NOT "What should
          I do with it?"
@@ -270,7 +289,21 @@
 
 ## Completed
 
-- [x] (2026-06-20) **Editor-first turn routing (refinement fix).** New generic
+- [x] (2026-06-20) **Chat brain preload + dynamic clip durations (v2.5).**
+      Privacy-safe TEXT-ONLY intent/clarify-answer brain warmed in the
+      background (`lib/llm/{chatBrainSchema,chatBrainPreload}.ts`,
+      `app/api/agent/intent/route.ts`, `hooks/useChatBrainPreload.ts`,
+      `components/ChatBrainBadge.tsx`); used ONLY as a low-confidence fallback in
+      `resolvePendingAnswerWithBrain`; never receives media (only compact text
+      via `buildChatBrainPayload` + `FORBIDDEN_PAYLOAD_KEYS`); deterministic
+      commands never touch it; anti-loop guard in `handleAgent`. Dynamic clip
+      durations (`lib/pipeline/clipDuration.ts` → `deriveClipDurationBounds` +
+      `clipLengthForScore`, wired into `bestParts`/`highlights`) replace the
+      fixed ~3s. Config: `CHAT_BRAIN` + `CLIP_DURATION`. +30 tests
+      (`npm test` = 522). typecheck + build ✓ (`/editor` 208 kB). Browser +
+      live-provider run pending. See `memory/CHAT_BRAIN_PRELOAD_2026-06-20.md`.
+
+ New generic
       pre-planner router (`lib/intent/editorTurnIntent` + `refinementIntent` +
       `topicPhrases` + `editingNormalize` + `targetDurationMemory` +
       `lib/timeline/trimToTarget`) so refine/control turns route as editor

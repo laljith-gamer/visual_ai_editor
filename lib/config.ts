@@ -1032,3 +1032,79 @@ export const EDITOR_TURN = {
     act: 0.6
   }
 } as const;
+
+
+
+// =====================================================================
+// v2.5 — Chat Brain Preload (lib/llm/chatBrainPreload.ts +
+// hooks/useChatBrainPreload.ts + app/api/agent/intent/route.ts).
+//
+// A lightweight, privacy-safe TEXT-ONLY intent/clarify-answer brain that is
+// warmed in the background after the editor is ready (or after upload
+// begins), so the first real chat turn is fast. It is used ONLY as a
+// fallback when the deterministic resolver's confidence is low. It NEVER
+// receives video bytes, frames, thumbnails, or raw transcript — only compact
+// text state (see lib/llm/chatBrainSchema.buildChatBrainPayload).
+//
+// Deterministic commands (undo/redo/render/export/trim/yes-no) NEVER touch
+// the brain. When no provider is available the app stays in deterministic
+// mode with no error surfaced.
+// =====================================================================
+export const CHAT_BRAIN = {
+  /** Master switch for the preload + LLM fallback layer. */
+  preloadEnabled: true,
+  /** Delay (ms) after the trigger before warmup fires (lets the editor settle). */
+  preloadDelayMs: 800,
+  /** Warm up once the editor mounts. */
+  preloadOnEditorMount: true,
+  /** Also (re)try warmup when the first upload begins. */
+  preloadOnUploadStart: true,
+  /** Allow the cheap server/cloud text warmup request. */
+  cloudWarmupEnabled: true,
+  /** Allow a local in-browser text model warmup (off by default — heavy). */
+  localWarmupEnabled: false,
+  /** Give up a warmup attempt after this long. */
+  maxWarmupMs: 8000,
+  /** Resolve calls time out after this long (then deterministic null). */
+  resolveTimeoutMs: 7000,
+  /** Skip LOCAL model preload below this device memory (GB). Cloud warmup
+   *  is cheap and still allowed. navigator.deviceMemory is coarse + optional. */
+  minDeviceMemoryGb: 4,
+  /** Skip warmup entirely when the user enabled Data Saver. */
+  skipWhenSaveData: true,
+  /** Only call the LLM fallback when the deterministic resolver confidence is
+   *  below this (kept high so exact/clear answers stay deterministic + free). */
+  useOnlyForLowConfidence: true,
+  confidenceThreshold: 0.72,
+  /** A brain answer must reach at least this confidence to be applied. */
+  minApplyConfidence: 0.6
+} as const;
+
+// =====================================================================
+// v2.5 — Dynamic clip durations (lib/pipeline/clipDuration.ts).
+//
+// Replaces the effectively-fixed ~3s clip length with DYNAMIC bounds derived
+// from the source video length (and the user's target when stated). Clips can
+// be as short as ~1s and as long as a sensible fraction of the video, and the
+// per-clip length VARIES with interest score (stronger peak → longer clip) so
+// a reel isn't a row of identical 3s blocks. These are GUARDRAILS only — no
+// fixed clip count, no forced duration; the user's explicit min/max always
+// wins when provided.
+// =====================================================================
+export const CLIP_DURATION = {
+  /** Absolute floor — a clip is never shorter than this (seconds). */
+  absoluteMinSeconds: 1,
+  /** Absolute ceiling — a clip is never longer than this (seconds). */
+  absoluteMaxSeconds: 30,
+  /** min clip = clamp(videoDuration * minFractionOfVideo, absoluteMin, minCeiling). */
+  minFractionOfVideo: 0.01,
+  minCeilingSeconds: 3,
+  /** max clip = clamp(videoDuration * maxFractionOfVideo, maxFloor, absoluteMax). */
+  maxFractionOfVideo: 0.06,
+  maxFloorSeconds: 4,
+  /** Preferred (typical) clip sits this fraction between min and max. */
+  preferredBetween: 0.45,
+  /** When a target duration is stated, preferred clip ≈ target / this many
+   *  clips (so a short target yields a few watchable clips, not many slivers). */
+  preferredClipsForTarget: 6
+} as const;

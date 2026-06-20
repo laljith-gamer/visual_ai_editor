@@ -4,12 +4,49 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-19 (issue #64 — professional video-prompt interpreter +
-> all-source compose; on a feature branch, not yet merged)
+> Last updated: 2026-06-20 (v2.5 — chat brain preload + dynamic clip durations;
+> on a feature branch, not yet merged)
 
 ---
 
-## 0. Latest change (2026-06-20) — dynamic free-text chat routing
+## 0. Latest change (2026-06-20) — chat brain preload + dynamic clip durations
+
+Two user-facing wins, both privacy-safe and deterministic-first.
+
+- **Text-only chat brain (fallback only).** A lightweight intent/clarify-answer
+  brain is warmed in the background after the editor mounts / first upload
+  (`useChatBrainPreload` → `lib/llm/chatBrainPreload.ts` → `app/api/agent/intent`
+  `warmup`). It is consulted ONLY when the deterministic
+  `resolvePendingAnswer` confidence is below `CHAT_BRAIN.confidenceThreshold`
+  (0.72), and a brain answer must clear `minApplyConfidence` (0.6) to apply
+  (`lib/agentic-intake/llmPendingAnswerResolver.resolvePendingAnswerWithBrain`).
+  PRIVACY BOUNDARY in `lib/llm/chatBrainSchema.ts`: `buildChatBrainPayload`
+  sends ONLY compact text state (prev assistant message, the question, the
+  field, the typed answer, a few scalar editor facts); `FORBIDDEN_PAYLOAD_KEYS`
+  reject any media/frame/blob/path/key. Deterministic commands
+  (undo/redo/render/export/trim, yes-no with pending action) NEVER touch it; no
+  provider → app stays deterministic silently (`unavailable`, not an error).
+  `handleAgent` adds an anti-loop guard: after a usable answer it compiles the
+  brief and proceeds rather than re-asking the SAME clarify question
+  (`intake.loop.prevented`). Status pill `ChatBrainBadge` in the assistant
+  header.
+- **Dynamic clip durations.** Clips are no longer a fixed ~3s. New pure
+  `lib/pipeline/clipDuration.ts` (`deriveClipDurationBounds` — min ~1s, max
+  scales with the source length + target; `clipLengthForScore` — stronger peak →
+  longer clip). `tryOfflineBestParts` (`lib/pipeline/highlights.ts`) now uses
+  these bounds instead of the flat `max(3, plan.minClipSeconds)` floor, and
+  `buildOfflineBestParts` (`lib/pipeline/bestParts.ts`) sizes each clip by its
+  score so a reel varies instead of being a row of identical blocks. Guardrails
+  in `CLIP_DURATION` config; explicit user min/max still wins.
+- **Validation:** typecheck ✓, build ✓ (`/editor` 208 kB; `/api/agent/intent`
+  route present), `npm test` = **522 pass / 0 fail** (+30), `test:analysis` =
+  104 pass. No cloud media, no upload, no raw frames. Browser/WebGPU +
+  live-provider run still pending (no GPU / no key in sandbox). See
+  `memory/CHAT_BRAIN_PRELOAD_2026-06-20.md`.
+
+---
+
+## 0. Previous change (2026-06-20) — dynamic free-text chat routing
 
 Fixed the "What should I make?" infinite loop and describe misrouting: the chat
 now accepts FREE-TEXT answers to pending questions and progresses the edit brief
