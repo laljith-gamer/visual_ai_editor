@@ -1010,7 +1010,7 @@ export const EDITOR_TURN = {
     // generic content-STRUCTURE categories common across many videos
     "intro", "outro", "cutscene", "dialogue", "transition", "montage",
     "combat", "fight", "fighting", "action", "talking", "boring", "scene",
-    "highlight", "moment", "clip", "segment",
+    "highlight", "moment", "clip", "segment", "continuous",
     // quality / scope words
     "best", "current", "selected", "timeline", "video", "vertical",
     "horizontal", "square"

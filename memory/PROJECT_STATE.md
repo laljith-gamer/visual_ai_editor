@@ -9,7 +9,36 @@
 
 ---
 
-## 0. Latest change (2026-06-20) — editor-first turn routing (refinement fix)
+## 0. Latest change (2026-06-20) — dynamic free-text chat routing
+
+Fixed the "What should I make?" infinite loop and describe misrouting: the chat
+now accepts FREE-TEXT answers to pending questions and progresses the edit brief
+instead of repeating the same chip question.
+
+- **Pending-answer resolver** (`lib/agentic-intake/pendingAnswerResolver.ts`):
+  new pure module that interprets the user's reply against a pending question
+  using exact match → fuzzy → contextual inference (output-type synonyms +
+  content extraction + scope). "one continuos" → single_continuous; "travel
+  vlog best places" → best-moments reel + content focus.
+- **Describe misrouting fix** (`lib/intent/refinementIntent.ts`): describe/
+  visual-question text now bails early from `detectRefinement` so "Describe
+  what's in this video" doesn't get caught as a scope resolution.
+- **HIGHLIGHT_RE expansion** (`lib/agentic-intake/inferBrief.ts`): "best X"
+  generically and "pick best" now detected as highlight intent (was limited to
+  "best parts/moments/bits/picks").
+- **Editing lexicon** (`lib/config.ts`): "continuous" added so "continuos" is
+  typo-corrected.
+- **Wiring** (`app/editor/page.tsx`): pending-question answer resolution step
+  between the editor-turn router and agentic-intake: resolve → re-run intake
+  with merged info → proceed or ask NEXT question (not the same one).
+- **Tests:** +8 new (`pendingAnswerResolver.test.ts`); total `npm test` = 492
+  pass / 0 fail. typecheck ✓, build ✓ (`/editor` 205 kB).
+- See `memory/DYNAMIC_LLM_CHAT_ROUTING_2026-06-20.md`. Browser verification
+  of the live free-text flows still pending (no GPU/decode in sandbox).
+
+---
+
+## 0. Previous change (2026-06-20) — editor-first turn routing (refinement fix)
 
 Fixed a real failing refinement conversation where the app was planner-first
 (vague "find a specific moment" built a 1s short; 120s→37s reported as success;

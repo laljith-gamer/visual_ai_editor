@@ -8,6 +8,18 @@
 
 ## High priority
 
+- [ ] **Manual browser test — free-text chat routing (2026-06-20).** Verify:
+      1. "Describe what's in this video" → describe response, NOT "What should
+         I do with it?"
+      2. "he is a traveller pick best visits" → infers highlight reel +
+         content focus (travel/visits); asks NEXT question (duration), NOT
+         "What should I make?" again.
+      3. "best places here" → updates content focus, does not loop.
+      4. "one continuos" → typo fixed, output_type resolved to
+         single_continuous, proceeds.
+      5. No pending-question loop when user types naturally instead of chips.
+      See `memory/DYNAMIC_LLM_CHAT_ROUTING_2026-06-20.md`.
+
 - [ ] **Manual browser test — editor-first refinement routing (2026-06-20,
       after deploy).** Needs a real browser. Verify the live flows the unit
       tests can't cover:

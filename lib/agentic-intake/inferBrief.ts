@@ -84,7 +84,7 @@ const MERGE_RE = /\b(merge|combine|combined|stitch|join|put together|concat)\b/;
 const COMPOSE_RE = /\b(montage|interleave|mix|compose|alternat)\b/;
 
 const HIGHLIGHT_RE =
-  /\b(best[\s-]?(?:parts?|moments?|bits?|picks?)|highlights?|top moments?|key moments?|greatest|standouts?|recap|funny moments?|viral|most action)\b/;
+  /\b(best[\s-]?\w+|pick (?:the )?best|highlights?|top moments?|key moments?|greatest|standouts?|recap|funny moments?|viral|most action)\b/;
 
 const CONTINUOUS_RE =
   /\b(continuous(?:ly)?|one (?:single )?(?:clip|short|take)|single (?:clip|take)|keep it (?:as )?one|as one|whole (?:thing|video|clip)|in one (?:go|clip|piece)|uncut|straight through)\b/;
