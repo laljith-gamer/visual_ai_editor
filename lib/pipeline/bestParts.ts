@@ -19,6 +19,7 @@
 // =====================================================================
 
 import { OFFLINE_BEST_PARTS } from "../config";
+import { clipLengthForScore } from "./clipDuration";
 
 export interface BestPartCandidate {
   start: number;
@@ -97,6 +98,9 @@ export function buildOfflineBestParts(args: {
   maxClipSeconds: number;
   /** Hard cap on clip count (OFFLINE_BEST_PARTS.maxClips). */
   maxClips: number;
+  /** Typical clip length (dynamic, from clipDuration). When omitted, falls
+   *  back to OFFLINE_BEST_PARTS.preferredClipSeconds for back-compat. */
+  preferredSeconds?: number;
 }): BestPartCandidate[] {
   const {
     candidates,
@@ -112,7 +116,10 @@ export function buildOfflineBestParts(args: {
   }
 
   const fillTarget = targetSeconds * OFFLINE_BEST_PARTS.fillToFraction;
-  const preferred = Math.min(maxClipSeconds, OFFLINE_BEST_PARTS.preferredClipSeconds);
+  const preferred = Math.max(
+    minUsefulSeconds,
+    Math.min(maxClipSeconds, args.preferredSeconds ?? OFFLINE_BEST_PARTS.preferredClipSeconds)
+  );
   const approxClips = Math.max(
     1,
     Math.min(maxClips, Math.round(fillTarget / Math.max(preferred, 1)))
@@ -148,11 +155,19 @@ export function buildOfflineBestParts(args: {
 
   const consider = (c: BestPartCandidate) => {
     if (chosen.length >= maxClips || total >= fillTarget) return;
+    // Score-scaled target length: stronger peaks breathe longer (toward max),
+    // weaker ones stay short (toward min) — so clips VARY instead of all
+    // collapsing to a single fixed length.
+    const desiredLen = clipLengthForScore(c.score, {
+      minClipSeconds: minUsefulSeconds,
+      maxClipSeconds,
+      preferredClipSeconds: preferred
+    });
     const e = expandClipRange(
       { start: c.start, end: c.end },
       {
         sourceDuration,
-        minSeconds: minUsefulSeconds,
+        minSeconds: desiredLen,
         maxSeconds: maxClipSeconds,
         occupied: chosen
       }

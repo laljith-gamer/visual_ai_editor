@@ -14,6 +14,7 @@ import {
   deriveForceMinHighlights
 } from "@/lib/pipeline/adapt";
 import { buildOfflineBestParts } from "@/lib/pipeline/bestParts";
+import { deriveClipDurationBounds } from "@/lib/pipeline/clipDuration";
 
 interface BuildArgs {
   candidates: CandidateWindow[];
@@ -298,6 +299,14 @@ function tryOfflineBestParts(
 ): BuildResult | null {
   const target = args.plan.targetShortSeconds;
   if (!(target > 0)) return null;
+  // v2.5 — DYNAMIC clip bounds derived from the source length + target,
+  // replacing the flat ~3s floor (max(minUsefulClipSeconds, plan.minClipSeconds)).
+  // Min can be ~1s on short videos; max scales with the video; per-clip length
+  // varies with interest score inside buildOfflineBestParts.
+  const bounds = deriveClipDurationBounds({
+    videoDuration: args.videoDuration,
+    targetSeconds: target
+  });
   const fb = buildOfflineBestParts({
     candidates: args.candidates.map((c) => ({
       start: c.start,
@@ -306,11 +315,9 @@ function tryOfflineBestParts(
     })),
     sourceDuration: args.videoDuration,
     targetSeconds: target,
-    minUsefulSeconds: Math.max(
-      TARGET_COVERAGE.minUsefulClipSeconds,
-      args.plan.minClipSeconds
-    ),
-    maxClipSeconds: args.plan.maxClipSeconds,
+    minUsefulSeconds: bounds.minClipSeconds,
+    maxClipSeconds: bounds.maxClipSeconds,
+    preferredSeconds: bounds.preferredClipSeconds,
     maxClips: OFFLINE_BEST_PARTS.maxClips
   });
   const fbSeconds = fb.reduce((acc, h) => acc + (h.end - h.start), 0);

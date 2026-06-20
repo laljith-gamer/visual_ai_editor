@@ -17,6 +17,39 @@
 
 ---
 
+### 2026-06-20 — Chat Brain Preload (text-only LLM fallback) + dynamic clip durations
+- **Change made:** Two user-facing improvements. (1) A privacy-safe, TEXT-ONLY
+  "chat brain" is warmed in the background after the editor is ready / first
+  upload, and is used ONLY as a fallback when the deterministic pending-answer
+  resolver's confidence is low — so the first ambiguous free-text turn is fast
+  and no longer loops. It NEVER receives video bytes, frames, thumbnails, raw
+  audio/transcript, file paths, or keys (only compact text state via
+  `buildChatBrainPayload`, enforced by `FORBIDDEN_PAYLOAD_KEYS`); deterministic
+  commands (undo/redo/render/export/trim, yes-no with a pending action) never
+  touch it; with no provider configured the app stays deterministic silently. An
+  anti-loop guard in `handleAgent` proceeds to the planner instead of re-asking
+  the same clarify question after a usable answer. (2) Clip durations are now
+  DYNAMIC (min ~1s, max scales with the video) instead of a fixed ~3s, and each
+  clip's length varies with its interest score (stronger peak → longer clip).
+- **Files affected:** new `lib/llm/{chatBrainSchema,chatBrainPreload}.ts` (+
+  tests), `app/api/agent/intent/route.ts`, `hooks/useChatBrainPreload.ts`,
+  `lib/agentic-intake/llmPendingAnswerResolver.ts` (+ test),
+  `components/ChatBrainBadge.tsx`; new `lib/pipeline/clipDuration.ts` (+ test);
+  `lib/config.ts` (`CHAT_BRAIN` + `CLIP_DURATION`); `lib/pipeline/bestParts.ts`,
+  `lib/pipeline/highlights.ts` (dynamic bounds); `components/AssistantPanel.tsx`,
+  `app/editor/page.tsx` (wiring); `package.json` (test script).
+- **Reason:** The first chat turn felt slow and could loop on ambiguous
+  free-text answers, and every reel clip was an identical ~3s block regardless
+  of video length or peak strength. Keep deterministic commands instant + free
+  and never leak media to the model.
+- **Validation:** typecheck ✓, build ✓ (`/editor` 208 kB; `/api/agent/intent`
+  route present), `npm test` = 522 pass / 0 fail (+30), `npm run test:analysis`
+  = 104 pass. Browser/WebGPU + live-provider verification still pending (no GPU
+  / no provider key in sandbox). No hardcoded phrases / genre tables. See
+  `memory/CHAT_BRAIN_PRELOAD_2026-06-20.md`.
+
+---
+
 ### 2026-06-20 — Editor-first turn routing (refinement conversation fix)
 - **Change made:** Added a GENERIC editor-turn routing layer that runs BEFORE
   the planner so refinement/control turns route as editor operations instead
