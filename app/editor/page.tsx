@@ -47,6 +47,7 @@ import { buildHighlightMemoryPatch } from "@/lib/analysis/memorySignals";
 import { parseOverlapResolution } from "@/lib/timeline/overlapIntent";
 import { resolveAddConflict, type AddConflict } from "@/lib/timeline/overlapFlow";
 import { addClips } from "@/lib/timeline/operations";
+import { classifyEditorTurn, type EditorTurnIntent } from "@/lib/intent/editorTurnIntent";
 import { buildComposeSubPlan, buildComposeOutputPlan } from "@/lib/plan/composeSubPlan";
 import {
   resolveComposeSources,
@@ -147,6 +148,9 @@ export default function Home() {
   const setInferred = useEditorStore((s) => s.setInferred);
   const setPendingClarify = useEditorStore((s) => s.setPendingClarify);
   const setPendingExecution = useEditorStore((s) => s.setPendingExecution);
+  const setPendingAction = useEditorStore((s) => s.setPendingAction);
+  const setActiveTargetSeconds = useEditorStore((s) => s.setActiveTargetSeconds);
+  const trimTimelineToTarget = useEditorStore((s) => s.trimTimelineToTarget);
   const setUserTier = useEditorStore((s) => s.setUserTier);
   const persist = useEditorStore((s) => s.persist);
 
@@ -208,6 +212,12 @@ export default function Home() {
   // (handleRunPipeline is defined further down, but the gate needs it
   // when an "affirm" shortcut fires.)
   const handleRunPipelineRef = useRef<(() => Promise<void>) | null>(null);
+  // v2.3 — Forward ref to handleAgent so the editor-turn router can
+  // re-dispatch a clean compiled prompt (e.g. a confirmed re-pick) WITHOUT a
+  // definition cycle between the two useCallbacks.
+  const handleAgentRef = useRef<
+    ((text: string, opts?: { silent?: boolean; forceReplace?: boolean }) => Promise<void>) | null
+  >(null);
   // Same forward-reference pattern for render, so the agentic fast-command
   // path can trigger the real render without reordering the component.
   const handleRenderRef = useRef<(() => void) | null>(null);
@@ -523,19 +533,36 @@ export default function Home() {
             .getState()
             .mergeHighlights(merged.highlights);
           if (added === 0) {
+            // v2.3 — Don't dead-end on "overlap → nothing to add". The new
+            // picks all overlap existing clips; offer a concrete REPLACE via
+            // the pending-action system (the user can also keep what they
+            // have). Never silently skip OR silently replace.
+            const newCount = merged.highlights.length;
+            const msg = `I found ${newCount} matching moment${newCount === 1 ? "" : "s"}, but they overlap clips already on your timeline, so I didn't duplicate them. Want me to replace the current clips with these fresh picks, or keep what you have?`;
             pushMessage({
               role: "assistant",
-              content:
-                "Found new matches but they overlap clips you already have \u2014 nothing to add."
+              content: msg,
+              attachment: { mode: "agent", kind: "overlap" }
             });
-            setStatus("ready", undefined);
+            useEditorStore.getState().setPendingAction({
+              kind: "swap_timeline",
+              message: msg,
+              highlights: merged.highlights
+            });
+            useEditorStore.getState().setPendingClarify({
+              message: msg,
+              questions: [
+                { id: "swap-confirm", prompt: msg, suggestions: ["Yes", "No"], kind: "single-choice" }
+              ]
+            });
+            setStatus(
+              useEditorStore.getState().highlights.length > 0 ? "ready" : "idle",
+              undefined
+            );
             setProgress(0);
             return;
           }
           // Continue below to the "summary" message + soft notice.
-          // The variables `total` and `summary` will reflect the
-          // FULL timeline (existing + appended), which is what we
-          // want the user to see.
           void skipped; // logged below
         } else {
           setHighlights(merged.highlights);
@@ -562,13 +589,12 @@ export default function Home() {
           ? merged.highlights.length
           : finalTimeline.length;
 
-        // Issue #62 — target-coverage guard. When the user asked for an
-        // explicit duration but the result falls materially short (a hard
-        // underfill, or a weak-confidence underfill), we must NOT silently
-        // mark it "ready to render" / push "Tap Render". Surface an honest
-        // message and offer the broader fallback instead. Skipped for append
-        // and single-moment runs (they aren't duration-fill requests).
-        if (!appendToTimeline && mode !== "moment") {
+        // Issue #62 / v2.3 — target-coverage guard. When the user asked for
+        // an explicit duration but the result falls materially short, we must
+        // NOT mark it "ready to render". This now also covers APPEND runs (a
+        // 120s request that yields 37s total must surface review, not a
+        // success summary). Skipped only for single-moment runs.
+        if (mode !== "moment") {
           const coverage = assessTargetCoverage({
             userSpecifiedDuration: activePlan.userSpecifiedDuration === true,
             targetSeconds: activePlan.targetShortSeconds,
@@ -688,8 +714,21 @@ export default function Home() {
           Date.now() - t0
         );
 
-        setStatus("ready", "Ready to render");
-        setProgress(1);
+        if (merged.weakOnly) {
+          // v2.3 — A weak result is NOT presented as confidently ready.
+          // Surface review status + offer broaden / deeper scan; the user
+          // can still proceed with "render anyway" (handled by the render
+          // guard). This stops the "says ready when the result is weak" bug.
+          pushMessage({
+            role: "assistant",
+            content: `Match confidence is low (top score ${merged.scoreMax.toFixed(2)}). I can broaden the search or run a deeper local scan \u2014 or say "render anyway" to use this as-is.`
+          });
+          setStatus("needs_review", "Low confidence \u2014 review");
+          setProgress(1);
+        } else {
+          setStatus("ready", "Ready to render");
+          setProgress(1);
+        }
       } catch (err) {
         const msg = friendlyStorageError(err) ?? (err as Error).message;
         pushMessage({
@@ -837,11 +876,191 @@ export default function Home() {
     [pushMessage, setStatus, setProgress, setPendingClarify, logSession]
   );
 
+  // ---- v2.3 — Editor-first turn router ------------------------------------
+  // Applies an already-classified EditorTurnIntent. Returns true when it
+  // fully handled the turn (so handleAgent stops), false to pass through to
+  // the existing read-only / describe / agent-command / intake / planner
+  // paths. It NEVER runs a raw visual search itself; a confirmed re-pick is
+  // re-dispatched as a CLEAN replace request via handleAgentRef.
+  const routeEditorTurn = useCallback(
+    async (turn: EditorTurnIntent): Promise<boolean> => {
+      const store = useEditorStore.getState();
+
+      const applyRefilter = async (
+        action: Extract<
+          NonNullable<ReturnType<typeof useEditorStore.getState>["pendingAction"]>,
+          { kind: "refilter" }
+        >
+      ) => {
+        const target = action.targetSeconds ?? store.activeTargetSeconds;
+        const durPart = target ? `${target}s ` : "";
+        let prompt =
+          action.include.length > 0
+            ? `make a ${durPart}reel of ${action.include.join(", ")}`
+            : `make a ${durPart}reel of the best moments`;
+        if (action.exclude.length > 0) prompt += `, avoid ${action.exclude.join(", ")}`;
+        useEditorStore.getState().setPendingAction(null);
+        setPendingClarify(null);
+        useEditorStore.getState().setPendingTimelineOp("replace");
+        const keepBit = action.include.length > 0 ? `for ${action.include.join(", ")}` : "the best moments";
+        const dropBit = action.exclude.length > 0 ? `, dropping ${action.exclude.join(", ")}` : "";
+        pushMessage({
+          role: "assistant",
+          content: `On it \u2014 re-picking ${keepBit}${dropBit}${target ? ` for ${target}s` : ""}. I'll replace the current clips (say "undo" to restore).`,
+          attachment: { mode: "agent", kind: "refine" }
+        });
+        await handleAgentRef.current?.(prompt, { silent: true, forceReplace: true });
+      };
+
+      switch (turn.kind) {
+        case "confirm_pending": {
+          const action = store.pendingAction;
+          if (!action) {
+            pushMessage({
+              role: "assistant",
+              content:
+                'I don\u2019t have a pending action queued. Tell me what to do \u2014 e.g. "keep only the fighting", "trim to fit", or "render".',
+              attachment: { mode: "agent", kind: "affirm" }
+            });
+            return true;
+          }
+          if (action.kind === "refilter") {
+            await applyRefilter(action);
+          } else if (action.kind === "swap_timeline") {
+            useEditorStore.getState().setHighlights(action.highlights);
+            useEditorStore.getState().setPendingAction(null);
+            setPendingClarify(null);
+            const total = action.highlights.reduce((acc, h) => acc + (h.end - h.start), 0);
+            pushMessage({
+              role: "assistant",
+              content: `Swapped in ${action.highlights.length} new clip${action.highlights.length === 1 ? "" : "s"} (${total.toFixed(1)}s). Say "undo" to restore the previous timeline.`,
+              attachment: { mode: "agent", kind: "overlap" }
+            });
+            setStatus("ready", "Ready to render");
+            setProgress(1);
+          }
+          return true;
+        }
+
+        case "cancel_pending": {
+          useEditorStore.getState().setPendingAction(null);
+          setPendingClarify(null);
+          pushMessage({
+            role: "assistant",
+            content: "Okay \u2014 I won't change the timeline. Tell me what you'd like instead.",
+            attachment: { mode: "agent", kind: "cancel" }
+          });
+          return true;
+        }
+
+        case "scope_resolution": {
+          const action = store.pendingAction;
+          if (action && action.kind === "refilter") {
+            await applyRefilter({ ...action, scope: turn.scope });
+            return true;
+          }
+          pushMessage({
+            role: "assistant",
+            content:
+              "Got it \u2014 I'll work from the current video. What should I do with it \u2014 keep the best parts, drop something, or trim to a length?"
+          });
+          return true;
+        }
+
+        case "trim_to_target": {
+          const target = turn.latestDurationSeconds ?? store.activeTargetSeconds;
+          if (store.highlights.length === 0) {
+            pushMessage({ role: "assistant", content: "There are no clips on the timeline to trim yet." });
+            return true;
+          }
+          if (!target) {
+            const msg = 'What duration should I trim to? e.g. "30 seconds" or "1 minute".';
+            pushMessage({ role: "assistant", content: msg });
+            setPendingClarify({
+              message: msg,
+              questions: [
+                { id: "trim-target", prompt: msg, suggestions: ["30 seconds", "1 minute", "90 seconds"], kind: "single-choice" }
+              ]
+            });
+            return true;
+          }
+          const r = trimTimelineToTarget(target);
+          if (r.alreadyUnder) {
+            pushMessage({
+              role: "assistant",
+              content: `Your timeline is ${r.totalAfter.toFixed(1)}s \u2014 already within the ${target}s target. Want me to add more moments instead?`
+            });
+            setStatus(store.highlights.length > 0 ? "ready" : "idle", undefined);
+            return true;
+          }
+          pushMessage({
+            role: "assistant",
+            content: `Trimmed to fit ${target}s \u2014 kept the strongest clips (${r.totalAfter.toFixed(1)}s, removed ${r.changed}). Say "undo" to restore.`,
+            attachment: { mode: "agent", kind: "trim" }
+          });
+          setStatus("ready", "Ready to render");
+          setProgress(1);
+          logSession.ai(
+            "timeline.trimToTarget",
+            { target, removed: r.changed, totalAfter: round1(r.totalAfter) },
+            `Trimmed to ${target}s (removed ${r.changed})`
+          );
+          return true;
+        }
+
+        case "refine_timeline": {
+          const inc = turn.include;
+          const exc = turn.exclude;
+          const target = turn.latestDurationSeconds ?? store.activeTargetSeconds;
+          if (store.highlights.length === 0) {
+            const what = inc.length > 0 ? inc.join(", ") : "the best moments";
+            const msg = `You don't have any clips yet. Want me to search the video for ${what}${exc.length > 0 ? ` and skip ${exc.join(", ")}` : ""}?`;
+            pushMessage({ role: "assistant", content: msg, attachment: { mode: "agent", kind: "refine" } });
+            useEditorStore.getState().setPendingAction({ kind: "refilter", message: msg, include: inc, exclude: exc, targetSeconds: target, scope: turn.scope });
+            setPendingClarify({ message: msg, questions: [{ id: "refine-confirm", prompt: msg, suggestions: ["Yes, do it", "No"], kind: "single-choice" }] });
+            return true;
+          }
+          const keepPart = inc.length > 0 ? `keeping ${inc.join(", ")}` : "keeping the best moments";
+          const dropPart = exc.length > 0 ? ` and dropping ${exc.join(", ")}` : "";
+          const durPart = target ? ` for ${target}s` : "";
+          const msg = `You have ${store.highlights.length} clip${store.highlights.length === 1 ? "" : "s"} on the timeline. I can re-pick ${keepPart}${dropPart}${durPart}, replacing the current clips (you can undo). Want me to go ahead?`;
+          pushMessage({ role: "assistant", content: msg, attachment: { mode: "agent", kind: "refine" } });
+          useEditorStore.getState().setPendingAction({ kind: "refilter", message: msg, include: inc, exclude: exc, targetSeconds: target, scope: turn.scope });
+          setPendingClarify({ message: msg, questions: [{ id: "refine-confirm", prompt: msg, suggestions: ["Yes, do it", "No, keep current clips"], kind: "single-choice" }] });
+          logSession.ai("timeline.refine.ask", { include: inc, exclude: exc, target }, msg.slice(0, 140));
+          return true;
+        }
+
+        case "clarify_missing_specific_moment": {
+          const msg = turn.askMessage ?? "Which moment do you want?";
+          pushMessage({ role: "assistant", content: msg, attachment: { mode: "agent", kind: "clarify" } });
+          setPendingClarify({
+            message: msg,
+            questions: [
+              { id: "which-moment", prompt: msg, suggestions: ["The most action", "A specific line that's said", "Give a time range"], kind: "single-choice" }
+            ]
+          });
+          logSession.ai("clarify.specificMoment", {}, msg);
+          return true;
+        }
+
+        default:
+          // passthrough — abandon any stale pending action the user moved past.
+          if (store.pendingAction) useEditorStore.getState().setPendingAction(null);
+          return false;
+      }
+    },
+    [pushMessage, setStatus, setProgress, setPendingClarify, trimTimelineToTarget, logSession]
+  );
+
   // ---- Submit a chat turn -------------------------------------------------
   const handleAgent = useCallback(
-    async (userRequest: string) => {
+    async (
+      userRequest: string,
+      agentOpts?: { silent?: boolean; forceReplace?: boolean }
+    ) => {
       setBusy(true);
-      pushMessage({ role: "user", content: userRequest });
+      if (!agentOpts?.silent) pushMessage({ role: "user", content: userRequest });
       const previousPlan = useEditorStore.getState().plan;
 
       // ---- v2.2 — Quick local scan command (deterministic, LOCAL-only) ----
@@ -911,6 +1130,34 @@ export default function Home() {
         }
         // Not a resolution — abandon the pending overlap and continue.
         useEditorStore.getState().setPendingOverlap(null);
+      }
+
+      // ---- v2.3 — Editor-first turn routing (BEFORE the planner) ---------
+      // Classify the turn like an editor: confirm/cancel a pending action,
+      // refine/filter the current timeline, trim to the active target,
+      // resolve a scope answer, or ask what moment. Refinement/control turns
+      // must NEVER fall through to a random visual search. Anything this does
+      // not recognise returns "passthrough" and the existing read-only /
+      // describe / agent-command / intake / planner paths run unchanged.
+      {
+        const st0 = useEditorStore.getState();
+        const turn = classifyEditorTurn(userRequest, {
+          hasTimeline: st0.highlights.length > 0,
+          clipCount: st0.highlights.length,
+          hasPendingAction: Boolean(st0.pendingAction),
+          sourceCount: st0.sources.length,
+          priorTargetSeconds: st0.activeTargetSeconds
+        });
+
+        // Latest explicit duration always wins — keep the active target in
+        // sync even on passthrough turns.
+        if (turn.durationChanged) setActiveTargetSeconds(turn.latestDurationSeconds);
+
+        const handled = await routeEditorTurn(turn);
+        if (handled) {
+          setBusy(false);
+          return;
+        }
       }
 
       // v2.1 — Agentic intake may compile a clean, structured brief for this
@@ -2786,7 +3033,8 @@ export default function Home() {
         const hasExistingClips =
           useEditorStore.getState().highlights.length > 0;
         let timelineOp: "append" | "replace";
-        if (isAppendRefinement) timelineOp = "append";
+        if (agentOpts?.forceReplace) timelineOp = "replace";
+        else if (isAppendRefinement) timelineOp = "append";
         else if (cacheReusable) timelineOp = "replace";
         else if (data.op === "replace") timelineOp = "replace";
         else if (data.op === "append") timelineOp = "append";
@@ -2848,9 +3096,17 @@ export default function Home() {
       setUserTier,
       runPipeline,
       runLocalScanCommand,
+      routeEditorTurn,
+      setActiveTargetSeconds,
       logSession
     ]
   );
+
+  // v2.3 — Keep handleAgentRef current so routeEditorTurn can re-dispatch a
+  // clean compiled prompt without a useCallback definition cycle.
+  useEffect(() => {
+    handleAgentRef.current = handleAgent;
+  }, [handleAgent]);
 
   // ---- Confirm-and-run from the PlanPreview card --------------------------
   const handleRunPipeline = useCallback(async () => {
@@ -2931,9 +3187,21 @@ export default function Home() {
   // highlights list + at least one usable source. Format and transition
   // fall back to sensible defaults derived from the active source's
   // native aspect when no plan exists.
-  const handleRender = useCallback(async () => {
+  const handleRender = useCallback(async (renderOpts?: { force?: boolean }) => {
     const cur = useEditorStore.getState();
     if (highlights.length === 0) return;
+    // v2.3 — Don't render a low-confidence / underfilled result as if it were
+    // final. When the run left the project in "needs_review", require an
+    // explicit "render anyway" (renderOpts.force) instead of silently
+    // shipping weak output.
+    if (!renderOpts?.force && cur.status === "needs_review") {
+      pushMessage({
+        role: "assistant",
+        content:
+          'Heads up \u2014 this result is low-confidence or under your target length, so I haven\u2019t marked it final. Say "render anyway" to proceed, or ask me to broaden the search, run a deeper scan, or "trim to fit" first.'
+      });
+      return;
+    }
     // v2.1 — render guard: never invoke ffmpeg/mediabunny when a clip
     // references a source whose bytes aren't loaded (a restored project
     // awaiting re-upload). Surface an honest re-upload prompt instead.

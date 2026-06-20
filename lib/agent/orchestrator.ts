@@ -371,7 +371,17 @@ function finishOps(
   // Apply the confidence policy: low confidence → clarify instead of act.
   const decision = decideAction(confidence);
   if (decision === "clarify") {
-    return { kind: "clarify", message: `${message} — but I'm not fully sure. Want me to go ahead?`, suggestions: ["Yes, do it", "No, let me rephrase"] };
+    // Honest, forward-looking clarify — NEVER claim the action already
+    // happened (the old "Removed that clip … Want me to go ahead?" was
+    // self-contradictory), and don't invite a bare "yes" we can't apply
+    // (there is no concrete pending action here). Ask the user to pinpoint
+    // the target instead so the next turn resolves cleanly.
+    return {
+      kind: "clarify",
+      message:
+        "I'm not totally sure I understood which clip or edit you meant \u2014 could you rephrase, or name the clip (e.g. \"clip 2\", \"the last clip\")?",
+      suggestions: []
+    };
   }
   // For medium confidence we still execute but the assumptions are
   // surfaced (already collected). High confidence executes cleanly.

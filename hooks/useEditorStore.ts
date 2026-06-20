@@ -23,6 +23,7 @@ import type {
 import type { Transcript } from "@/lib/audio/types";
 import type { BoundaryTransition } from "@/lib/transitions/types";
 import type { NewClipInput } from "@/lib/timeline/operations";
+import { trimHighlightsToTarget } from "@/lib/timeline/trimToTarget";
 import { normalizeTransitionDuration } from "@/lib/transitions/types";
 import { mapTransition } from "@/lib/transitions/map";
 import { buildAutoBoundaryTransitions } from "@/lib/transitions/timeline";
@@ -119,6 +120,28 @@ interface EditorState {
     existingRange: { start: number; end: number };
     overlapSeconds: number;
   } | null;
+
+  /** v2.3 — A concrete pending ACTION awaiting a yes/no ("…go ahead?").
+   *  Unlike pendingClarify (free-form), this carries enough to APPLY the
+   *  action on confirm, so "yes do it" never becomes a search. */
+  pendingAction: {
+    kind: "refilter";
+    message: string;
+    include: string[];
+    exclude: string[];
+    targetSeconds: number | null;
+    scope?: "current_timeline" | "current_video";
+  } | {
+    /** New pipeline picks that all overlapped existing clips — offered as a
+     *  one-tap REPLACE instead of a silent "nothing to add" dead-end. */
+    kind: "swap_timeline";
+    message: string;
+    highlights: Highlight[];
+  } | null;
+
+  /** v2.3 — The ACTIVE target duration (seconds), independent of any stale
+   *  plan. Latest explicit user duration wins; "trim to fit" reads this. */
+  activeTargetSeconds: number | null;
 
   /** v1.4.0 — user tier as classified by the LLM on the most recent
    *  agent turn. Drives adaptive selection in events.ts / highlights.ts
@@ -295,6 +318,16 @@ interface EditorState {
   setPendingExecution: (v: boolean) => void;
   /** v2.2 — Park / clear a pending overlap conflict. */
   setPendingOverlap: (p: EditorState["pendingOverlap"]) => void;
+  /** v2.3 — Park / clear a concrete pending action ("…go ahead?"). */
+  setPendingAction: (p: EditorState["pendingAction"]) => void;
+  /** v2.3 — Set the active target duration (latest explicit wins). */
+  setActiveTargetSeconds: (seconds: number | null) => void;
+  /** v2.3 — Trim the timeline to fit a target duration (drops WHOLE clips,
+   *  snapshots for undo). Returns what changed. */
+  trimTimelineToTarget: (
+    targetSeconds: number,
+    strategy?: "strongest" | "order"
+  ) => { changed: number; totalBefore: number; totalAfter: number; alreadyUnder: boolean };
   /** v1.4.0 — set after each agent turn that returned a tier. */
   setUserTier: (tier: UserTier) => void;
 
@@ -369,6 +402,8 @@ function freshState() {
     inferred: [] as InferredField[],
     pendingClarify: null as EditorState["pendingClarify"],
     pendingOverlap: null as EditorState["pendingOverlap"],
+    pendingAction: null as EditorState["pendingAction"],
+    activeTargetSeconds: null as number | null,
     pendingExecution: false,
     userTier: "novice" as UserTier,
     lastBriefing: null as EditorState["lastBriefing"],
@@ -734,6 +769,8 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       inferred: [],
       pendingClarify: null,
       pendingOverlap: null,
+      pendingAction: null,
+      activeTargetSeconds: null,
       pendingExecution: false,
       renderedBlob: null,
       renderedUrl: null,
@@ -1197,6 +1234,35 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setPendingClarify: (p) => set({ pendingClarify: p }),
   setPendingExecution: (v) => set({ pendingExecution: v }),
   setPendingOverlap: (p) => set({ pendingOverlap: p }),
+  setPendingAction: (p) => set({ pendingAction: p }),
+  setActiveTargetSeconds: (seconds) => set({ activeTargetSeconds: seconds }),
+
+  trimTimelineToTarget: (targetSeconds, strategy = "strongest") => {
+    const s = get();
+    const result = trimHighlightsToTarget(s.highlights, targetSeconds, { strategy });
+    if (result.alreadyUnder || result.removedCount === 0) {
+      return {
+        changed: 0,
+        totalBefore: result.totalBefore,
+        totalAfter: result.totalAfter,
+        alreadyUnder: result.alreadyUnder
+      };
+    }
+    set({
+      ...snapshot(s),
+      highlights: result.kept,
+      selectedClipId: result.kept.some((h) => h.id === s.selectedClipId)
+        ? s.selectedClipId
+        : result.kept[0]?.id ?? null,
+      updatedAt: Date.now()
+    });
+    return {
+      changed: result.removedCount,
+      totalBefore: result.totalBefore,
+      totalAfter: result.totalAfter,
+      alreadyUnder: false
+    };
+  },
   setUserTier: (tier) => set({ userTier: tier }),
 
   setLastBriefing: (b) => set({ lastBriefing: b, updatedAt: Date.now() }),

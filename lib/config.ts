@@ -984,3 +984,51 @@ export const QUICK_SCAN = {
    *  combined-interest score is below this. Mirrors CLARIFY_POLICY. */
   lowConfidenceCeiling: 0.35
 } as const;
+
+
+// =====================================================================
+// v2.3 — Editor-first turn routing (lib/intent/editorTurnIntent.ts +
+// editingNormalize / refinementIntent / topicPhrases).
+//
+// These are GENERIC editing-vocabulary guardrails — NOT a genre, entity, or
+// game table. The lexicon is a small, extensible set of cross-domain
+// editing-control and content-STRUCTURE words (every video has "intro",
+// "talking", "action", etc.). It exists ONLY to (a) correct obvious typos
+// to a known editing word and (b) recognise control/refinement phrasing.
+// Real CONTENT subjects the user types are never in here and are preserved
+// verbatim as topic phrases.
+// =====================================================================
+
+export const EDITOR_TURN = {
+  /** Generic editing / content-structure vocabulary used for fuzzy typo
+   *  correction. Extensible. NEVER add proper nouns, brand/character/boss
+   *  names, game titles, or genre subjects here — those stay user topics. */
+  editingLexicon: [
+    // control / timeline verbs
+    "trim", "remove", "delete", "keep", "drop", "cut", "split", "merge",
+    "combine", "render", "export", "undo", "redo", "replace", "filter",
+    // generic content-STRUCTURE categories common across many videos
+    "intro", "outro", "cutscene", "dialogue", "transition", "montage",
+    "combat", "fight", "fighting", "action", "talking", "boring", "scene",
+    "highlight", "moment", "clip", "segment",
+    // quality / scope words
+    "best", "current", "selected", "timeline", "video", "vertical",
+    "horizontal", "square"
+  ] as string[],
+  /** Max edit distance (Damerau-Levenshtein) for a typo correction. Tokens
+   *  shorter than `minTokenLenForFuzzy` are never fuzzy-corrected (too noisy).
+   *  Distance 2 is only allowed for longer tokens. */
+  fuzzy: {
+    minTokenLenForFuzzy: 4,
+    maxDistanceShort: 1,
+    longTokenLen: 8,
+    maxDistanceLong: 2
+  },
+  /** Confidence floors for the editor-turn classifier. */
+  confidence: {
+    /** At/above this a deterministic editor-turn classification is trusted. */
+    strong: 0.8,
+    /** At/above this we act/ask; below we fall through to the planner. */
+    act: 0.6
+  }
+} as const;
