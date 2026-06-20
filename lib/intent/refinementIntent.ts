@@ -96,6 +96,13 @@ export function detectRefinement(text: string): RefinementIntent {
 
   if (!lower) return none();
 
+  // Describe / read-only / visual questions must NOT be caught as a scope
+  // refinement just because they mention "this video". They belong on the
+  // describe guard path, not the refine path.
+  if (/\b(describe|what(?:'?s| is| are)?\s+(?:in|happening|going on)|what happens?|tell me about|summar(?:y|ize|ise)|analyse|analyze)\b/.test(lower)) {
+    return none();
+  }
+
   // Trim-to-target is its own (direct) operation.
   if (isTrimToFitPhrase(lower)) {
     return { kind: "trim_to_target", include: [], exclude: [], scope: detectScope(lower), confidence: 0.9, normalizedText: lower };

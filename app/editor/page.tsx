@@ -1284,6 +1284,93 @@ export default function Home() {
         );
       }
 
+      // ---- v2.4 — Pending-question answer resolver -------------------------
+      // When a pendingClarify exists (the intake asked "What should I make?"
+      // etc.), the user's NEXT message is first checked as a FREE-TEXT answer
+      // to that question — using fuzzy matching, synonym expansion, and
+      // contextual inference. This prevents the "What should I make?" infinite
+      // loop: the user can type naturally instead of picking exact chips.
+      // The resolver ONLY fires when there IS a pending question.
+      try {
+        const st1 = useEditorStore.getState();
+        if (st1.pendingClarify && st1.pendingClarify.questions.length > 0) {
+          const { resolvePendingAnswer } = await import("@/lib/agentic-intake/pendingAnswerResolver");
+          const { clearIntakeBrief, runIntake: runIntakeImport } = await import("@/lib/agentic-intake/runIntake");
+          const q = st1.pendingClarify.questions[0];
+
+          // Map question id to the brief field it targets.
+          const fieldMap: Record<string, import("@/lib/agentic-intake/editBrief").MissingField> = {
+            "intake-output-type": "output_type",
+            "intake-content-focus": "content_focus",
+            "intake-source-scope": "source_scope",
+            "intake-duration": "duration",
+            "intake-format": "format",
+            "intake-style": "style",
+            "intake-text": "text",
+            "intake-audio": "audio",
+            "intake-avoid": "avoid"
+          };
+          const targetField = fieldMap[q.id];
+          if (targetField) {
+            const resolved = resolvePendingAnswer(userRequest, {
+              question: q,
+              targetField
+            });
+            if (resolved && resolved.confidence >= 0.6) {
+              // The user answered the question. Clear the pending clarify and
+              // re-run intake with context that includes the answer — this
+              // ensures the brief is MERGED (not reset) and the next decision
+              // (proceed vs ask-next-question) happens correctly.
+              setPendingClarify(null);
+              // Re-run intake so the brief merges the new info and decides:
+              // either proceed (enough info) or ask the NEXT question.
+              const intake2 = runIntakeImport(userRequest, {
+                cloudAvailable: true,
+                localPlannerAvailable: false,
+                cloudVisionAvailable: true
+              });
+              if (intake2.kind === "clarify") {
+                // Next question (NOT the same one) — ask it.
+                pushMessage({
+                  role: "assistant",
+                  content: intake2.message,
+                  attachment: { mode: "intake", field: intake2.question.id }
+                });
+                setPendingClarify({
+                  message: intake2.message,
+                  questions: [intake2.question]
+                });
+                logSession.ai(
+                  "intake.answer.resolved",
+                  { answeredField: targetField, nextField: intake2.question.id, method: resolved.method },
+                  `Resolved "${targetField}" via ${resolved.method}: ${resolved.summary}`
+                );
+              } else if (intake2.kind === "proceed") {
+                intakeCompiledPrompt = intake2.compiledPrompt;
+                logSession.ai(
+                  "intake.answer.resolved.proceed",
+                  { answeredField: targetField, method: resolved.method },
+                  intake2.summary
+                );
+                // Fall through to planner with the compiled prompt.
+              }
+              // If passthrough, also fall through.
+              if (intake2.kind === "clarify") {
+                setBusy(false);
+                return;
+              }
+              // proceed / passthrough → continue to the planner below.
+            }
+          }
+        }
+      } catch (err) {
+        logSession.system(
+          "intake.answer.resolver.failed",
+          { message: (err as Error).message },
+          `Pending-answer resolver errored, falling back: ${(err as Error).message.slice(0, 80)}`
+        );
+      }
+
       // ---- v2.1 — Agentic intake layer (universal vague-request handling) -
       // Sits BEFORE the planner and improves the input sent to it. It turns
       // vague/messy requests ("make this cool", "make a reel") into a guided
