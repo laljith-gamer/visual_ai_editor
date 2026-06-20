@@ -41,6 +41,9 @@ import { parseTransitionCommand, type TransitionCommand } from "@/lib/intent/tra
 import { classifyTurnSync, respondReadOnlySync } from "@/lib/agent/conversationLane";
 import { mapTransition } from "@/lib/transitions/map";
 import { normalizeTransitionDuration, type BoundaryTransition } from "@/lib/transitions/types";
+import { buildOverlapQuestion } from "@/lib/timeline/overlapResolver";
+import { detectFirstAddConflict, resolveAddConflict } from "@/lib/timeline/overlapFlow";
+import { parseOverlapResolution } from "@/lib/timeline/overlapIntent";
 
 // ---- per-session agent memory --------------------------------------
 const memoryBySession = new Map<string, AgentMemoryStore>();
@@ -231,7 +234,13 @@ export async function tryAgentCommand(
       return { handled: true };
 
     case "operations": {
-      const applied = applyOps(decision.ops, memory, deps);
+      const applied = applyOps(decision.ops, memory, deps, userText);
+      if (applied.asked) {
+        // We parked an ambiguous overlap and asked the user — the turn is
+        // fully handled (the question + pendingClarify were already pushed).
+        deps.logSession.ai("agent.overlap.ask", {}, "Asked the user how to resolve an overlapping clip.");
+        return { handled: true };
+      }
       if (!applied.anyChange && decision.ops.every((o) => o.type !== "render")) {
         // Nothing actually changed (e.g. clip vanished) — be honest and
         // fall through so the cloud planner can try.
@@ -453,17 +462,75 @@ function summarizeBoundaries(deps: AgentCommandDeps, cmd: TransitionCommand): st
 
 interface ApplyResult {
   anyChange: boolean;
+  /** True when an ambiguous overlap was parked and the user was asked. */
+  asked: boolean;
 }
 
-function applyOps(ops: ResolvedOp[], memory: AgentMemoryStore, deps: AgentCommandDeps): ApplyResult {
+function applyOps(
+  ops: ResolvedOp[],
+  memory: AgentMemoryStore,
+  deps: AgentCommandDeps,
+  userText: string
+): ApplyResult {
   const store = useEditorStore.getState();
   let anyChange = false;
+  let asked = false;
   const createdClipIds: string[] = [];
 
   for (const op of ops) {
     const current: Highlight[] = useEditorStore.getState().highlights;
     switch (op.type) {
       case "add_clips": {
+        // v2.2 — overlap guard. Never silently stack OR replace an
+        // overlapping same-source clip. Honor an explicit instruction in the
+        // user's text ("keep both" / "replace the old one" / "trim overlap");
+        // otherwise ASK and park the incoming clip until the user chooses.
+        const conflict = detectFirstAddConflict(current, op.clips);
+        if (conflict) {
+          const explicit = parseOverlapResolution(userText);
+          if (!explicit) {
+            const q = buildOverlapQuestion(conflict.conflict);
+            useEditorStore.getState().setPendingOverlap({
+              incoming: conflict.incoming,
+              placementIndex: op.placementIndex,
+              existingClipId: conflict.conflict.existingClipId,
+              existingRange: conflict.conflict.existingRange,
+              overlapSeconds: conflict.conflict.overlapSeconds
+            });
+            useEditorStore.getState().setPendingClarify({
+              message: q.message,
+              questions: [
+                { id: "overlap-resolve", prompt: q.message, suggestions: q.suggestions, kind: "single-choice" }
+              ]
+            });
+            deps.pushMessage({
+              role: "assistant",
+              content: q.message,
+              attachment: { mode: "agent", kind: "overlap", suggestions: q.suggestions }
+            });
+            asked = true;
+            break;
+          }
+          // Explicit resolution → apply it now (no question needed).
+          const resolved = resolveAddConflict(conflict, explicit);
+          let next = current;
+          if (resolved.removeExistingId) {
+            next = next.filter((h) => h.id !== resolved.removeExistingId);
+          }
+          if (resolved.toAdd) {
+            const added = addClips(next, [resolved.toAdd], op.placementIndex);
+            next = added.highlights;
+            createdClipIds.push(...added.createdClipIds);
+          }
+          if (next !== current) {
+            useEditorStore.getState().setHighlights(next);
+            anyChange = true;
+          }
+          if (resolved.note) {
+            deps.pushMessage({ role: "assistant", content: resolved.note, attachment: { mode: "agent", kind: "overlap" } });
+          }
+          break;
+        }
         const r = addClips(current, op.clips, op.placementIndex);
         if (r.changed > 0) {
           useEditorStore.getState().setHighlights(r.highlights);
@@ -539,5 +606,5 @@ function applyOps(ops: ResolvedOp[], memory: AgentMemoryStore, deps: AgentComman
     useEditorStore.getState().selectClip(createdClipIds[0]);
   }
 
-  return { anyChange };
+  return { anyChange, asked };
 }

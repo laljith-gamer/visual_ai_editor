@@ -9,7 +9,53 @@
 
 ---
 
-## 0. Latest change (2026-06-20) — dynamic progressive local analysis + describe fix
+## 0. Latest change (2026-06-20) — dynamic local analysis WIRED LIVE
+
+Wired the dynamic-analysis foundation into the real editor flow (the previous
+2026-06-20 PR built + tested it but left most foundation-only). Users now feel
+it: the quick-scan chip actually scans, video memory persists + is reused,
+multi-video runs use the global planner, overlapping adds ASK first, and repeat
+prompts are faster. Still browser-first, LOCAL-only, no cloud, no upload, no raw
+frames persisted.
+
+- **Video memory end-to-end:** new runtime `lib/analysis/videoMemoryManager.ts`
+  (sync in-memory cache + idb `videoMemoryStore`); editor primes memory by
+  source hash on upload/rehydrate; `respondDescribe()` now reads cached memory
+  (was `null`). Survives refresh/re-upload by content hash. Compact only.
+- **Quick local scan command:** pure `quickScanCommand` (detect) +
+  `quickScanResult` (model-free motion/saliency → level-1 memory patch +
+  clarification signals) + browser `quickScan` runner (sample → summarize →
+  persist). `handleAgent` runs it before the describe guard; it persists memory,
+  answers with an honest structural describe + chips, and NEVER creates clips or
+  calls the planner. `QUICK_SCAN` config added.
+- **Purpose + memory-aware budget + persistence:** `runPipeline` classifies the
+  turn (`classifyAnalysisPurpose`), builds a per-source `planAnalysisBudget`
+  with REAL cache flags (`cacheSignalsForHash`), passes it to
+  `executeForSource` (no more flat-240 default), shows "Using the cached scan",
+  and persists a compact `buildHighlightMemoryPatch` per source after the run.
+- **Clarification:** `decideClarification` wired after a low-confidence quick
+  scan and in the multi-video planner (story vs montage). Single-video vague
+  creation stays on the existing intake layer (no duplicate system).
+- **Global multi-video planner:** the all-sources compose path builds per-source
+  summaries from memory, derives style (`deriveGlobalPlanRequest`), calls
+  `planGlobalEdit` → asks (story/montage) when vague, else reorders + sizes each
+  source by target share (balanced cap prevents one source dominating).
+- **Overlap resolver:** pure `overlapIntent` + `overlapFlow`; `runAgentCommand`
+  gates `add_clips` — ambiguous same-source overlap PARKS the clip in the new
+  store `pendingOverlap`, asks (skip/replace/keep both/trim), never silently
+  stacks/replaces/skips; `handleAgent` applies the reply (snapshots for undo).
+- **Validation:** typecheck ✓, build ✓ (`/editor` 199 kB), `npm test` =
+  **432 pass / 0 fail** (+35). `npm run test:analysis` extended with 6 new pure
+  test files. Browser/WebGPU NOT verified (no GPU/decode in sandbox).
+- **Still foundation-only / honest limits:** scan + memory are STRUCTURAL (never
+  names on-screen subjects without captioning); cross-query structural reuse and
+  a dedicated coarse-then-deep executor are future; the global planner is wired
+  into the all-sources COMPOSE path only. See
+  `memory/DYNAMIC_LOCAL_ANALYSIS_WIRING_2026-06-20.md`.
+
+---
+
+## 0. Previous change (2026-06-20) — dynamic progressive local analysis + describe fix
 
 Faster, smarter LOCAL responses. Replaced the single fixed ~240-frame cap with
 a DYNAMIC, purpose-aware analysis budget, and fixed the bug where "Describe

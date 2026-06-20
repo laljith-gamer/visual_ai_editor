@@ -17,7 +17,39 @@
 
 ---
 
-### 2026-06-20 — Dynamic progressive local analysis + describe-intent fix
+### 2026-06-20 — Dynamic local analysis WIRED LIVE
+- **Change made:** Wired the dynamic-analysis foundation (built + tested in the
+  earlier 2026-06-20 PR) into the real editor flow so users feel it. Now live:
+  (1) the "Run a quick local scan" command runs a bounded, model-free,
+  on-device structural scan (motion + saliency keyframes), persists compact
+  level-1 video memory, and answers with an honest structural description +
+  next-step chips — no timeline clips, no planner; (2) video memory persists by
+  content hash and is reused — primed on upload, read by the describe responder,
+  and used to set real cache flags in the per-source budget ("Using the cached
+  scan from this video"); (3) `runPipeline` classifies the turn purpose and
+  passes a memory-aware `planAnalysisBudget` into `executeForSource`, then
+  persists a compact highlight-memory patch after the run; (4) the all-sources
+  compose path runs the global multi-video planner (asks story-vs-montage when
+  vague, balanced shares so one source can't dominate); (5) adding an
+  overlapping same-source clip ASKS (skip / replace / keep both / trim) via a
+  new `pendingOverlap` store slot instead of silently stacking/replacing;
+  (6) low-confidence quick scans offer to scan deeper. No cloud, no upload, no
+  raw frames persisted.
+- **Files affected:** new pure `lib/analysis/{memorySignals,quickScanResult,
+  quickScanCommand,globalPlanRequest}.ts`, `lib/timeline/{overlapIntent,
+  overlapFlow}.ts` (+ tests); new browser `lib/analysis/{videoMemoryManager,
+  quickScan}.ts`; `lib/config.ts` (`QUICK_SCAN`); `lib/agent/conversationLane.ts`
+  (describe reads cached memory); `lib/agent/runAgentCommand.ts` (overlap gate);
+  `hooks/useEditorStore.ts` (`pendingOverlap`); `app/editor/page.tsx` (prime
+  effect, quick-scan + overlap-resolution in `handleAgent`, purpose/budget/
+  persistence in `runPipeline`, global planner in compose); `package.json`
+  (test scripts).
+- **Reason:** Make the app feel fast, honest, and careful for real users — the
+  foundation existed but wasn't on the live path.
+- **Validation:** typecheck ✓, build ✓ (`/editor` 199 kB), `npm test` = 432
+  pass / 0 fail (+35). Browser/WebGPU runtime still pending (no GPU in sandbox).
+
+
 - **Change made:** Replaced the single fixed ~240-frame analysis cap with a
   DYNAMIC, purpose-aware budget, and fixed the bug where "Describe what's in
   this video" was misrouted into the build-a-short pipeline and got stuck in
