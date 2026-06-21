@@ -1108,3 +1108,36 @@ export const CLIP_DURATION = {
    *  clips (so a short target yields a few watchable clips, not many slivers). */
   preferredClipsForTarget: 6
 } as const;
+
+
+// =====================================================================
+// CONSTRAINT-FIRST editing pipeline (lib/constraints/*).
+//
+// Thresholds for the HARD GATE that enforces include-only / exclude
+// semantic constraints BEFORE scoring + selection. These are calibration
+// floors, NOT editorial choices: a frame "matches" an include constraint
+// when its SigLIP label score clears a floor; an exclude constraint drops a
+// frame when its exclude score dominates. Same band as PLAN_DEFAULTS.
+// qualityFloor — real SigLIP matches land in the 0.30-0.65 range.
+// =====================================================================
+export const CONSTRAINTS = {
+  /** Minimum include-constraint match for a frame to survive the hard gate.
+   *  Below this the frame is considered NOT the requested scene. */
+  includeMatchFloor: 0.32,
+  /** A frame is also kept only if its include match is at least this
+   *  fraction of the strongest include match seen in the source — this
+   *  adapts the gate to the source's own score distribution without
+   *  reintroducing off-constraint footage. */
+  includeRelativeFraction: 0.5,
+  /** A frame is dropped as EXCLUDED when its exclude-constraint match is at
+   *  or above this ceiling. */
+  excludeMatchCeil: 0.45,
+  /** When an exclude match exceeds the include match by this margin the
+   *  frame is dropped even if it cleared the include floor (the excluded
+   *  concept dominates the frame). */
+  excludeDominanceMargin: 0.05,
+  /** A window survives only when its mean include match clears this floor
+   *  (slightly below the per-frame floor since a window averages in a few
+   *  transition frames). */
+  windowIncludeFloor: 0.28
+} as const;

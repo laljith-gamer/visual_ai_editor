@@ -22,6 +22,11 @@ import {
   type ActionableIntent
 } from "@/lib/plan/deriveIntent";
 import { mergePlan } from "@/lib/plan/merge";
+import {
+  buildConstraintGraph,
+  isConstraintDriven
+} from "@/lib/constraints/graph";
+import { splitExclusions } from "@/lib/intent/videoPromptInterpreter";
 import { extractFacts } from "@/lib/memory/extract";
 import { decayFacts, mergeFacts } from "@/lib/memory/store";
 import { extractJsonObject } from "@/lib/util/safeJson";
@@ -847,7 +852,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json<AgentResponse>({
       mode: "plan",
-      plan: buildResult.plan,
+      plan: ensureConstraintsOnPlan(buildResult.plan, userText),
       planPatch: buildResult.planPatch,
       ...(timelineOp ? { op: timelineOp } : {}),
       ...(hasVideoSource(body) ? { autoRun: true } : {}),
@@ -1148,6 +1153,50 @@ function resolvePlan(args: {
 
 function normalizeUserTier(raw: unknown): UserTier {
   return raw === "advanced" ? "advanced" : "novice";
+}
+
+/**
+ * v2.6 — CONSTRAINT-FIRST safety net for the LLM `plan` path.
+ *
+ * The planner is instructed to emit a `constraints` graph for constraint-
+ * driven requests ("only lab scenes", "avoid the intro"), but product-
+ * critical behaviour must not depend solely on the LLM remembering. When a
+ * resolved plan has NO constraints yet the user's text is clearly exclusive
+ * ("only/just/alone/ignore everything else") or names an exclusion, we
+ * deterministically compile a HARD constraint graph from the plan's own
+ * scenarios so the hard gate runs. Returns the (mutated) plan for chaining.
+ *
+ * Only inspects exclusivity GRAMMAR + exclusion markers in the user's text —
+ * never a topic/keyword table. The semantic targets come from the plan's
+ * scenarios.
+ */
+function ensureConstraintsOnPlan(plan: EditPlan, userText: string): EditPlan {
+  if (plan.constraints) return plan; // planner already provided one
+  if (!plan.scenarios || plan.scenarios.length === 0) return plan;
+
+  const intent = deriveActionableIntent(userText, {});
+  const excludeSubjects = splitExclusions(userText || "").exclusions;
+  if (!intent.exclusiveOnly && excludeSubjects.length === 0) return plan;
+
+  const { graph, excludeScenarios } = buildConstraintGraph({
+    goal: "create short video",
+    scenarios: plan.scenarios.map((s) => ({ id: s.id, prompt: s.prompt })),
+    exclusiveOnly: intent.exclusiveOnly,
+    excludeSubjects,
+    genericBestParts: false,
+    highlightRequested: false,
+    targetSeconds: plan.userSpecifiedDuration ? plan.targetShortSeconds : null,
+    userSpecifiedDuration: plan.userSpecifiedDuration
+  });
+
+  for (const ex of excludeScenarios) {
+    if (!plan.scenarios.some((s) => s.id === ex.id)) {
+      plan.scenarios.push({ id: ex.id, prompt: ex.prompt, weight: 0 });
+      plan.labelWeights[ex.id] = 0;
+    }
+  }
+  if (isConstraintDriven(graph)) plan.constraints = graph;
+  return plan;
 }
 
 /** v1.7.9 — Normalize the optional top-level `op` field the planner
@@ -1721,6 +1770,29 @@ function synthesizeVaguePlan(args: {
       ...(args.intent?.negativeConstraints ?? [])
     ])
   ).slice(0, 8);
+
+  // v2.6 — CONSTRAINT-FIRST. Compile the intent into a constraint graph so a
+  // request like "only lab scenes, ignore everything else" becomes a HARD
+  // include (filter before scoring), and "avoid the intro" becomes a
+  // semantic exclude. Exclude subjects are SigLIP-scored via weight-0
+  // scenarios so the exclude is semantic, not a keyword string-match.
+  const exclusiveOnly = args.intent?.exclusiveOnly === true;
+  const excludeSubjects = splitExclusions(args.userText || "").exclusions;
+  const { graph, excludeScenarios } = buildConstraintGraph({
+    goal: "create short video",
+    scenarios: scenarios.map((s) => ({ id: s.id, prompt: s.prompt })),
+    exclusiveOnly,
+    excludeSubjects,
+    genericBestParts,
+    highlightRequested: genericBestParts,
+    targetSeconds: args.intent?.targetSeconds ?? null,
+    userSpecifiedDuration
+  });
+  for (const ex of excludeScenarios) {
+    scenarios.push({ id: ex.id, prompt: ex.prompt, weight: ex.weight ?? 0 });
+    labelWeights[ex.id] = 0;
+  }
+
   return {
     scenarios,
     labelWeights,
@@ -1735,6 +1807,9 @@ function synthesizeVaguePlan(args: {
     avoid,
     sampleEverySeconds: PLAN_DEFAULTS.sampleEverySeconds,
     inferenceWidth: PLAN_DEFAULTS.inferenceWidth,
-    signals
+    signals,
+    ...(isConstraintDriven(graph) || graph.highlightMode
+      ? { constraints: graph }
+      : {})
   };
 }

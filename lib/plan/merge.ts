@@ -107,6 +107,14 @@ export function mergePlan(current: EditPlan, patch: PlanPatch): EditPlan {
     out.extractRange = patch.extractRange;
   }
 
+  // --- v2.6: constraint graph ---------------------------------------
+  // A refinement may tighten/loosen constraints ("only the lab parts now",
+  // "actually keep the intro too"). When the patch carries a graph, it
+  // replaces the current one; otherwise the spread above preserves it.
+  if (patch.constraints) {
+    out.constraints = patch.constraints;
+  }
+
   return out;
 }
 

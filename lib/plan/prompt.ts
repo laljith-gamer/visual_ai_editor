@@ -93,6 +93,14 @@ Examples below use various genres on purpose. For your scenarios always describe
 
 If a user says "best parts" of an unknown video, default to the visual-interest-only path (signals.semantic = 0, motion + saliency only) instead of guessing a genre. SigLIP is skipped, the pipeline picks the visually busiest moments — which works equally well across cooking, lectures, weddings, and gameplay.
 
+# Constraint-first rule (CRITICAL)
+
+When the user RESTRICTS what footage may appear — "only lab scenes", "just the driving segments", "only talking-head moments", "ignore everything else", "without the intro" — that is a CONSTRAINT, not a highlight request. You MUST:
+  1. Emit a normal plan with concrete scenarios for the requested content.
+  2. Emit a "constraints" graph (see the plan-mode "constraints" field) with a HARD include constraint for "only X" requests and exclude constraints for "without Y" requests.
+  3. NEVER collapse an "only X" request into a generic best-moments / highlight reel. The phrase "only X" means the output must contain ONLY X — the pipeline hard-filters to it before scoring. Defaulting to highlights here is a BUG.
+Highlight/best-moments behaviour is reserved for requests that EXPLICITLY ask for it ("make a highlights reel", "best parts") AND impose no exclusivity.
+
 ## plan
 
 The user wants a multi-clip highlight reel. They have either:
@@ -122,6 +130,48 @@ Emit a full plan or a planPatch (refinement). v1.5.0 fields:
     BEFORE scoring + selection. Use this for prompts like "first 2 min,
     pick best" — emit a normal plan PLUS an extractRange covering the
     first 120 seconds.
+
+  "constraints": { ... }    // CONSTRAINT-FIRST editing — READ CAREFULLY.
+    OPTIONAL but REQUIRED whenever the user limits WHAT footage may appear.
+    This is how you express "only X" / "ignore everything else" / "without Y".
+    The pipeline treats this graph as the SINGLE SOURCE OF TRUTH: HARD
+    constraints filter the footage BEFORE any scoring or ranking, and the
+    pipeline NEVER falls back to generic highlights when a hard constraint is
+    present. Shape:
+
+      "constraints": {
+        "goal": "create short video",
+        "include": [
+          { "id": "lab", "description": "<what is on screen>",
+            "priority": "hard" | "soft", "scenarioIds": ["<scenario id>"] }
+        ],
+        "exclude": [
+          { "id": "intro", "description": "<what to remove>",
+            "scenarioIds": ["<scenario id>"] }
+        ],
+        "highlightMode": false,        // true ONLY if the user explicitly
+                                       // asked for highlights / best moments
+        "narrative": "chronological",
+        "durationSeconds": <num>,       // when the user named a length
+        "userSpecifiedDuration": true | false
+      }
+
+    RULES:
+      - "only lab scenes" / "just the cooking parts" / "ignore everything
+        else" → ONE include constraint with priority "hard" describing that
+        scene. Its scenarioIds MUST reference a scenario you also put in the
+        top-level "scenarios" array (so it gets visually scored).
+      - "without the intro" / "avoid the menu screen" / "no talking head" →
+        an exclude constraint. ALSO add a matching scenario (weight 0) to the
+        top-level "scenarios" array so the excluded concept is visually
+        recognised, NOT keyword-matched.
+      - Use "soft" priority only when the user expressed a PREFERENCE, not a
+        restriction ("mostly the kitchen, but a little b-roll is fine").
+      - NEVER set highlightMode true for an "only X" request. "only X" is a
+        constraint, not a highlight reel. highlightMode is for explicit
+        "make a highlights reel / best parts" asks with no exclusivity.
+      - When the user imposes NO restriction, OMIT constraints entirely and
+        behave as before.
 
 ## moment
 
