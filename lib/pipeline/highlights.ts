@@ -64,14 +64,13 @@ export function buildHighlights(args: BuildArgs): BuildResult {
 
   const consideredCount = scored.length;
   if (scored.length === 0) {
-    // Issue #62 — even when no window survived the minClip filter, an explicit
-    // duration request should try the offline best-parts fallback (which
-    // expands short candidate windows) before collapsing to a single forced
-    // 1s clip. This is the exact path that produced the reported bug.
-    if (args.plan.userSpecifiedDuration) {
-      const fb = tryOfflineBestParts(args, consideredCount, 0);
-      if (fb) return fb;
-    }
+    // Every candidate window was shorter than minClipSeconds (e.g. 1s motion
+    // peaks at 1s sampling). Build a properly paced, SPREAD reel from the raw
+    // candidates (expanding short peaks) instead of collapsing to a single 1s
+    // clip. This now applies to NO-DURATION "best parts" too — gating it
+    // behind userSpecifiedDuration was the cause of the reported 1×1s result.
+    const fb = tryOfflineBestParts(args, consideredCount, 0);
+    if (fb) return fb;
     return forceMinFallback(args, []);
   }
 
@@ -90,6 +89,16 @@ export function buildHighlights(args: BuildArgs): BuildResult {
   // There is deliberately NO output clip-count cap for no-duration
   // "best parts" requests; the total-duration guard is the only limiter.
   if (!args.plan.userSpecifiedDuration) {
+    // "Best parts" (visual-interest: SigLIP intentionally skipped / no
+    // scenarios) → build a paced, SPREAD multi-clip reel toward the soft
+    // target rather than a sparse quality-floor pick that can collapse to a
+    // single clip. This is the Eddie-style behaviour: several sensibly-paced
+    // clips spread across the video, with clip lengths scaled by interest.
+    if (isVisualInterestPlan(args.plan)) {
+      const fb = tryOfflineBestParts(args, consideredCount, 0);
+      if (fb) return fb;
+    }
+
     const baseFloor = args.plan.qualityFloor ?? PLAN_DEFAULTS.qualityFloor;
 
     let pool = scored.filter((s) => s.score >= baseFloor);
@@ -114,6 +123,18 @@ export function buildHighlights(args: BuildArgs): BuildResult {
       totalQ += s.duration;
     }
     selectedQ.sort((a, b) => a.candidate.start - b.candidate.start);
+
+    const selectedSecondsQ = selectedQ.reduce((acc, s) => acc + s.duration, 0);
+    // Collapse guard: if the floor selection produced nothing or only a single
+    // sub-useful sliver, spread a real reel from the candidates instead of
+    // shipping a 1s clip.
+    if (
+      selectedQ.length === 0 ||
+      selectedSecondsQ < TARGET_COVERAGE.minUsefulClipSeconds
+    ) {
+      const fb = tryOfflineBestParts(args, consideredCount, selectedSecondsQ);
+      if (fb) return fb;
+    }
 
     if (selectedQ.length === 0) {
       return forceMinFallback(args, scored);
@@ -322,20 +343,37 @@ function tryOfflineBestParts(
   });
   const fbSeconds = fb.reduce((acc, h) => acc + (h.end - h.start), 0);
   if (fb.length === 0 || fbSeconds <= currentSelectedSeconds) return null;
+  // For a genuine "best parts" (visual-interest) request the spread reel IS the
+  // intended result — not a weak fallback — so it must not be flagged
+  // low-confidence (that's what made a 0.99-score reel read as "low").
+  const visualInterest = isVisualInterestPlan(args.plan);
   return {
     highlights: fb.map((h, i): Highlight => ({
       id: newId("clip"),
       start: round2(h.start),
       end: round2(h.end),
       score: round2(h.score),
-      reason:
-        "Broad pick from local motion/visual-interest signals (visual AI unavailable)",
+      reason: visualInterest
+        ? "Picked for visual interest \u2014 motion, framing, and scene changes"
+        : "Broad pick from local motion/visual-interest signals (visual AI unavailable)",
       transition: i === 0 ? "none" : args.plan.transition,
       confidence: assessConfidence(h.score)
     })),
-    weakOnly: true,
+    weakOnly: !visualInterest,
     consideredCount
   };
+}
+
+/**
+ * A "best parts" / visual-interest plan: SigLIP is intentionally skipped
+ * (semantic weight 0) or there are no scenarios to match. The motion/saliency
+ * spread is the INTENDED selection for these, so its output should never be
+ * surfaced as a low-confidence "weak match".
+ */
+function isVisualInterestPlan(plan: EditPlan): boolean {
+  if (plan.scenarios.length === 0) return true;
+  if (plan.signals && plan.signals.semantic === 0) return true;
+  return false;
 }
 
 function overlapsAny(a: CandidateWindow, others: CandidateWindow[]): boolean {
