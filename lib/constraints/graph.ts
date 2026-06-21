@@ -267,6 +267,12 @@ function normalizeConstraintList(
           (x): x is string => typeof x === "string" && known.has(x)
         )
       : [];
+    // A constraint with no resolvable scenarioIds cannot be MEASURED (there's
+    // no scored scenario behind it). Dropping it avoids the footgun where an
+    // exclude with no scenario falls back to the include aggregate and wrongly
+    // drops matching frames. The deterministic builder always binds ids; this
+    // only discards malformed/hallucinated LLM constraints.
+    if (scenarioIds.length === 0) continue;
     const priority: ConstraintPriority =
       o.priority === "hard" || o.priority === "soft"
         ? o.priority

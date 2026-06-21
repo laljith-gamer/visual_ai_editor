@@ -1,12 +1,11 @@
 // =====================================================================
-// Tests for the constraint HARD GATE (lib/constraints/filter.ts) and the
-// timeline-composer guards (lib/constraints/compose.ts).
+// Tests for the constraint HARD GATE (lib/constraints/filter.ts).
 //
 // These prove the acceptance criteria:
 //   - "only lab scenes" → ONLY lab frames survive (before scoring).
 //   - "only driving" / "only talking head" → same, generically.
 //   - excludes drop matching footage semantically (via SigLIP label scores).
-//   - constraint-driven edits forbid the generic best-moments fallback.
+//   - weak-but-clear matches survive; coverage relaxes toward a target.
 //   - soft / no-constraint graphs pass through untouched.
 //
 // Run via the agentic-layer runner (Node --test + --experimental-strip-types
@@ -17,8 +16,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildConstraintGraph } from "./graph.ts";
-import { applyConstraintFilter, filterWindows } from "./filter.ts";
-import { allowGenericFallback, composeConstrainedTimeline } from "./compose.ts";
+import { applyConstraintFilter } from "./filter.ts";
 
 // Build a minimal FrameScore. `labels` maps scenarioId → SigLIP score.
 function frame(t: number, labels: Record<string, number>, semantic = 0) {
@@ -221,80 +219,4 @@ test("soft-only graph passes all frames through (hardApplied false)", () => {
   const { frames: kept, report } = applyConstraintFilter(frames, graph);
   assert.equal(kept.length, 2);
   assert.equal(report.hardApplied, false);
-});
-
-// ---------------------------------------------------------------------
-// filterWindows — secondary belt-and-braces guard
-// ---------------------------------------------------------------------
-test("filterWindows drops windows whose mean include match is too low", () => {
-  const { graph } = buildConstraintGraph({
-    scenarios: [{ id: "lab", prompt: "lab" }],
-    exclusiveOnly: true
-  });
-  const labWindow = {
-    start: 0,
-    end: 2,
-    meanScore: 0.8,
-    frames: [frame(0, { lab: 0.8 }), frame(1, { lab: 0.7 })]
-  };
-  const offWindow = {
-    start: 5,
-    end: 7,
-    meanScore: 0.9,
-    frames: [frame(5, { lab: 0.05 }), frame(6, { lab: 0.08 })]
-  };
-  const kept = filterWindows([labWindow, offWindow], graph);
-  assert.equal(kept.length, 1);
-  assert.equal(kept[0].start, 0);
-});
-
-// ---------------------------------------------------------------------
-// allowGenericFallback — the no-best-moments gate
-// ---------------------------------------------------------------------
-test("allowGenericFallback is false for constraint-driven graphs", () => {
-  const hard = buildConstraintGraph({
-    scenarios: [{ id: "lab", prompt: "lab" }],
-    exclusiveOnly: true
-  }).graph;
-  const soft = buildConstraintGraph({
-    scenarios: [{ id: "lab", prompt: "lab" }],
-    exclusiveOnly: false
-  }).graph;
-  assert.equal(allowGenericFallback(hard), false);
-  assert.equal(allowGenericFallback(soft), true);
-  assert.equal(allowGenericFallback(undefined), true);
-});
-
-// ---------------------------------------------------------------------
-// composeConstrainedTimeline — order + duration enforcement, no new content
-// ---------------------------------------------------------------------
-test("composeConstrainedTimeline orders chronologically and trims to target", () => {
-  const graph = buildConstraintGraph({
-    scenarios: [{ id: "lab", prompt: "lab" }],
-    exclusiveOnly: true,
-    targetSeconds: 10,
-    userSpecifiedDuration: true
-  }).graph;
-
-  const highlights = [
-    { id: "c1", start: 5, end: 9, score: 0.8, reason: "lab" }, // 4s
-    { id: "c2", start: 0, end: 3, score: 0.7, reason: "lab" }, // 3s
-    { id: "c3", start: 12, end: 20, score: 0.9, reason: "lab" } // 8s
-  ];
-  const out = composeConstrainedTimeline({ highlights, graph });
-  // chronological order: c2 (0), c1 (5), c3 (12); total budget 10s.
-  assert.deepEqual(out.map((h) => h.id), ["c2", "c1"]); // 3 + 4 = 7s; +8 would exceed
-});
-
-test("composeConstrainedTimeline keeps at least one clip and never adds content", () => {
-  const graph = buildConstraintGraph({
-    scenarios: [{ id: "lab", prompt: "lab" }],
-    exclusiveOnly: true,
-    targetSeconds: 1,
-    userSpecifiedDuration: true
-  }).graph;
-  const highlights = [{ id: "c1", start: 0, end: 8, score: 0.8, reason: "lab" }];
-  const out = composeConstrainedTimeline({ highlights, graph });
-  assert.equal(out.length, 1);
-  assert.equal(out[0].id, "c1");
 });

@@ -1151,9 +1151,6 @@ export const CONSTRAINTS = {
   /** When an exclude match exceeds the include match by this margin the frame
    *  is dropped even if it cleared the include cutoff (excluded concept
    *  dominates the frame). */
-  excludeDominanceMargin: 0.05,
-  /** A candidate window survives the secondary guard only when its mean
-   *  include match is at least this fraction of the strongest window mean. */
-  windowRelativeFraction: 0.5
+  excludeDominanceMargin: 0.05
 } as const;
 

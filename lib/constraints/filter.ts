@@ -25,9 +25,9 @@
 // Pure + import-light. Unit-tested with `node --test`.
 // =====================================================================
 
-import type { CandidateWindow, FrameScore } from "@/lib/types";
+import type { FrameScore } from "@/lib/types";
 import type { ConstraintFilterReport, ConstraintGraph } from "./types";
-import { constraintMatch } from "./sceneUnderstanding";
+import { labelFrame } from "./sceneUnderstanding";
 import { hasExclude, hasHardInclude, isConstraintDriven } from "./graph";
 import { CONSTRAINTS } from "../config";
 
@@ -77,12 +77,12 @@ export function applyConstraintFilter(
   const enforceInclude = hasHardInclude(graph);
   const enforceExclude = hasExclude(graph);
 
-  // Pre-compute per-frame include/exclude matches once.
-  const matches = frames.map((f) => ({
-    frame: f,
-    inc: bestIncludeMatch(f, graph),
-    exc: bestExcludeMatch(f, graph)
-  }));
+  // Pre-compute each frame's scene label (include/exclude match) once via the
+  // scene-understanding layer.
+  const matches = frames.map((f) => {
+    const label = labelFrame(f, graph);
+    return { frame: f, inc: label.includeMatch, exc: label.excludeMatch };
+  });
 
   const maxInclude = matches.reduce((m, x) => Math.max(m, x.inc), 0);
   const maxExclude = matches.reduce((m, x) => Math.max(m, x.exc), 0);
@@ -160,67 +160,7 @@ export function applyConstraintFilter(
   };
 }
 
-/**
- * Secondary belt-and-braces guard over already-detected candidate windows.
- * Drops windows whose mean include match falls far below the strongest
- * window's, or whose exclude match dominates. Relative, never a fixed number.
- */
-export function filterWindows(
-  windows: CandidateWindow[],
-  graph: ConstraintGraph
-): CandidateWindow[] {
-  if (!isConstraintDriven(graph) || windows.length === 0) return windows;
-  const enforceInclude = hasHardInclude(graph);
-  const enforceExclude = hasExclude(graph);
-
-  const stats = windows.map((w) => {
-    let incSum = 0;
-    let excMax = 0;
-    for (const f of w.frames) {
-      incSum += bestIncludeMatch(f, graph);
-      const e = bestExcludeMatch(f, graph);
-      if (e > excMax) excMax = e;
-    }
-    const incMean = w.frames.length > 0 ? incSum / w.frames.length : 0;
-    return { window: w, incMean, excMax };
-  });
-
-  const maxMean = stats.reduce((m, s) => Math.max(m, s.incMean), 0);
-  const maxExc = stats.reduce((m, s) => Math.max(m, s.excMax), 0);
-  const incCut = maxMean * CONSTRAINTS.windowRelativeFraction;
-  const excCut = Math.max(
-    CONSTRAINTS.excludeNoiseFloor,
-    maxExc * CONSTRAINTS.excludeRelativeFraction
-  );
-
-  return stats
-    .filter((s) => {
-      if (s.window.frames.length === 0) return false;
-      if (enforceExclude && s.excMax >= excCut) return false;
-      if (enforceInclude && s.incMean < incCut) return false;
-      return true;
-    })
-    .map((s) => s.window);
-}
-
-function bestIncludeMatch(frame: FrameScore, graph: ConstraintGraph): number {
-  let best = 0;
-  for (const c of graph.include) {
-    const m = constraintMatch(frame, c);
-    if (m > best) best = m;
-  }
-  return best;
-}
-
-function bestExcludeMatch(frame: FrameScore, graph: ConstraintGraph): number {
-  let best = 0;
-  for (const c of graph.exclude) {
-    const m = constraintMatch(frame, c);
-    if (m > best) best = m;
-  }
-  return best;
-}
-
 function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
 }
+

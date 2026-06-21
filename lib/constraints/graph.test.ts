@@ -166,6 +166,22 @@ test("normalizeConstraintGraph returns null for an empty / useless graph", () =>
   assert.equal(normalizeConstraintGraph("nope", []), null);
 });
 
+test("normalizeConstraintGraph drops a constraint whose scenarioIds are all unknown", () => {
+  // An unmeasurable constraint (no resolvable scenario) must not survive — it
+  // would otherwise fall back to the include aggregate and mis-gate frames.
+  const g = normalizeConstraintGraph(
+    {
+      include: [
+        { id: "x", description: "x", priority: "hard", scenarioIds: ["ghost"] }
+      ],
+      exclude: [],
+      highlightMode: false
+    },
+    ["lab"] // "ghost" is unknown → constraint dropped → nothing measurable left
+  );
+  assert.equal(g, null);
+});
+
 // helper-on-undefined safety
 test("predicates are safe on undefined/null graphs", () => {
   assert.equal(hasHardInclude(undefined), false);

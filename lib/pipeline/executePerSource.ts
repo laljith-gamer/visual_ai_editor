@@ -331,11 +331,11 @@ export async function executeForSource(
     videoDuration: videoMeta.duration,
     userTier,
     scoreStats
-    // NOTE: no allowGenericFallback flag — for a constraint-driven plan the
-    // candidate windows here are ALREADY constraint-filtered (the hard gate
-    // ran on the frames above), so the duration-fill / spread fallbacks can
-    // only ever draw from on-constraint footage. Disabling them was what
-    // collapsed a 60s "only lab" request to a single 1s clip.
+    // NOTE: for a constraint-driven plan the candidate windows here are
+    // ALREADY constraint-filtered (the hard gate ran on the frames above), so
+    // the duration-fill / spread fallbacks inside buildHighlights can only ever
+    // draw from on-constraint footage. (Disabling them entirely was what
+    // collapsed a 60s "only lab" request to a single 1s clip.)
   });
   const grounded = snapHighlightsToTranscriptMatches(
     buildResult.highlights,

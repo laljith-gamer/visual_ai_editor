@@ -36,7 +36,18 @@ export async function scoreFrames({
   onProgress
 }: ScoreArgs): Promise<FrameScore[]> {
   const weights = resolveSignalWeights(plan);
-  const needsSemantic = weights.semantic > 0 && plan.scenarios.length > 0;
+  // Run SigLIP when the composite uses semantic OR when a constraint graph
+  // references scenarios that must be measured. The latter covers the case of
+  // an exclude (or include) on an otherwise motion/saliency "best parts" plan:
+  // we must still SEE the excluded/required concept to gate on it. Without
+  // this, "best parts but avoid the intro" would skip SigLIP and silently
+  // ignore the exclusion.
+  const constraintNeedsScoring =
+    !!plan.constraints &&
+    (plan.constraints.include.some((c) => c.scenarioIds.length > 0) ||
+      plan.constraints.exclude.some((c) => c.scenarioIds.length > 0));
+  const needsSemantic =
+    (weights.semantic > 0 || constraintNeedsScoring) && plan.scenarios.length > 0;
 
   if (!needsSemantic) {
     // Visual-interest-only path: motion + saliency from sampling, no model.
