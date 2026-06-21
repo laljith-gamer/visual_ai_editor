@@ -3,6 +3,7 @@
 // =====================================================================
 
 import type { BoundaryTransition } from "./transitions/types";
+import type { ConstraintGraph } from "./constraints/types";
 
 // ---------------------------------------------------------------------
 // Plan & pipeline
@@ -80,6 +81,12 @@ export interface EditPlan {
    *  `selectedSourceIds` through this list when both are present so
    *  the user's library checkboxes always remain authoritative. */
   sources?: string[];
+  /** v2.6 — CONSTRAINT-FIRST editing. The compiled constraint graph that
+   *  drives the hard gate (lib/constraints/*). When present AND
+   *  constraint-driven (a hard include or any exclude), the pipeline filters
+   *  frames to the constraint BEFORE scoring/selection and never falls back
+   *  to generic highlights. Absent / soft → legacy behaviour unchanged. */
+  constraints?: ConstraintGraph;
 }
 
 /** A scored frame from the per-frame pass.

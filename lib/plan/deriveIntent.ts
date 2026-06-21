@@ -218,7 +218,14 @@ export function deriveActionableIntent(
 
   const targetSeconds = parseDuration(text);
   const format = detectFormat(text);
-  const exclusiveOnly = /\b(only|alone|just|solely|nothing but)\b/.test(lower);
+  // Exclusivity: "only/just/alone/solely/nothing but" AND the common
+  // "ignore everything else" / "nothing else" framing. All of these mean the
+  // named subject is the WHOLE edit → its include constraints become HARD.
+  const exclusiveOnly =
+    /\b(only|alone|just|solely|nothing but)\b/.test(lower) ||
+    /\b(ignore|skip|drop|remove|cut)\s+(everything|all|the rest|anything)\s*(else)?\b/.test(lower) ||
+    /\b(nothing|no)\s+(else|other)\b/.test(lower) ||
+    /\beverything\s+else\b/.test(lower);
 
   // Tokenize: strip clock + number+unit tokens, keep words, then drop generic
   // command/filler words and normalize per-word typos.

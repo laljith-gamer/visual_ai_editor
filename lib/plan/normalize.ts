@@ -8,6 +8,10 @@ import type {
 import { newId } from "@/lib/util/id";
 import { clamp } from "@/lib/util/time";
 import { PLAN_BOUNDS, PLAN_DEFAULTS, SIGNAL_DEFAULTS } from "@/lib/config";
+import {
+  normalizeConstraintGraph,
+  constraintGraphSignature
+} from "@/lib/constraints/graph";
 
 /**
  * Validate and normalize a raw plan from the LLM into a clean EditPlan
@@ -105,6 +109,14 @@ export function normalizePlan(raw: unknown): NormalizeResult {
       ? clamp(r.qualityFloor, 0, 1)
       : undefined;
 
+  // v2.6 — CONSTRAINT-FIRST. Parse the planner's optional `constraints`
+  // graph and discard any scenarioId references it hallucinated. Exclude
+  // scenarios it wants SigLIP-scored must already be in `scenarios` (the
+  // prompt instructs this); dangling refs are dropped by the normalizer.
+  const knownScenarioIds = scenarios.map((s) => s.id);
+  const constraints =
+    normalizeConstraintGraph(r.constraints, knownScenarioIds) ?? undefined;
+
   return {
     plan: {
       scenarios,
@@ -124,7 +136,8 @@ export function normalizePlan(raw: unknown): NormalizeResult {
       signals: signals ?? undefined,
       extractRange: extractRange ?? undefined,
       rationale,
-      sources: sources.length > 0 ? sources : undefined
+      sources: sources.length > 0 ? sources : undefined,
+      constraints
     },
     missing: [],
     warnings
@@ -220,6 +233,14 @@ export function normalizePlanPatch(raw: unknown): {
     const sources = stringArray(r.sources).slice(0, 16);
     if (sources.length > 0) patch.sources = sources;
   }
+  // v2.6 — constraint graph on a refinement turn. We only know the patch's
+  // own scenario ids here; the merge step (mergePlan) re-validates against
+  // the merged scenario set. Pass the patch scenario ids as "known".
+  if (r.constraints && typeof r.constraints === "object") {
+    const ids = (patch.scenarios ?? []).map((s) => s.id);
+    const graph = normalizeConstraintGraph(r.constraints, ids);
+    if (graph) patch.constraints = graph;
+  }
   return { patch, warnings };
 }
 
@@ -228,7 +249,10 @@ export function planSignaturePayload(plan: EditPlan): string {
   return JSON.stringify({
     scenarios: plan.scenarios.map((s) => ({ id: s.id, prompt: s.prompt })),
     sampleEverySeconds: plan.sampleEverySeconds,
-    inferenceWidth: plan.inferenceWidth
+    inferenceWidth: plan.inferenceWidth,
+    // v2.6 — constraint graph changes (hard/soft, excludes, highlight mode)
+    // alter selection materially, so they must invalidate cached frames.
+    constraints: constraintGraphSignature(plan.constraints)
   });
 }
 

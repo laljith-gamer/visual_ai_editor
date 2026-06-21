@@ -23,6 +23,11 @@ interface BuildArgs {
   videoDuration: number;
   userTier?: UserTier;
   scoreStats?: ScoreStats;
+  /** v2.6 — when false (a constraint-driven edit), the generic
+   *  best-moments / offline visual-interest fallbacks are DISABLED. An
+   *  honest small/empty result is returned instead of reintroducing
+   *  off-constraint footage. Defaults to true (legacy behaviour). */
+  allowGenericFallback?: boolean;
 }
 
 export interface BuildResult {
@@ -41,6 +46,13 @@ export function buildHighlights(args: BuildArgs): BuildResult {
   if (args.candidates.length === 0) {
     return { highlights: [], weakOnly: false, consideredCount: 0 };
   }
+
+  // v2.6 — constraint-driven edits forbid the generic "best moments" /
+  // offline visual-interest BROADENING that pads a small result up to a
+  // duration target. The candidates here are already constraint-filtered, so
+  // the genuine matches (quality-floor / force-min) are still returned — we
+  // simply never inflate them with lower-relevance picks.
+  const allowFallback = args.allowGenericFallback !== false;
 
   const verdictMap = new Map<string, TemporalVerdict>();
   for (const v of args.verdicts) {
@@ -69,7 +81,9 @@ export function buildHighlights(args: BuildArgs): BuildResult {
     // expands short candidate windows) before collapsing to a single forced
     // 1s clip. This is the exact path that produced the reported bug.
     if (args.plan.userSpecifiedDuration) {
-      const fb = tryOfflineBestParts(args, consideredCount, 0);
+      const fb = allowFallback
+        ? tryOfflineBestParts(args, consideredCount, 0)
+        : null;
       if (fb) return fb;
     }
     return forceMinFallback(args, []);
@@ -205,7 +219,9 @@ export function buildHighlights(args: BuildArgs): BuildResult {
     const selectedSeconds = selected.reduce((acc, s) => acc + s.duration, 0);
     const minReady = target * TARGET_COVERAGE.minReadyFraction;
     if (target > 0 && (selected.length === 0 || selectedSeconds < minReady)) {
-      const fb = tryOfflineBestParts(args, consideredCount, selectedSeconds);
+      const fb = allowFallback
+        ? tryOfflineBestParts(args, consideredCount, selectedSeconds)
+        : null;
       if (fb) return fb;
     }
   }

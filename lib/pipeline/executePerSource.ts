@@ -22,6 +22,9 @@ import { detectCandidateWindows } from "./events";
 import { runTemporalPass } from "./temporal";
 import { buildHighlights } from "./highlights";
 import { buildMomentHighlight } from "./moment";
+import { applyConstraintFilter } from "@/lib/constraints/filter";
+import { allowGenericFallback } from "@/lib/constraints/compose";
+import { isConstraintDriven } from "@/lib/constraints/graph";
 import {
   applyTranscriptGrounding,
   snapHighlightsToTranscriptMatches,
@@ -235,6 +238,48 @@ export async function executeForSource(
   progress.setStatus("temporal", `Finding events in ${source.meta.name}`);
   progress.setProgress(0.62);
 
+  // ---- CONSTRAINT HARD GATE (v2.6) --------------------------------
+  // For a constraint-driven plan ("only lab scenes", "avoid the intro"),
+  // drop every frame that does not satisfy the constraint graph BEFORE any
+  // candidate-window detection, ranking, or selection runs. From here on the
+  // pipeline only ever sees constraint-passing frames, so no downstream
+  // fallback can reintroduce excluded / off-constraint footage.
+  if (plan.constraints && isConstraintDriven(plan.constraints)) {
+    const before = frameScores.length;
+    const { frames: gated, report } = applyConstraintFilter(
+      frameScores,
+      plan.constraints
+    );
+    frameScores = gated;
+    log.ai(
+      "constraints.filtered",
+      {
+        sourceId: source.id,
+        inputFrames: before,
+        keptFrames: report.keptCount,
+        droppedByInclude: report.droppedByInclude,
+        droppedByExclude: report.droppedByExclude,
+        includeFloor: report.includeFloor,
+        hardInclude: plan.constraints.include.some((c) => c.priority === "hard"),
+        excludes: plan.constraints.exclude.length
+      },
+      report.keptCount > 0
+        ? `Constraint gate kept ${report.keptCount}/${before} frames from "${source.meta.name}" (dropped ${report.droppedByInclude} off-topic, ${report.droppedByExclude} excluded)`
+        : `Constraint gate removed all ${before} frames from "${source.meta.name}" — no footage matched the constraints`
+    );
+    if (frameScores.length === 0) {
+      // Honest empty result — NEVER fall back to generic highlights when the
+      // constraint produced nothing. The caller surfaces "no matching footage".
+      return {
+        highlights: [],
+        weakOnly: false,
+        scoreMax: 0,
+        scoreStats: null,
+        cacheHit
+      };
+    }
+  }
+
   const detectionResult = detectCandidateWindows(frameScores, plan, {
     userTier,
     videoMeta
@@ -279,7 +324,8 @@ export async function executeForSource(
     plan,
     videoDuration: videoMeta.duration,
     userTier,
-    scoreStats
+    scoreStats,
+    allowGenericFallback: allowGenericFallback(plan.constraints)
   });
   const grounded = snapHighlightsToTranscriptMatches(
     buildResult.highlights,
