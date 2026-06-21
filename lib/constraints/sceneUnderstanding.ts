@@ -81,14 +81,6 @@ export function labelFrame(frame: FrameScore, graph: ConstraintGraph): SceneLabe
   };
 }
 
-/** Label every frame against the graph. */
-export function labelFrames(
-  frames: FrameScore[],
-  graph: ConstraintGraph
-): SceneLabel[] {
-  return frames.map((f) => labelFrame(f, graph));
-}
-
 function clamp01(n: number): number {
   if (!isFinite(n)) return 0;
   return Math.max(0, Math.min(1, n));
