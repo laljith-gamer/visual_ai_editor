@@ -136,6 +136,80 @@ test("when nothing matches a hard include, the gate returns empty (no widening)"
 });
 
 // ---------------------------------------------------------------------
+// REGRESSION (the "1s clip" bug): weak-but-clear matches must survive.
+// SigLIP zero-shot scores for a true match commonly sit ~0.30. A fixed
+// 0.32 floor dropped them all and collapsed the reel to one forced clip.
+// The adaptive gate keeps them because they stand out from the background.
+// ---------------------------------------------------------------------
+test("weak-but-clear lab frames (~0.30) survive the adaptive gate", () => {
+  const { graph } = buildConstraintGraph({
+    scenarios: [{ id: "lab", prompt: "a person in a laboratory" }],
+    exclusiveOnly: true
+  });
+  const frames = [
+    frame(0, { lab: 0.31 }),
+    frame(1, { lab: 0.05 }), // clearly not lab → drop
+    frame(2, { lab: 0.29 }),
+    frame(3, { lab: 0.33 }),
+    frame(4, { lab: 0.06 }), // not lab → drop
+    frame(5, { lab: 0.3 })
+  ];
+  const { frames: kept } = applyConstraintFilter(frames, graph);
+  // The four lab frames survive; the two clearly-not-lab frames are dropped.
+  assert.deepEqual(kept.map((f) => f.t), [0, 2, 3, 5]);
+  // It must NOT collapse to a single clip.
+  assert.ok(kept.length > 1, "should keep all weak-but-clear lab frames");
+});
+
+// ---------------------------------------------------------------------
+// Coverage-aware relaxation: a duration target admits the next-best
+// on-constraint frames so the reel can approach the requested length,
+// without ever dropping below the noise floor or adding off-constraint footage.
+// ---------------------------------------------------------------------
+test("coverage relaxation admits more on-constraint frames toward the target", () => {
+  const { graph } = buildConstraintGraph({
+    scenarios: [{ id: "lab", prompt: "lab" }],
+    exclusiveOnly: true,
+    targetSeconds: 10,
+    userSpecifiedDuration: true
+  });
+  const scores = [0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.28, 0.26, 0.24, 0.22, 0.2];
+  const frames = scores.map((s, i) => frame(i, { lab: s }));
+
+  // Without a target → strict adaptive cutoff keeps only the clear top cluster.
+  const strict = applyConstraintFilter(frames, graph).frames;
+  // With a 10s target at 1s/frame → relaxes downward to cover ~80% of target.
+  const relaxed = applyConstraintFilter(frames, graph, {
+    targetSeconds: 10,
+    sampleEverySeconds: 1
+  }).frames;
+
+  assert.ok(relaxed.length > strict.length, "target should admit more frames");
+  assert.ok(relaxed.length >= 8, `expected ~8 frames for a 10s target, got ${relaxed.length}`);
+});
+
+test("relaxation never admits frames below the noise floor", () => {
+  const { graph } = buildConstraintGraph({
+    scenarios: [{ id: "lab", prompt: "lab" }],
+    exclusiveOnly: true,
+    targetSeconds: 60,
+    userSpecifiedDuration: true
+  });
+  const frames = [
+    frame(0, { lab: 0.5 }),
+    frame(1, { lab: 0.4 }),
+    frame(2, { lab: 0.3 }),
+    frame(3, { lab: 0.04 }) // below noise floor → never admitted even when relaxing hard
+  ];
+  const { frames: kept } = applyConstraintFilter(frames, graph, {
+    targetSeconds: 60,
+    sampleEverySeconds: 1
+  });
+  assert.ok(!kept.some((f) => f.t === 3), "noise-floor frame must stay excluded");
+  assert.deepEqual(kept.map((f) => f.t), [0, 1, 2]);
+});
+
+// ---------------------------------------------------------------------
 // Soft / no-constraint graphs pass through untouched
 // ---------------------------------------------------------------------
 test("soft-only graph passes all frames through (hardApplied false)", () => {
