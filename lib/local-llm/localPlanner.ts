@@ -19,6 +19,12 @@
 import type { EditPlan } from "@/lib/types";
 import { normalizePlan } from "@/lib/plan/normalize";
 import { extractJsonObject } from "@/lib/util/safeJson";
+import {
+  deriveActionableIntent,
+  actionableIntentMessage
+} from "@/lib/plan/deriveIntent";
+import { buildConstraintGraph, isConstraintDriven } from "@/lib/constraints/graph";
+import { splitExclusions } from "@/lib/intent/videoPromptInterpreter";
 import { isWebGPUAvailable, localChatJson } from "./webllm";
 
 /** Outcome of a local planning attempt. */
@@ -99,7 +105,7 @@ export async function tryLocalPlannerFallback(
       ? ctx.compiledPrompt.trim()
       : userRequest;
 
-  const quick = quickOfflinePlan(planningInput);
+  const quick = quickOfflinePlan(userRequest);
   if (quick) return quick;
 
   if (!isWebGPUAvailable()) return null;
@@ -149,54 +155,101 @@ function isLocalVisionRequest(userRequest: string): boolean {
     /what happens? in (this|the) (video|clip|footage)/.test(text);
 }
 
-function quickOfflinePlan(userRequest: string): LocalPlanResult {
-  const text = userRequest.toLowerCase();
-  const asksWhy = /\bwhy\b.*\b(pick|picked|choose|chosen|select|selected)\b/.test(text) ||
+/**
+ * Deterministic, offline quick-plan. Reuses the SAME intent interpreter as
+ * the cloud fallback (`deriveActionableIntent`) — no duplicate keyword logic —
+ * and compiles a CONSTRAINT-FIRST plan so an offline "only lab view" request
+ * is hard-gated exactly like the online path. Focus/intent is always read from
+ * the user's RAW words (never a compiled brief string), which is what produced
+ * the earlier garbled "output type: …" message.
+ */
+function quickOfflinePlan(rawRequest: string): LocalPlanResult {
+  const text = (rawRequest || "").toLowerCase();
+  const asksWhy =
+    /\bwhy\b.*\b(pick|picked|choose|chosen|select|selected)\b/.test(text) ||
     /\bwhy\b.*\bclips?\b/.test(text);
-  const wantsBest =
-    /\b(best parts?|best moments?|highlights?)\b/.test(text) ||
-    /\b(pick|choose|find).*\bbest\b/.test(text) ||
-    asksWhy;
-  const wantsVertical = /\b(vertical|reels?|shorts?|tiktok|9:16)\b/.test(text) &&
-    /\b(make|create|turn|convert|build)\b/.test(text);
-  if (!wantsBest && !wantsVertical) return null;
 
-  const focus = extractFocus(userRequest);
-  const hasFocus = Boolean(focus);
+  if (asksWhy) {
+    return {
+      kind: "plan",
+      // A why-question doesn't change the plan; surface an honest explanation.
+      plan: fallbackVisualInterestPlan(),
+      message:
+        "Those clips were picked by local scoring because they ranked higher for motion and visual saliency. Detailed scene reasons need the video-memory tree wiring next."
+    };
+  }
+
+  const intent = deriveActionableIntent(rawRequest, {});
+  const wantsVertical =
+    /\b(vertical|reels?|shorts?|tiktok|9:16)\b/.test(text) &&
+    /\b(make|create|turn|convert|build)\b/.test(text);
+
+  // Nothing actionable and no clear "make a vertical reel" → let WebLLM /
+  // manual handle it rather than guessing.
+  if (!intent.actionable && !wantsVertical) return null;
+
+  const hasFocus = intent.scenarioLabels.length > 0 && !intent.genericBestParts;
+  const scenarios = hasFocus
+    ? intent.scenarioLabels.slice(0, 4).map((prompt) => ({ prompt }))
+    : [];
+  const signals = hasFocus
+    ? { semantic: 0.65, motion: 0.2, saliency: 0.15 }
+    : { semantic: 0, motion: 0.6, saliency: 0.4 };
+
   const norm = normalizePlan({
-    scenarios: hasFocus ? [{ prompt: `${focus} moments` }] : [],
-    signals: hasFocus
-      ? { semantic: 0.55, motion: 0.25, saliency: 0.2 }
-      : { semantic: 0, motion: 0.6, saliency: 0.4 },
+    scenarios,
+    signals,
+    selectionStrategy: "best",
+    format: intent.format,
+    transition: "none",
+    userSpecifiedDuration: intent.userSpecifiedDuration,
+    ...(intent.targetSeconds ? { targetShortSeconds: intent.targetSeconds } : {}),
+    rationale: hasFocus
+      ? `Offline plan preserving the user's requested focus: ${intent.rawFocus ?? ""}.`
+      : "Offline plan using motion and saliency."
+  });
+  if (!norm.plan) return null;
+
+  // CONSTRAINT-FIRST offline: compile the same constraint graph the cloud
+  // path would, so "only X" hard-filters before scoring even with no network.
+  const excludeSubjects = splitExclusions(rawRequest).exclusions;
+  const { graph, excludeScenarios } = buildConstraintGraph({
+    goal: "create short video",
+    scenarios: norm.plan.scenarios.map((s) => ({ id: s.id, prompt: s.prompt })),
+    exclusiveOnly: intent.exclusiveOnly,
+    excludeSubjects,
+    genericBestParts: intent.genericBestParts,
+    highlightRequested: intent.genericBestParts,
+    targetSeconds: intent.targetSeconds ?? null,
+    userSpecifiedDuration: intent.userSpecifiedDuration
+  });
+  for (const ex of excludeScenarios) {
+    if (!norm.plan.scenarios.some((s) => s.id === ex.id)) {
+      norm.plan.scenarios.push({ id: ex.id, prompt: ex.prompt, weight: 0 });
+      norm.plan.labelWeights[ex.id] = 0;
+    }
+  }
+  if (isConstraintDriven(graph) || graph.highlightMode) {
+    norm.plan.constraints = graph;
+  }
+
+  const message = intent.actionable
+    ? actionableIntentMessage(intent, true)
+    : "I\u2019ll make a vertical reel locally using the best motion and saliency moments.";
+
+  return { kind: "plan", plan: norm.plan, message };
+}
+
+/** A bare motion+saliency plan used for "why did you pick these" answers. */
+function fallbackVisualInterestPlan(): EditPlan {
+  const norm = normalizePlan({
+    scenarios: [],
+    signals: { semantic: 0, motion: 0.6, saliency: 0.4 },
     selectionStrategy: "best",
     format: "vertical",
     transition: "none",
-    userSpecifiedDuration: false,
-    rationale: hasFocus
-      ? `Offline quick plan preserving the user's requested focus: ${focus}.`
-      : "Offline quick plan using motion and saliency."
+    userSpecifiedDuration: false
   });
-  if (!norm.plan) return null;
-  return {
-    kind: "plan",
-    plan: norm.plan,
-    message: asksWhy
-      ? "Those clips were picked by local scoring because they ranked higher for motion and visual saliency. Detailed scene reasons need the video-memory tree wiring next."
-      : hasFocus
-        ? `I’ll pick the best ${focus} moments locally.`
-        : wantsVertical
-          ? "I’ll make a vertical reel locally using the best motion and saliency moments."
-          : "I’ll pick the best parts locally using motion and saliency."
-  };
-}
-
-function extractFocus(userRequest: string): string | null {
-  const text = userRequest
-    .toLowerCase()
-    .replace(/\b(pick|choose|find|make|create|turn|convert|build|give|get|clip|clips?)\b/g, " ")
-    .replace(/\b(best|parts?|moments?|highlights?|video|footage|shorts?|reels?|tiktok|vertical|for|me|please|alone|only)\b/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text || text.length < 3) return null;
-  return text.slice(0, 80);
+  // normalizePlan always succeeds for an empty-scenario visual-interest plan.
+  return norm.plan as EditPlan;
 }

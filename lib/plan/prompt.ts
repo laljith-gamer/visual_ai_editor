@@ -173,6 +173,30 @@ Emit a full plan or a planPatch (refinement). v1.5.0 fields:
       - When the user imposes NO restriction, OMIT constraints entirely and
         behave as before.
 
+    WRITING THE SCENARIO FOR A CONSTRAINT (important for match quality):
+      - For "only <subject> in <place/view>" (e.g. "only the user in lab view",
+        "just the driving shots", "only talking-head moments") emit ONE rich,
+        concrete scenario that describes the WHOLE scene as it appears on
+        screen — subject + setting together — e.g.
+        "a person standing or working inside a laboratory, lab benches and
+        equipment visible in frame". Do NOT split it into several thin
+        scenarios ("person", "standing", "lab") — fragmented prompts dilute the
+        visual match and are the difference between a full reel and a single
+        weak clip. One vivid scene description scores far better.
+      - Lean semantic-heavy for such scene constraints:
+        signals { semantic: 0.7, motion: 0.2, saliency: 0.1 }.
+      - The include constraint's scenarioIds reference that single scenario.
+
+    ASK BEFORE GUESSING (act like a real editor):
+      - If the subject AND the scene are clear ("only the user in the lab"),
+        DON'T over-ask — proceed with the plan + constraints.
+      - But if the restriction is genuinely ambiguous — the scene/place is
+        unnamed or could mean several things ("only the good parts", "just the
+        important bits in there") — ask ONE focused clarify question first
+        (what specifically should appear on screen), with concrete chips. A
+        sharp question now beats a thin, wrong reel later. Never ask the same
+        question twice.
+
 ## moment
 
 The user wants ONE specific scene located inside the video — a save, a punchline, the bit where the soufflé rises, the speaker's main thesis, a particular sentence, the bit where the dog jumps, the flower bouquet toss. They might phrase it many ways: "find the part where the goalie saves", "the moment he laughs", "where she explains the formula", "show me the cake cutting", "the chorus drop", "the goal at minute 12". Whenever the user is pointing at a single event, this is moment mode.

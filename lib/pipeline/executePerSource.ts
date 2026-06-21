@@ -23,7 +23,6 @@ import { runTemporalPass } from "./temporal";
 import { buildHighlights } from "./highlights";
 import { buildMomentHighlight } from "./moment";
 import { applyConstraintFilter } from "@/lib/constraints/filter";
-import { allowGenericFallback } from "@/lib/constraints/compose";
 import { isConstraintDriven } from "@/lib/constraints/graph";
 import {
   applyTranscriptGrounding,
@@ -248,7 +247,14 @@ export async function executeForSource(
     const before = frameScores.length;
     const { frames: gated, report } = applyConstraintFilter(
       frameScores,
-      plan.constraints
+      plan.constraints,
+      {
+        // Coverage-aware: when the user named a duration, let the gate relax
+        // toward the noise floor so a constrained reel can approach the target
+        // length using on-constraint footage only.
+        targetSeconds: plan.userSpecifiedDuration ? plan.targetShortSeconds : null,
+        sampleEverySeconds: plan.sampleEverySeconds
+      }
     );
     frameScores = gated;
     log.ai(
@@ -324,8 +330,12 @@ export async function executeForSource(
     plan,
     videoDuration: videoMeta.duration,
     userTier,
-    scoreStats,
-    allowGenericFallback: allowGenericFallback(plan.constraints)
+    scoreStats
+    // NOTE: no allowGenericFallback flag — for a constraint-driven plan the
+    // candidate windows here are ALREADY constraint-filtered (the hard gate
+    // ran on the frames above), so the duration-fill / spread fallbacks can
+    // only ever draw from on-constraint footage. Disabling them was what
+    // collapsed a 60s "only lab" request to a single 1s clip.
   });
   const grounded = snapHighlightsToTranscriptMatches(
     buildResult.highlights,

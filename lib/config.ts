@@ -1113,31 +1113,47 @@ export const CLIP_DURATION = {
 // =====================================================================
 // CONSTRAINT-FIRST editing pipeline (lib/constraints/*).
 //
-// Thresholds for the HARD GATE that enforces include-only / exclude
-// semantic constraints BEFORE scoring + selection. These are calibration
-// floors, NOT editorial choices: a frame "matches" an include constraint
-// when its SigLIP label score clears a floor; an exclude constraint drops a
-// frame when its exclude score dominates. Same band as PLAN_DEFAULTS.
-// qualityFloor — real SigLIP matches land in the 0.30-0.65 range.
+// The HARD GATE that enforces include-only / exclude semantic constraints
+// BEFORE scoring + selection.
+//
+// IMPORTANT — these are NOT fixed score thresholds. CLIP/SigLIP zero-shot
+// similarity is miscalibrated (the same true match can score 0.30 on one
+// video and 0.55 on another), so a fixed cutoff either drops real matches or
+// admits noise. Instead the gate is DISTRIBUTION-ADAPTIVE: it keeps the
+// frames whose constraint match stands out from THIS video's own background,
+// and relaxes toward a low noise floor when it must cover a stated duration.
 // =====================================================================
 export const CONSTRAINTS = {
-  /** Minimum include-constraint match for a frame to survive the hard gate.
-   *  Below this the frame is considered NOT the requested scene. */
-  includeMatchFloor: 0.32,
-  /** A frame is also kept only if its include match is at least this
-   *  fraction of the strongest include match seen in the source — this
-   *  adapts the gate to the source's own score distribution without
-   *  reintroducing off-constraint footage. */
-  includeRelativeFraction: 0.5,
+  /** Absolute noise floor. Below this an include concept is treated as
+   *  genuinely ABSENT from the frame (not just weakly present), regardless of
+   *  the per-video distribution. The ONLY hard floor — kept low because
+   *  zero-shot scores for true matches routinely sit in the 0.2-0.4 band.
+   *  This is a presence/absence gate, not a quality threshold. */
+  includeNoiseFloor: 0.15,
+  /** Primary adaptive cutoff: keep frames whose include match is at least
+   *  this fraction of the STRONGEST include match seen in the source. Adapts
+   *  the gate to each video's own score range instead of a fixed number. */
+  includeRelativeFraction: 0.55,
+  /** When a hard include yields fewer than this fraction of the target
+   *  duration, the gate progressively relaxes the cutoff toward the noise
+   *  floor to admit the next-best-matching footage — so a constrained reel
+   *  still APPROACHES the requested length using on-constraint frames only,
+   *  rather than collapsing to a single clip. Never relaxes below the floor. */
+  coverageTargetFraction: 0.8,
+  /** Step size used while relaxing the cutoff toward the noise floor. */
+  coverageRelaxStep: 0.05,
   /** A frame is dropped as EXCLUDED when its exclude-constraint match is at
-   *  or above this ceiling. */
-  excludeMatchCeil: 0.45,
-  /** When an exclude match exceeds the include match by this margin the
-   *  frame is dropped even if it cleared the include floor (the excluded
-   *  concept dominates the frame). */
+   *  or above this fraction of the strongest exclude match in the source. */
+  excludeRelativeFraction: 0.6,
+  /** Hard floor for the exclude gate so a video with no real excluded content
+   *  doesn't drop frames on noise alone. */
+  excludeNoiseFloor: 0.2,
+  /** When an exclude match exceeds the include match by this margin the frame
+   *  is dropped even if it cleared the include cutoff (excluded concept
+   *  dominates the frame). */
   excludeDominanceMargin: 0.05,
-  /** A window survives only when its mean include match clears this floor
-   *  (slightly below the per-frame floor since a window averages in a few
-   *  transition frames). */
-  windowIncludeFloor: 0.28
+  /** A candidate window survives the secondary guard only when its mean
+   *  include match is at least this fraction of the strongest window mean. */
+  windowRelativeFraction: 0.5
 } as const;
+

@@ -19,14 +19,15 @@ import type { ConstraintGraph } from "./types";
 import { isConstraintDriven } from "./graph";
 
 /**
- * Whether the selection stage may use a generic best-moments / offline
- * visual-interest fallback to fill output.
+ * Whether a generic best-moments / motion-saliency fallback would be
+ * editorially appropriate for this graph.
  *
- *   - Constraint-driven (hard include or any exclude) → NEVER. We must not
- *     reintroduce off-constraint footage; an honest small/empty result is
- *     correct.
- *   - Otherwise → allowed (this is the normal "best parts" path, only used
- *     when the user did NOT impose constraints).
+ *   - Constraint-driven (hard include or any exclude) → false. (Note: the
+ *     pipeline no longer needs this as a gate — the hard FRAME filter runs
+ *     upstream, so any duration-fill in selection already draws only from
+ *     on-constraint candidates. This remains a truthful predicate for
+ *     diagnostics, copy, and callers that want to reason about intent.)
+ *   - Otherwise → true (the normal "best parts" path the user asked for).
  */
 export function allowGenericFallback(
   graph: ConstraintGraph | undefined | null
