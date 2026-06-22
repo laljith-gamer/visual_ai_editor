@@ -52,6 +52,13 @@ export function ProjectRail() {
   );
   const atCountCap = sources.length >= LIBRARY_LIMITS.maxCount;
   const hasLibrary = sources.length > 0 || missingSources.length > 0;
+  // Only count selections that point at videos actually loaded in the
+  // library — a stale id from a missing/restored source would otherwise
+  // render a nonsensical "1 of 0 selected for AI".
+  const selectedLoadedCount = useMemo(
+    () => selectedSourceIds.filter((id) => sources.some((s) => s.id === id)).length,
+    [selectedSourceIds, sources]
+  );
 
   async function handleFiles(fileList: FileList) {
     const files = Array.from(fileList);
@@ -263,12 +270,12 @@ export function ProjectRail() {
                       <span className={styles.libraryItemMeta}>
                         <span className="mono">{formatTime(p.meta.duration)}</span>
                         {p.meta.aspect && <span className="badge">{p.meta.aspect}</span>}
-                        <span className={styles.missingTag}>
-                          <AlertTriangle size={9} /> Missing — re-upload to restore
-                        </span>
                       </span>
                     </div>
-                    <div className={styles.libraryItemActions}>
+                    <div className={styles.missingFooter}>
+                      <span className={styles.missingTag}>
+                        <AlertTriangle size={9} /> Missing
+                      </span>
                       <button
                         className={styles.reuploadBtn}
                         onClick={() => fileRef.current?.click()}
@@ -298,7 +305,7 @@ export function ProjectRail() {
 
                 <div className={styles.libraryFooter}>
                   <span>
-                    {selectedSourceIds.length} of {sources.length} selected for AI
+                    {selectedLoadedCount} of {sources.length} selected for AI
                   </span>
                   <span className="mono">
                     {(totalBytes / 1024 / 1024).toFixed(0)} MB
