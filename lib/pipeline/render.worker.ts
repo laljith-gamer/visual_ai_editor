@@ -51,6 +51,9 @@ interface MultiSourceHighlight {
   end: number;
   /** Index into the `inputs` array. */
   inputIndex: number;
+  /** v2.7 — smart-reframe focal point (0..1) for vertical/square crop. */
+  focusX?: number;
+  focusY?: number;
 }
 
 interface InputFile {

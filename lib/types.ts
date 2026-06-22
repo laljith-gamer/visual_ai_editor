@@ -104,6 +104,11 @@ export interface FrameScore {
   motion?: number;
   /** Histogram-entropy visual saliency. 0..1. */
   saliency?: number;
+  /** v2.7 — smart-reframe focal point (0..1 fraction of frame width/height)
+   *  marking where motion / visual contrast sits. Drives the vertical/square
+   *  crop position. Defaults to 0.5 (center) when absent. */
+  focusX?: number;
+  focusY?: number;
   /** Per-label raw scores (debug + UI). */
   labels: Record<string, number>;
 }
@@ -168,6 +173,11 @@ export interface Highlight {
    *  pipeline assumes the currently-active source. The render worker
    *  uses this to pick the right input file in its filter graph. */
   sourceId?: string;
+  /** v2.7 — smart-reframe focal point (0..1) used to POSITION the
+   *  vertical/square crop window on the subject instead of the frame
+   *  center. Aggregated from the clip's frames. Absent → 0.5 (center). */
+  focusX?: number;
+  focusY?: number;
 }
 
 // ---------------------------------------------------------------------

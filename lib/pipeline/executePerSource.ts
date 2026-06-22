@@ -32,7 +32,7 @@ import {
 import { planSignaturePayload } from "@/lib/plan/normalize";
 import { sha1String } from "@/lib/util/hash";
 import { getPredictions, savePredictions, trimCache } from "@/lib/store/cache";
-import { PLAN_DEFAULTS } from "@/lib/config";
+import { PLAN_DEFAULTS, REFRAME } from "@/lib/config";
 import { planAnalysisBudget } from "@/lib/analysis/budget";
 import type { AnalysisBudget, DeviceTier } from "@/lib/analysis/types";
 
@@ -205,7 +205,7 @@ export async function executeForSource(
       transcript,
       videoMeta.duration
     );
-    const tagged = grounded.map((h) => ({
+    const tagged = attachClipFocus(grounded, frameScores).map((h) => ({
       ...h,
       sourceId: source.id
     }));
@@ -343,7 +343,7 @@ export async function executeForSource(
     transcript,
     videoMeta.duration
   );
-  const tagged = grounded.map((h) => ({
+  const tagged = attachClipFocus(grounded, frameScores).map((h) => ({
     ...h,
     sourceId: source.id
   }));
@@ -509,6 +509,33 @@ function computeAdaptiveSampling(
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * v2.7 — Attach a smart-reframe focal point to each clip by aggregating its
+ * frames' per-frame focal points, weighted by motion (action frames dominate)
+ * plus a small base weight so static frames still count. Drives the
+ * vertical/square crop position so it sits on the subject, not the frame
+ * center. Frames carry focusX/focusY from the sampler; absent → 0.5 (center).
+ */
+function attachClipFocus(highlights: Highlight[], frames: FrameScore[]): Highlight[] {
+  if (frames.length === 0) return highlights;
+  return highlights.map((h) => {
+    let wx = 0;
+    let wy = 0;
+    let wsum = 0;
+    for (const f of frames) {
+      if (f.t < h.start || f.t > h.end) continue;
+      const fx = f.focusX ?? 0.5;
+      const fy = f.focusY ?? 0.5;
+      const wgt = (f.motion ?? 0) + REFRAME.clipMotionBaseWeight;
+      wx += fx * wgt;
+      wy += fy * wgt;
+      wsum += wgt;
+    }
+    if (wsum <= 0) return h;
+    return { ...h, focusX: round2(wx / wsum), focusY: round2(wy / wsum) };
+  });
 }
 
 /**
