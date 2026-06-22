@@ -113,6 +113,7 @@ const STOPWORDS = new Set([
   "short", "shorts", "reel", "reels", "version", "thing", "things", "stuff",
   // duration units (numerics handled separately)
   "sec", "secs", "second", "seconds", "min", "mins", "minute", "minutes",
+  "duration", "length", "hour", "hours", "hr", "hrs",
   // v1.8.1 — multi-source / compose words must never become a subject
   // label. (Compose is detected upstream by deriveComposeIntent; these are
   // a belt-and-braces guard so even a stray fall-through can't produce

@@ -90,6 +90,10 @@ export interface ExecuteForSourceResult {
   scoreStats: ScoreStats | null;
   /** Was the per-source predictions cache reused? */
   cacheHit: boolean;
+  /** v2.8 — true when a hard constraint couldn't be MEASURED (no semantic
+   *  signal — SigLIP/cloud vision unavailable this run), so the gate degraded
+   *  to a motion/saliency pass-through instead of dropping to zero clips. */
+  unmeasurable?: boolean;
 }
 
 /**
@@ -238,6 +242,7 @@ export async function executeForSource(
   progress.setProgress(0.62);
 
   // ---- CONSTRAINT HARD GATE (v2.6) --------------------------------
+  let constraintUnmeasurable = false;
   // For a constraint-driven plan ("only lab scenes", "avoid the intro"),
   // drop every frame that does not satisfy the constraint graph BEFORE any
   // candidate-window detection, ranking, or selection runs. From here on the
@@ -257,6 +262,7 @@ export async function executeForSource(
       }
     );
     frameScores = gated;
+    constraintUnmeasurable = report.unmeasurable === true;
     log.ai(
       "constraints.filtered",
       {
@@ -267,11 +273,14 @@ export async function executeForSource(
         droppedByExclude: report.droppedByExclude,
         includeFloor: report.includeFloor,
         hardInclude: plan.constraints.include.some((c) => c.priority === "hard"),
-        excludes: plan.constraints.exclude.length
+        excludes: plan.constraints.exclude.length,
+        unmeasurable: report.unmeasurable === true
       },
-      report.keptCount > 0
-        ? `Constraint gate kept ${report.keptCount}/${before} frames from "${source.meta.name}" (dropped ${report.droppedByInclude} off-topic, ${report.droppedByExclude} excluded)`
-        : `Constraint gate removed all ${before} frames from "${source.meta.name}" — no footage matched the constraints`
+      report.unmeasurable
+        ? `Couldn't measure the constraint on "${source.meta.name}" — visual scene scoring was unavailable, so I kept all ${before} frames and ranked by motion/visual interest instead`
+        : report.keptCount > 0
+          ? `Constraint gate kept ${report.keptCount}/${before} frames from "${source.meta.name}" (dropped ${report.droppedByInclude} off-topic, ${report.droppedByExclude} excluded)`
+          : `Constraint gate removed all ${before} frames from "${source.meta.name}" — no footage matched the constraints`
     );
     if (frameScores.length === 0) {
       // Honest empty result — NEVER fall back to generic highlights when the
@@ -367,7 +376,8 @@ export async function executeForSource(
     weakOnly: buildResult.weakOnly,
     scoreMax: scoreStats.max,
     scoreStats,
-    cacheHit
+    cacheHit,
+    unmeasurable: constraintUnmeasurable
   };
 }
 

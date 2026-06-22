@@ -170,3 +170,21 @@ test("'make a short' (no duration, no best word) stays non-actionable", () => {
   assert.equal(i.actionable, false);
   assert.equal(i.genericBestParts, false);
 });
+
+test("'duration' is a meta word, never a subject ('fighting alone' → fighting-only)", () => {
+  const i = deriveActionableIntent(
+    "pick best parts from this duration 2 min of fighting alone",
+    { hasVideo: true }
+  );
+  assert.equal(i.actionable, true);
+  assert.equal(i.exclusiveOnly, true);
+  assert.equal(i.targetSeconds, 120);
+  assert.equal(i.userSpecifiedDuration, true);
+  assert.equal(i.rawFocus, "fighting");
+  assert.equal(i.focus, "fighting-only moments");
+  assert.deepEqual(i.scenarioLabels, ["fighting-only moments"]);
+  // The bug: "duration" leaked into the scenario ("duration fighting-only").
+  for (const label of i.scenarioLabels) {
+    assert.ok(!label.includes("duration"), `leaked "duration" in "${label}"`);
+  }
+});

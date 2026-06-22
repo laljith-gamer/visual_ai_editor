@@ -74,7 +74,7 @@ export function applyConstraintFilter(
     };
   }
 
-  const enforceInclude = hasHardInclude(graph);
+  let enforceInclude = hasHardInclude(graph);
   const enforceExclude = hasExclude(graph);
 
   // Pre-compute each frame's scene label (include/exclude match) once via the
@@ -86,6 +86,18 @@ export function applyConstraintFilter(
 
   const maxInclude = matches.reduce((m, x) => Math.max(m, x.inc), 0);
   const maxExclude = matches.reduce((m, x) => Math.max(m, x.exc), 0);
+
+  // GRACEFUL DEGRADATION. If a hard include has NO signal at all across the
+  // entire source (maxInclude === 0), semantic scoring was UNAVAILABLE this run
+  // — no SigLIP (WebGPU) and no cloud vision — or the concept's scenarios
+  // produced nothing. We genuinely cannot MEASURE the constraint, so
+  // hard-gating would drop every frame and surface the dreaded
+  // "nothing matched (top score 0.00)". Instead we stop enforcing the include
+  // and pass frames through, letting motion/saliency selection still build a
+  // reel of the requested length; the report flags `unmeasurable` so the
+  // caller can be honest that scene matching wasn't possible.
+  const includeUnmeasurable = enforceInclude && maxInclude <= 0;
+  if (includeUnmeasurable) enforceInclude = false;
 
   // Exclude cutoff: relative to the strongest exclude match in the source,
   // floored so a clean video doesn't drop frames on noise.
@@ -155,7 +167,8 @@ export function applyConstraintFilter(
       droppedByExclude,
       droppedByInclude: Math.max(0, droppedByInclude),
       includeFloor: round3(includeFloor),
-      hardApplied: true
+      hardApplied: enforceInclude || enforceExclude,
+      unmeasurable: includeUnmeasurable
     }
   };
 }

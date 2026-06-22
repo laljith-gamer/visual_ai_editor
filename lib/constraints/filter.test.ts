@@ -220,3 +220,39 @@ test("soft-only graph passes all frames through (hardApplied false)", () => {
   assert.equal(kept.length, 2);
   assert.equal(report.hardApplied, false);
 });
+
+
+// ---------------------------------------------------------------------
+// Graceful degradation: a hard include with NO signal at all (semantic
+// scoring unavailable this run) must NOT collapse to 0 frames — it passes
+// through and flags `unmeasurable` so the caller stays honest.
+// ---------------------------------------------------------------------
+test("hard include with no signal degrades to pass-through (unmeasurable)", () => {
+  const { graph } = buildConstraintGraph({
+    scenarios: [{ id: "fight", prompt: "fighting" }],
+    exclusiveOnly: true
+  });
+  // Every frame's include label is 0 → SigLIP/cloud produced no signal.
+  const frames = [
+    frame(0, { fight: 0 }),
+    frame(1, { fight: 0 }),
+    frame(2, { fight: 0 })
+  ];
+  const { frames: kept, report } = applyConstraintFilter(frames, graph, {
+    targetSeconds: 120,
+    sampleEverySeconds: 1
+  });
+  assert.equal(kept.length, 3, "passes all frames through instead of dropping to 0");
+  assert.equal(report.unmeasurable, true);
+});
+
+test("a measurable hard include is NOT flagged unmeasurable", () => {
+  const { graph } = buildConstraintGraph({
+    scenarios: [{ id: "fight", prompt: "fighting" }],
+    exclusiveOnly: true
+  });
+  const frames = [frame(0, { fight: 0.7 }), frame(1, { fight: 0.05 })];
+  const { frames: kept, report } = applyConstraintFilter(frames, graph);
+  assert.notEqual(report.unmeasurable, true);
+  assert.deepEqual(kept.map((f) => f.t), [0]); // still hard-gates
+});
