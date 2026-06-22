@@ -32,6 +32,25 @@ test("does NOT fire on content searches that merely contain 'scan'", () => {
   }
 });
 
+test("accepting the deeper-scan offer phrased around confidence → deep", () => {
+  for (const s of [
+    "ok analys for high confidence",
+    "okay analyse for high confidence",
+    "analyze for higher confidence",
+    "scan for high confidence",
+    "improve confidence",
+    "i need higher confidence",
+    "recheck for better accuracy"
+  ]) {
+    assert.equal(detectQuickScanCommand(s)?.kind, "deep", s);
+  }
+});
+
+test("'confidence' alone (no action/quality word) does not fire", () => {
+  // A bare statement isn't a command; let it flow to the normal path.
+  assert.equal(detectQuickScanCommand("the confidence"), null);
+});
+
 test("empty / whitespace → null", () => {
   assert.equal(detectQuickScanCommand(""), null);
   assert.equal(detectQuickScanCommand("   "), null);

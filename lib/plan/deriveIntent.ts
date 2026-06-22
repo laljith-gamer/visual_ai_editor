@@ -178,7 +178,17 @@ const META_FOLLOWUP = new Set([
   "more", "less", "detail", "detailed", "details", "explain", "explanation",
   "elaborate", "deeper", "depth", "expand", "clarify", "further",
   "additional", "extra", "again", "specifically", "thorough", "comprehensive",
-  "why", "reason", "reasons", "because"
+  "why", "reason", "reasons", "because",
+  // Affirmations / acknowledgements that often prefix a command ("ok analyse
+  // …", "yes do it"). Never a content subject.
+  "ok", "okay", "yes", "yeah", "yep", "yup", "sure", "alright", "fine",
+  // Analysis / result-quality vocabulary. The user is talking about the RUN
+  // and its CONFIDENCE, not about something on screen, so these must never
+  // become search subjects ("ok analys for high confidence"). Deliberately
+  // excludes ambiguous content words like "match"/"score" (a sports match,
+  // "he scores") which can be genuine topics.
+  "analyse", "analyze", "analys", "analysis", "analyzing", "analysing",
+  "analyzed", "analysed", "scan", "rescan", "confidence", "confident"
 ]);
 
 // Output / format words that signal a short-form reel is wanted. These are
