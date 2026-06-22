@@ -4,12 +4,41 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-20 (v2.5 — chat brain preload + dynamic clip durations;
-> on a feature branch, not yet merged)
+> Last updated: 2026-06-22 (nearest-match graceful fallback for the constraint
+> hard gate — fixes "top score 0.00" dead-end; on a feature branch)
 
 ---
 
-## 0. Latest change (2026-06-20) — chat brain preload + dynamic clip durations
+## 0. Latest change (2026-06-22) — nearest-match fallback (no more "top score 0.00")
+
+Fixes a reported dead-end: a constraint-driven request whose concept the
+on-device model only matched FAINTLY (every frame below the absolute noise
+floor) used to return zero clips with *"Nothing matched strongly enough (top
+score 0.00)"*. Now the constraint hard gate keeps the **nearest-matching**
+footage instead of dead-ending — "make mostly near", no hardcoded keywords, no
+faked matches.
+
+- `lib/constraints/filter.ts` — new **nearest-match graceful fallback**: when a
+  HARD include would empty the gate but a measurable signal exists
+  (`enforceInclude && kept.length === 0 && maxInclude > 0`), keep the frames
+  ranked closest to the concept (by include match), still exclude-gated, capped
+  by the duration target (or the relative band when no duration). Uses ONLY the
+  SigLIP include scores already computed; never widens to off-constraint /
+  zero-signal frames. Flags `report.approximate = true`.
+- `lib/constraints/types.ts` — `ConstraintFilterReport.approximate?: boolean`.
+- `lib/pipeline/executePerSource.ts` — threads `approximate`; marks the run
+  `weakOnly` (→ needs_review, not a confident "ready"); honest activity log.
+- `app/editor/page.tsx` — chat note: "I couldn't find an exact match for X, so
+  these are the closest moments I could find …" (distinct from the existing
+  `unmeasurable` motion-only note).
+- Tests: rewrote the old "returns empty (no widening)" filter test + 5 new
+  tests → `test:constraints` 30 pass; `npm test` **558 pass / 0 fail**;
+  typecheck ✓; build ✓ (`/editor` 211 kB). Browser/WebGPU run still required.
+  See `memory/NEAREST_MATCH_FALLBACK_2026-06-22.md`.
+
+---
+
+## 0. Previous change (2026-06-20) — chat brain preload + dynamic clip durations
 
 Two user-facing wins, both privacy-safe and deterministic-first.
 

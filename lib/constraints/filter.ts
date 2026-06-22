@@ -22,6 +22,12 @@
 //      on-constraint frames only, never off-constraint "best moments".
 //   4. drop frames where an EXCLUDE concept dominates.
 //
+// NEAREST-MATCH FALLBACK (v2.9): when a HARD include was measurable but no
+// frame cleared the noise floor (the strict gate would empty out and the run
+// would dead-end with "top score 0.00"), keep the frames the model judged
+// CLOSEST to the concept — ranked by include match, still exclude-gated — and
+// flag the report `approximate`. No keyword logic; no off-constraint widening.
+//
 // Pure + import-light. Unit-tested with `node --test`.
 // =====================================================================
 
@@ -155,6 +161,44 @@ export function applyConstraintFilter(
     }
   }
 
+  // NEAREST-MATCH GRACEFUL FALLBACK (v2.9, no-hardcode + honest).
+  // The strict gate above can legitimately empty out when a HARD include was
+  // MEASURABLE (the model produced some signal) yet the STRONGEST match across
+  // the whole source still sits below the absolute noise floor — i.e. the
+  // concept is present only faintly. A pure hard gate then drops every frame
+  // and the run dead-ends with "nothing matched (top score 0.00)".
+  //
+  // Rather than dead-end, keep the frames the model judged CLOSEST to the
+  // concept — ranked by their include match, still subject to the EXCLUDE gate
+  // — so the run returns the NEAREST available footage. This uses ONLY the
+  // per-frame SigLIP include scores already computed: there is no keyword /
+  // genre logic, and it NEVER widens to off-constraint "best moments" (excluded
+  // and zero-signal frames are still rejected). The result is flagged
+  // `approximate` so the caller presents it as a near, not exact, match.
+  let approximate = false;
+  if (enforceInclude && kept.length === 0 && maxInclude > 0) {
+    const nearest = matches
+      .filter((m) => passesExclude(m.exc, m.inc) && m.inc > 0)
+      .sort((a, b) => b.inc - a.inc);
+    if (nearest.length > 0) {
+      // How many of the nearest frames to admit. With a stated duration, cover
+      // ~the target length; otherwise keep the cluster that stands out relative
+      // to the best near-match (the SAME relative-fraction logic as the strict
+      // gate, just without the absolute floor the concept never reached).
+      let nearCount: number;
+      if (target > 0) {
+        const needed = Math.ceil((target * CONSTRAINTS.coverageTargetFraction) / sampleEvery);
+        nearCount = Math.min(nearest.length, Math.max(1, needed));
+      } else {
+        const nearCut = maxInclude * CONSTRAINTS.includeRelativeFraction;
+        nearCount = Math.max(1, nearest.filter((m) => m.inc >= nearCut).length);
+      }
+      kept = nearest.slice(0, nearCount);
+      includeFloor = kept[kept.length - 1]?.inc ?? 0;
+      approximate = true;
+    }
+  }
+
   const keptFrames = kept.map((m) => m.frame);
   const droppedByExclude = matches.filter((m) => !passesExclude(m.exc, m.inc)).length;
   const droppedByInclude = inputCount - keptFrames.length - droppedByExclude;
@@ -168,7 +212,8 @@ export function applyConstraintFilter(
       droppedByInclude: Math.max(0, droppedByInclude),
       includeFloor: round3(includeFloor),
       hardApplied: enforceInclude || enforceExclude,
-      unmeasurable: includeUnmeasurable
+      unmeasurable: includeUnmeasurable,
+      approximate
     }
   };
 }

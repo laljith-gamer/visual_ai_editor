@@ -120,17 +120,23 @@ test("exclude: frames matching the excluded concept are removed", () => {
 });
 
 // ---------------------------------------------------------------------
-// Empty result is honest — never widened
+// Faint-but-measurable matches: the gate now returns the NEAREST footage
+// (approximate) instead of dead-ending. It still never widens to
+// off-constraint / zero-signal frames.
 // ---------------------------------------------------------------------
-test("when nothing matches a hard include, the gate returns empty (no widening)", () => {
+test("a faint hard include returns nearest frames (approximate), never off-constraint", () => {
   const { graph } = buildConstraintGraph({
     scenarios: [{ id: "lab", prompt: "lab" }],
     exclusiveOnly: true
   });
   const frames = [frame(0, { lab: 0.05 }), frame(1, { lab: 0.08 })];
   const { frames: kept, report } = applyConstraintFilter(frames, graph);
-  assert.equal(kept.length, 0);
   assert.equal(report.hardApplied, true);
+  assert.equal(report.approximate, true, "faint measurable match → approximate");
+  assert.ok(kept.length > 0, "nearest footage is kept rather than dead-ending");
+  // Strongest near-match is admitted; no off-constraint widening happens
+  // because both frames are the on-concept (lab) frames themselves.
+  assert.ok(kept.some((f) => f.t === 1), "keeps the strongest near-match");
 });
 
 // ---------------------------------------------------------------------
@@ -255,4 +261,96 @@ test("a measurable hard include is NOT flagged unmeasurable", () => {
   const { frames: kept, report } = applyConstraintFilter(frames, graph);
   assert.notEqual(report.unmeasurable, true);
   assert.deepEqual(kept.map((f) => f.t), [0]); // still hard-gates
+});
+
+// ---------------------------------------------------------------------
+// NEAREST-MATCH FALLBACK (v2.9). The reported bug: a measurable concept whose
+// strongest match still sits BELOW the absolute noise floor used to empty the
+// gate and dead-end with "top score 0.00". Now the gate keeps the CLOSEST
+// frames instead, ranked by include match, and flags `approximate`.
+// ---------------------------------------------------------------------
+test("faint-but-measurable include keeps the nearest frames (approximate), not zero", () => {
+  const { graph } = buildConstraintGraph({
+    scenarios: [{ id: "combo", prompt: "fighting attack combo" }],
+    exclusiveOnly: true
+  });
+  // Every frame is below the 0.15 noise floor, but some are clearly closer.
+  const frames = [
+    frame(0, { combo: 0.12 }),
+    frame(1, { combo: 0.02 }),
+    frame(2, { combo: 0.1 }),
+    frame(3, { combo: 0.0 })
+  ];
+  const { frames: kept, report } = applyConstraintFilter(frames, graph);
+  assert.equal(report.approximate, true, "should flag approximate");
+  assert.ok(kept.length > 0, "must NOT return zero frames");
+  // The kept frames are the closest matches (highest include scores).
+  assert.ok(kept.some((f) => f.t === 0), "keeps the strongest near-match");
+  // Zero-signal frames are never admitted.
+  assert.ok(!kept.some((f) => f.t === 3), "never admits a zero-signal frame");
+});
+
+test("nearest-match fallback covers ~the stated duration target", () => {
+  const { graph } = buildConstraintGraph({
+    scenarios: [{ id: "combo", prompt: "fighting attack combo" }],
+    exclusiveOnly: true,
+    targetSeconds: 6,
+    userSpecifiedDuration: true
+  });
+  // All faint (below floor), descending closeness.
+  const scores = [0.13, 0.12, 0.11, 0.1, 0.09, 0.08, 0.05, 0.02];
+  const frames = scores.map((s, i) => frame(i, { combo: s }));
+  const { frames: kept, report } = applyConstraintFilter(frames, graph, {
+    targetSeconds: 6,
+    sampleEverySeconds: 1
+  });
+  assert.equal(report.approximate, true);
+  // ~80% of a 6s target at 1s/frame ≈ 5 frames, all the closest ones.
+  assert.ok(kept.length >= 4, `expected ~5 nearest frames, got ${kept.length}`);
+  assert.deepEqual(
+    kept.map((f) => f.t).slice(0, 4),
+    [0, 1, 2, 3],
+    "admits the closest matches first"
+  );
+});
+
+test("nearest-match fallback still respects excludes", () => {
+  const { graph, excludeScenarios } = buildConstraintGraph({
+    scenarios: [{ id: "combo", prompt: "fighting attack combo" }],
+    exclusiveOnly: true,
+    excludeSubjects: ["menu screen"]
+  });
+  const excId = excludeScenarios[0].id;
+  const frames = [
+    frame(0, { combo: 0.13, [excId]: 0.9 }), // closest match BUT excluded
+    frame(1, { combo: 0.1, [excId]: 0.0 }), // next closest, clean
+    frame(2, { combo: 0.0, [excId]: 0.0 })
+  ];
+  const { frames: kept, report } = applyConstraintFilter(frames, graph);
+  assert.equal(report.approximate, true);
+  assert.ok(!kept.some((f) => f.t === 0), "excluded frame is not admitted as a near match");
+  assert.ok(kept.some((f) => f.t === 1), "keeps the closest non-excluded frame");
+});
+
+test("zero-signal include stays unmeasurable, NOT approximate", () => {
+  const { graph } = buildConstraintGraph({
+    scenarios: [{ id: "combo", prompt: "fighting attack combo" }],
+    exclusiveOnly: true
+  });
+  const frames = [frame(0, { combo: 0 }), frame(1, { combo: 0 })];
+  const { frames: kept, report } = applyConstraintFilter(frames, graph);
+  assert.equal(report.unmeasurable, true);
+  assert.notEqual(report.approximate, true);
+  assert.equal(kept.length, 2, "unmeasurable passes through, not the approximate path");
+});
+
+test("a strong include match never triggers the approximate path", () => {
+  const { graph } = buildConstraintGraph({
+    scenarios: [{ id: "combo", prompt: "fighting attack combo" }],
+    exclusiveOnly: true
+  });
+  const frames = [frame(0, { combo: 0.6 }), frame(1, { combo: 0.05 })];
+  const { frames: kept, report } = applyConstraintFilter(frames, graph);
+  assert.notEqual(report.approximate, true);
+  assert.deepEqual(kept.map((f) => f.t), [0]);
 });
