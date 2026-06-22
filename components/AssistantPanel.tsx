@@ -18,7 +18,6 @@ import { useShare } from "@/hooks/useShare";
 import { CapabilityBadge } from "./CapabilityBadge";
 import { AIModeBadge } from "./AIModeBadge";
 import { ChatBrainBadge } from "./ChatBrainBadge";
-import { QuickReplies } from "./QuickReplies";
 import { PlanPreview } from "./PlanPreview";
 import { BriefingCard } from "./BriefingCard";
 import { logUser } from "@/lib/log/recorders";
@@ -26,7 +25,6 @@ import type {
   BestPart,
   BriefingFollowUp,
   ChatMessage,
-  ClarifyQuestion,
   InferredField
 } from "@/lib/types";
 import styles from "./AssistantPanel.module.css";
@@ -69,13 +67,6 @@ interface Props {
  * Image upload is intentionally absent — this panel is text-only.
  */
 
-const STARTER_PROMPTS = [
-  "Describe what's in this video",
-  "Pick the best parts for me",
-  "Make a vertical reel",
-  "Find a specific moment"
-];
-
 export function AssistantPanel({
   onSubmit,
   onOpenClips,
@@ -88,7 +79,6 @@ export function AssistantPanel({
   const inferred = useEditorStore((s) => s.inferred);
   const pendingClarify = useEditorStore((s) => s.pendingClarify);
   const pendingExecution = useEditorStore((s) => s.pendingExecution);
-  const hasVideo = useEditorStore((s) => Boolean(s.videoBlob));
   const sessionId = useEditorStore((s) => s.sessionId);
 
   const [text, setText] = useState("");
@@ -179,14 +169,11 @@ export function AssistantPanel({
     });
   }
 
-  const onlyOneAssistantMessage =
-    messages.length === 1 && messages[0]?.role === "assistant";
-
   const placeholder = pendingClarify
-    ? "Type a custom answer, or tap a suggestion above\u2026"
+    ? "Type your answer\u2026"
     : pendingExecution
       ? "Adjust the plan in plain English (e.g. \u201Cmake it 60s\u201D)\u2026"
-      : "Ask me anything";
+      : "Message your editor\u2026 (e.g. \u201Conly the lab scenes, 1 min\u201D)";
 
   const sendLabel = isBusy ? "Working\u2026" : "Send";
 
@@ -293,25 +280,6 @@ export function AssistantPanel({
             onRun={onRunPlan}
             onAdjust={() => composerRef.current?.focus()}
             disabled={isBusy}
-          />
-        )}
-
-        {pendingClarify && (
-          <QuickReplies
-            questions={pendingClarify.questions}
-            disabled={isBusy}
-            onPick={(suggestion) => void send(suggestion, "quickreply")}
-          />
-        )}
-
-        {onlyOneAssistantMessage && !pendingClarify && (
-          <StarterSuggestions
-            disabled={isBusy}
-            requireVideo={!hasVideo}
-            onPick={(s) => {
-              if (!hasVideo) return;
-              void send(s, "quickreply");
-            }}
           />
         )}
       </div>
@@ -525,46 +493,13 @@ function InferredBadges({ fields }: { fields: InferredField[] }) {
         ))}
       </div>
       <p className={styles.inferredHint}>
-        Tap a chip above to reply, or just say what you want changed.
+        Just tell me what you&rsquo;d like changed.
       </p>
     </div>
   );
 }
 
-function StarterSuggestions({
-  onPick,
-  disabled,
-  requireVideo
-}: {
-  onPick: (s: string) => void;
-  disabled?: boolean;
-  requireVideo: boolean;
-}) {
-  return (
-    <div className={styles.starter}>
-      <p className={styles.starterHint}>
-        {requireVideo
-          ? "Upload a video on the left first, then try:"
-          : "Try one of these:"}
-      </p>
-      <div className={styles.starterRow}>
-        {STARTER_PROMPTS.map((p) => (
-          <button
-            key={p}
-            type="button"
-            className={styles.starterChip}
-            onClick={() => onPick(p)}
-            disabled={disabled || requireVideo}
-          >
-            {p}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function formatInferredValue(v: ClarifyQuestion | InferredField["value"]): string {
+function formatInferredValue(v: InferredField["value"]): string {
   if (Array.isArray(v)) return v.join(", ");
   return String(v);
 }
