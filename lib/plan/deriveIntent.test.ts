@@ -288,3 +288,13 @@ test("analysis/confidence reply is not turned into content subjects (safety net)
   const msg = actionableIntentMessage(i, true);
   assert.ok(!/analys|confidence/i.test(msg), msg);
 });
+
+
+test("'then create' never becomes a 'then' search (continuation safety net)", () => {
+  const i = deriveActionableIntent("then create", { hasVideo: true });
+  for (const label of i.scenarioLabels) {
+    assert.ok(!label.split(/\s+/).includes("then"), `leaked "then" in "${label}"`);
+  }
+  const msg = actionableIntentMessage(i, true);
+  assert.ok(!/\bthen\b/i.test(msg), msg);
+});

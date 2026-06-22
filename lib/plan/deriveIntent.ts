@@ -179,6 +179,9 @@ const META_FOLLOWUP = new Set([
   "elaborate", "deeper", "depth", "expand", "clarify", "further",
   "additional", "extra", "again", "specifically", "thorough", "comprehensive",
   "why", "reason", "reasons", "because",
+  // Sequencing / continuation fillers ("then create", "now make it"). Never
+  // a content subject.
+  "then", "afterwards", "afterward",
   // Affirmations / acknowledgements that often prefix a command ("ok analyse
   // …", "yes do it"). Never a content subject.
   "ok", "okay", "yes", "yeah", "yep", "yup", "sure", "alright", "fine",
