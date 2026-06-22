@@ -78,6 +78,22 @@ const TRANSITION_LIMIT_NOTE =
 
 const NO_EDIT_YET = "No edit has been applied yet.";
 
+// Identity / "what model / who are you" questions. Answered honestly about the
+// brain that's actually running rather than the "no edit yet" explanation.
+const IDENTITY_RE =
+  /\byour\s+(?:model|llm|engine|brain|ai|name)\b|\bwhat(?:'?s)?\s+(?:ai\s+)?(?:model|llm)\b|\bwhich\s+(?:ai\s+)?(?:model|llm)\b|\bwho\s+are\s+you\b|\bare\s+you\s+(?:an?\s+)?(?:ai|llm|gpt|chatgpt|a\s+bot|human|real|sentient)\b|\bwhat(?:'?s)?\s+your\s+name\b|\bwhat(?:'?s)?\s+powering\s+you\b/;
+
+/** Honest description of WHAT is doing the thinking. The default build is
+ *  local-first: deterministic parsing/scoring plus a small on-device model;
+ *  cloud models are used only when the deployment is configured with a key. */
+function answerIdentity(): string {
+  return [
+    "I'm the editing assistant built into this app — \u201cyour editor\u201d — not a separate chatbot persona, so I don't have a brand name.",
+    "How I actually work: a lot of what I do is deterministic code (reading your request, scoring frames for motion and visual saliency, assembling the timeline). To understand free-text requests this build runs a small model on-device in your browser via WebGPU (WebLLM \u2014 Llama-3.2-1B by default), and falls back to deterministic parsing when that isn't available.",
+    "By default this is a local-only, private build, which is light and fast to start but less capable and slower at reasoning than a large cloud model. If the deployment is configured with a cloud key (OpenRouter, Gemini, or Groq), those handle the planning instead and the results are noticeably stronger."
+  ].join("\n\n");
+}
+
 export function answerMetaQuestion(question: MetaQuestion, state: MetaAnswerState): string {
   switch (question.kind) {
     case "why_clip_selected":
@@ -242,6 +258,10 @@ function answerWhatWillHappen(state: MetaAnswerState): string {
 
 function answerCapability(state: MetaAnswerState): string {
   const q = (state.questionText ?? "").toLowerCase();
+  // Identity / "what model are you" → explain the brain honestly.
+  if (IDENTITY_RE.test(q)) {
+    return answerIdentity();
+  }
   // Transition/fade-specific question → explain the render limitation.
   if (/\b(fade|crossfade|cross-fade|transitions?)\b/.test(q)) {
     return [

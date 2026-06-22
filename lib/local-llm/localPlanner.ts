@@ -167,7 +167,11 @@ export async function tryLocalPlannerFallback(
 }
 
 function isLocalVisionRequest(userRequest: string): boolean {
-  const text = userRequest.toLowerCase();
+  // Fix the common "watch" typos first so "wath my video" is still recognised
+  // as a (vision) describe request rather than an edit for "wath moments".
+  const text = userRequest
+    .toLowerCase()
+    .replace(/\b(?:wath|wacth|wathc|wtach|waatch|watchh)\b/g, "watch");
   return (
     /\b(describe|watch|see|identify|recognize|detect|analyse|analyze)\b/.test(text) &&
     /\b(video|clip|frame|footage|scene|screen)\b/.test(text)
