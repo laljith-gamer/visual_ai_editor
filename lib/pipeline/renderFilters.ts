@@ -29,6 +29,10 @@ export interface FilterHighlight {
   end: number;
   /** Index into the ffmpeg `-i` input list. Defaults to 0. */
   inputIndex?: number;
+  /** v2.7 — smart-reframe focal point (0..1). Positions the vertical/square
+   *  crop window. Absent / 0.5 → centered (byte-identical to before). */
+  focusX?: number;
+  focusY?: number;
 }
 
 export interface RenderFilterConfig {
@@ -89,7 +93,6 @@ export function computeClipFades(
 export function buildFilterComplex(args: BuildFilterArgs): string {
   const config = args.config ?? DEFAULT_RENDER_FILTER_CONFIG;
   const dim = config.outputDimensions[args.format] ?? config.outputDimensions.horizontal;
-  const scale = scaleExpr(args.format, dim);
   const fades = computeClipFades(args.highlights.length, args);
 
   const chains: string[] = [];
@@ -101,6 +104,9 @@ export function buildFilterComplex(args: BuildFilterArgs): string {
     const idx = Math.max(0, Math.floor(h.inputIndex ?? 0));
     const fadeIn = fades[i].in ? maxFade : 0;
     const fadeOut = fades[i].out ? maxFade : 0;
+    // Per-clip scale+crop so each clip's vertical/square crop sits on its own
+    // focal point instead of a fixed center.
+    const scale = scaleExpr(args.format, dim, h.focusX, h.focusY);
 
     let v =
       `[${idx}:v]trim=start=${fmt(h.start)}:end=${fmt(h.end)},` +
@@ -131,14 +137,27 @@ export function buildFilterComplex(args: BuildFilterArgs): string {
   return chains.join(";");
 }
 
-export function scaleExpr(format: RenderFormat, d: { w: number; h: number }): string {
+export function scaleExpr(
+  format: RenderFormat,
+  d: { w: number; h: number },
+  focusX = 0.5,
+  focusY = 0.5
+): string {
   switch (format) {
     case "vertical":
-    case "square":
-      return (
-        `scale=${d.w}:${d.h}:force_original_aspect_ratio=increase,` +
-        `crop=${d.w}:${d.h}`
-      );
+    case "square": {
+      const fx = clampUnit(focusX);
+      const fy = clampUnit(focusY);
+      // Center (default) → omit x/y so the crop string is byte-identical to
+      // the original centered behaviour. Off-center focal point → position the
+      // crop window via ffmpeg crop expressions (iw/ih = scaled input,
+      // ow/oh = crop output).
+      const centered = Math.abs(fx - 0.5) < 1e-3 && Math.abs(fy - 0.5) < 1e-3;
+      const crop = centered
+        ? `crop=${d.w}:${d.h}`
+        : `crop=${d.w}:${d.h}:(iw-ow)*${fx.toFixed(3)}:(ih-oh)*${fy.toFixed(3)}`;
+      return `scale=${d.w}:${d.h}:force_original_aspect_ratio=increase,${crop}`;
+    }
     case "horizontal":
     default:
       return (
@@ -146,6 +165,10 @@ export function scaleExpr(format: RenderFormat, d: { w: number; h: number }): st
         `pad=${d.w}:${d.h}:(ow-iw)/2:(oh-ih)/2:black`
       );
   }
+}
+
+function clampUnit(n: number): number {
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5;
 }
 
 function fmt(n: number): string {

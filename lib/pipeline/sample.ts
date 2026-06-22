@@ -17,7 +17,7 @@
  *
  * JPEG quality + sampling caps live in lib/config.ts.
  */
-import { SAMPLE_DEFAULTS, SIGNAL_DEFAULTS } from "@/lib/config";
+import { SAMPLE_DEFAULTS, SIGNAL_DEFAULTS, REFRAME } from "@/lib/config";
 
 export interface SampledFrame {
   /** Timestamp in seconds. */
@@ -31,6 +31,10 @@ export interface SampledFrame {
   motion: number;
   /** Brightness-histogram entropy of THIS frame. 0..1. */
   saliency: number;
+  /** Smart-reframe focal point (0..1 fraction). Where motion / visual contrast
+   *  sits horizontally / vertically. Defaults to 0.5 (center). */
+  focusX: number;
+  focusY: number;
 }
 
 export interface SampleOptions {
@@ -164,6 +168,8 @@ export async function sampleFrames(
     // ship the frame without signals than abort the whole pipeline.
     let motion = 0;
     let saliency = 0;
+    let focusX = 0.5;
+    let focusY = 0.5;
     let pixels: Uint8ClampedArray | null = null;
     try {
       pixels = readCanvasPixels(result.canvas);
@@ -175,13 +181,17 @@ export async function sampleFrames(
           hasPrev ? prevPixels : null,
           pixels,
           stride,
-          motionGain
+          motionGain,
+          width,
+          height
         );
         motion = signals.motion;
         saliency = signals.saliency;
+        focusX = signals.focusX;
+        focusY = signals.focusY;
       }
     } catch {
-      // Pixel readback can fail (taint, missing 2d ctx). Stay at 0.
+      // Pixel readback can fail (taint, missing 2d ctx). Stay at 0 / center.
     }
 
     const jpeg = await canvasToJpeg(result.canvas, SAMPLE_DEFAULTS.jpegQuality);
@@ -191,7 +201,9 @@ export async function sampleFrames(
       width,
       height,
       motion,
-      saliency
+      saliency,
+      focusX,
+      focusY
     });
 
     prevPixels = pixels;
@@ -239,25 +251,41 @@ function computeFrameSignals(
   prev: Uint8ClampedArray | null,
   curr: Uint8ClampedArray,
   stride: number,
-  gain: number
-): { motion: number; saliency: number } {
+  gain: number,
+  width: number,
+  height: number
+): { motion: number; saliency: number; focusX: number; focusY: number } {
   const histo = new Uint32Array(16);
   let totalDiff = 0;
   let n = 0;
+  let sumLuma = 0;
+  // Motion-weighted focal centroid (accumulated in the same pass — the diff is
+  // already computed here, so the centroid is essentially free).
+  let mWX = 0;
+  let mWY = 0;
+  let mW = 0;
   // Each pixel = 4 bytes (RGBA). Stride 4 = 1 of every 4 pixels = 16-byte step.
   const step = 4 * stride;
   const doMotion = prev !== null;
   for (let i = 0; i < curr.length; i += step) {
+    const px = i >> 2; // pixel index = i / 4
+    const x = px % width;
+    const yRow = (px / width) | 0;
     const y = 0.299 * curr[i] + 0.587 * curr[i + 1] + 0.114 * curr[i + 2];
     // Saliency bin: truncate to int (y | 0) then bucket into 16 bins (>> 4).
     histo[(y | 0) >> 4]++;
+    sumLuma += y;
     if (doMotion) {
       const yp = 0.299 * prev![i] + 0.587 * prev![i + 1] + 0.114 * prev![i + 2];
-      totalDiff += Math.abs(y - yp);
+      const d = Math.abs(y - yp);
+      totalDiff += d;
+      mWX += d * x;
+      mWY += d * yRow;
+      mW += d;
     }
     n++;
   }
-  if (n === 0) return { motion: 0, saliency: 0 };
+  if (n === 0) return { motion: 0, saliency: 0, focusX: 0.5, focusY: 0.5 };
 
   // Motion: raw mean diff is in [0, 255]. Typical motion ~5-30. Boost by
   // `gain` to use the full 0..1 range, then clamp.
@@ -272,7 +300,51 @@ function computeFrameSignals(
   }
   const saliency = Math.min(1, entropy / 4);
 
-  return { motion, saliency };
+  // ---- Focal point ----------------------------------------------------
+  // Prefer the MOTION centroid when there's meaningful movement (action /
+  // subject moving). Otherwise fall back to a brightness-CONTRAST centroid so
+  // a near-static, off-center subject still pulls the crop. Flat frames stay
+  // centered. The result is blended toward center (focusStrength) and clamped
+  // so the crop never pins to the extreme edge.
+  let rawX = 0.5;
+  let rawY = 0.5;
+  const wDen = Math.max(1, width - 1);
+  const hDen = Math.max(1, height - 1);
+  if (doMotion && mW > n * REFRAME.motionMassPerPixel) {
+    rawX = mWX / mW / wDen;
+    rawY = mWY / mW / hDen;
+  } else {
+    const mean = sumLuma / n;
+    let cWX = 0;
+    let cWY = 0;
+    let cW = 0;
+    for (let i = 0; i < curr.length; i += step) {
+      const px = i >> 2;
+      const x = px % width;
+      const yRow = (px / width) | 0;
+      const y = 0.299 * curr[i] + 0.587 * curr[i + 1] + 0.114 * curr[i + 2];
+      const wgt = Math.abs(y - mean);
+      cWX += wgt * x;
+      cWY += wgt * yRow;
+      cW += wgt;
+    }
+    if (cW > 0) {
+      rawX = cWX / cW / wDen;
+      rawY = cWY / cW / hDen;
+    }
+  }
+
+  const focusX = blendAndClampFocus(rawX);
+  const focusY = blendAndClampFocus(rawY);
+  return { motion, saliency, focusX, focusY };
+}
+
+/** Blend a raw centroid toward center by focusStrength, then clamp to the
+ *  safe focal band so the crop never sits on the extreme edge. */
+function blendAndClampFocus(raw: number): number {
+  if (!isFinite(raw)) return 0.5;
+  const blended = 0.5 + (raw - 0.5) * REFRAME.focusStrength;
+  return Math.max(REFRAME.minFocus, Math.min(REFRAME.maxFocus, blended));
 }
 
 async function canvasToJpeg(

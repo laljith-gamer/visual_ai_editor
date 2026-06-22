@@ -57,6 +57,8 @@ export async function scoreFrames({
       semantic: 0,
       motion: f.motion,
       saliency: f.saliency,
+      focusX: f.focusX,
+      focusY: f.focusY,
       score: composite(0, f.motion, f.saliency, weights)
     }));
   }
@@ -117,6 +119,8 @@ async function scoreLocalWithCompose({
       semantic,
       motion: f.motion,
       saliency: f.saliency,
+      focusX: f.focusX,
+      focusY: f.focusY,
       score: composite(semantic, f.motion, f.saliency, weights)
     });
     onProgress?.(i + 1, frames.length);
@@ -174,6 +178,8 @@ async function scoreCloudWithCompose({
       semantic,
       motion: f.motion,
       saliency: f.saliency,
+      focusX: f.focusX,
+      focusY: f.focusY,
       score: composite(semantic, f.motion, f.saliency, weights)
     };
   });

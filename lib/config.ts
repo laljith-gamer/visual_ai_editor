@@ -1154,3 +1154,31 @@ export const CONSTRAINTS = {
   excludeDominanceMargin: 0.05
 } as const;
 
+
+
+// =====================================================================
+// SMART REFRAMING (vertical / square crop positioning).
+//
+// When a wide source is cropped to 9:16 (or 1:1) the crop window must sit on
+// the SUBJECT, not always the geometric center. The sampler derives a per-
+// frame focal point (where motion / visual contrast is); buildHighlights
+// aggregates it per clip; the render crop is positioned there. Defaults keep
+// the crop centered (focal 0.5) so non-cropping formats and centered footage
+// are byte-identical to before.
+// =====================================================================
+export const REFRAME = {
+  /** Blend toward center: 0 = always center, 1 = full focal shift. Keeps the
+   *  smart crop gentle so it never yanks the subject to an extreme on a noisy
+   *  signal. */
+  focusStrength: 0.6,
+  /** Clamp the final focal fraction so the crop never pins to the very edge. */
+  minFocus: 0.18,
+  maxFocus: 0.82,
+  /** Average per-pixel motion diff (0..255) above which a frame's focal point
+   *  is driven by MOTION (action). Below it, brightness-contrast saliency
+   *  picks the focal region instead (handles near-static off-center subjects). */
+  motionMassPerPixel: 1.5,
+  /** Small base weight so low-motion frames still contribute to a clip's
+   *  aggregated focal point instead of being ignored entirely. */
+  clipMotionBaseWeight: 0.05
+} as const;

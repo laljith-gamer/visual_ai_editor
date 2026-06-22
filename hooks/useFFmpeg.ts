@@ -102,6 +102,8 @@ export function useFFmpeg(): UseFFmpegResult {
         start: number;
         end: number;
         inputIndex: number;
+        focusX?: number;
+        focusY?: number;
       }[];
       const transfers: ArrayBuffer[] = [];
 
@@ -133,7 +135,9 @@ export function useFFmpeg(): UseFFmpegResult {
           id: h.id,
           start: h.start,
           end: h.end,
-          inputIndex: seen.get(h.sourceId ?? args.sources![0].id) ?? 0
+          inputIndex: seen.get(h.sourceId ?? args.sources![0].id) ?? 0,
+          focusX: h.focusX,
+          focusY: h.focusY
         }));
       } else if (args.videoBlob) {
         const bytes = new Uint8Array(await args.videoBlob.arrayBuffer());
@@ -143,7 +147,9 @@ export function useFFmpeg(): UseFFmpegResult {
           id: h.id,
           start: h.start,
           end: h.end,
-          inputIndex: 0
+          inputIndex: 0,
+          focusX: h.focusX,
+          focusY: h.focusY
         }));
       } else {
         throw new Error("render: provide either `sources` or `videoBlob`.");

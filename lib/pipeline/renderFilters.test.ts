@@ -78,3 +78,67 @@ test("audio chains + afade emitted only with audio", () => {
   const noA = buildFilterComplex({ highlights: clips(2), format: "square", withAudio: false, transition: "fade" });
   assert.ok(!noA.includes("afade"));
 });
+
+
+// ---------------------------------------------------------------------
+// v2.7 — smart-reframe focal crop positioning
+// ---------------------------------------------------------------------
+test("vertical crop is centered when no focal point is given (byte-identical)", () => {
+  const g = buildFilterComplex({
+    highlights: [{ start: 0, end: 5, inputIndex: 0 }],
+    format: "vertical",
+    withAudio: false,
+    transition: "none"
+  });
+  assert.ok(g.includes("crop=1080:1920"), "has crop");
+  assert.ok(!g.includes("(iw-ow)"), "no offset expression when centered");
+});
+
+test("vertical crop is POSITIONED on an off-center focal point", () => {
+  const g = buildFilterComplex({
+    highlights: [{ start: 0, end: 5, inputIndex: 0, focusX: 0.8, focusY: 0.5 }],
+    format: "vertical",
+    withAudio: false,
+    transition: "none"
+  });
+  assert.ok(
+    g.includes("crop=1080:1920:(iw-ow)*0.800:(ih-oh)*0.500"),
+    `expected positioned crop, got: ${g}`
+  );
+});
+
+test("per-clip focal points differ across clips in one graph", () => {
+  const g = buildFilterComplex({
+    highlights: [
+      { start: 0, end: 5, inputIndex: 0, focusX: 0.3, focusY: 0.5 },
+      { start: 5, end: 10, inputIndex: 0, focusX: 0.7, focusY: 0.5 }
+    ],
+    format: "vertical",
+    withAudio: false,
+    transition: "none"
+  });
+  assert.ok(g.includes("(iw-ow)*0.300"), "clip 0 focal");
+  assert.ok(g.includes("(iw-ow)*0.700"), "clip 1 focal");
+});
+
+test("horizontal format ignores focal point (letterbox stays centered)", () => {
+  const g = buildFilterComplex({
+    highlights: [{ start: 0, end: 5, inputIndex: 0, focusX: 0.85, focusY: 0.2 }],
+    format: "horizontal",
+    withAudio: false,
+    transition: "none"
+  });
+  assert.ok(g.includes("pad=1920:1080"), "horizontal pads");
+  assert.ok(!g.includes("(iw-ow)"), "no crop offset for horizontal");
+});
+
+test("focal fractions are clamped to the unit interval", () => {
+  const g = buildFilterComplex({
+    highlights: [{ start: 0, end: 5, inputIndex: 0, focusX: 1.5, focusY: -0.3 }],
+    format: "square",
+    withAudio: false,
+    transition: "none"
+  });
+  assert.ok(g.includes("(iw-ow)*1.000"), "focusX clamped to 1");
+  assert.ok(g.includes("(ih-oh)*0.000"), "focusY clamped to 0");
+});

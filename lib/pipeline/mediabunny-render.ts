@@ -300,6 +300,8 @@ async function addVideoSamples(args: {
           sample,
           dim: args.dim,
           format: args.args.format,
+          focusX: h.focusX,
+          focusY: h.focusY,
           alpha: clipAlpha(clipFade, clipDuration, i * frameDuration)
         });
         sample.close();
@@ -411,6 +413,10 @@ function paintVideoFrame(args: {
   dim: { w: number; h: number };
   format: RenderFormat;
   alpha: number;
+  /** v2.7 — smart-reframe focal point (0..1). Positions the crop window for
+   *  vertical/square. For horizontal (letterbox) the frame stays centered. */
+  focusX?: number;
+  focusY?: number;
 }) {
   paintBlack(args.ctx, args.dim);
   args.ctx.save();
@@ -424,10 +430,20 @@ function paintVideoFrame(args: {
       : Math.max(args.dim.w / sw, args.dim.h / sh);
   const dw = sw * scale;
   const dh = sh * scale;
-  const dx = (args.dim.w - dw) / 2;
-  const dy = (args.dim.h - dh) / 2;
+  // Horizontal letterboxes (centered); vertical/square position the crop on
+  // the focal point. fx/fy of 0.5 reproduces the original centered crop.
+  const fx = args.format === "horizontal" ? 0.5 : clampUnit(args.focusX);
+  const fy = args.format === "horizontal" ? 0.5 : clampUnit(args.focusY);
+  const dx = (args.dim.w - dw) * fx;
+  const dy = (args.dim.h - dh) * fy;
   args.sample.draw(args.ctx, dx, dy, dw, dh);
   args.ctx.restore();
+}
+
+function clampUnit(n: number | undefined): number {
+  return typeof n === "number" && Number.isFinite(n)
+    ? Math.max(0, Math.min(1, n))
+    : 0.5;
 }
 
 function paintBlack(
