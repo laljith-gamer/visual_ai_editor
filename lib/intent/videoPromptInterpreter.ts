@@ -114,7 +114,7 @@ export const META_VOCAB = new Set<string>([
   "than", "upto", "no",
   // duration units
   "second", "seconds", "sec", "secs", "minute", "minutes", "hour", "hours",
-  "hr", "hrs", "long",
+  "hr", "hrs", "long", "duration", "length",
   // format / aspect / platform
   "vertical", "verticle", "horizontal", "square", "portrait", "landscape",
   "widescreen", "reel", "reels", "short", "shorts", "tiktok", "youtube",

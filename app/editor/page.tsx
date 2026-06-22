@@ -673,6 +673,17 @@ export default function Home() {
               ` Want me to use the ${lastBriefing.bestParts.length} moments I identified earlier instead? Say "use the briefing".`;
           }
         }
+        // v2.8 — Honest note when a hard constraint couldn't be measured
+        // because visual scene scoring was unavailable (no SigLIP/cloud). The
+        // reel was still built from motion/visual interest, but we must not
+        // imply we verified the requested scene.
+        const sceneMatchUnavailable = aggregate.some(
+          (r) => r?.unmeasurable === true
+        );
+        if (sceneMatchUnavailable && mode !== "moment") {
+          summary +=
+            ` Note: visual scene matching wasn't available on this device, so these are the most active moments by motion \u2014 for true "${activePlan.scenarios[0]?.prompt ?? "scene"}" detection, enable cloud vision or open in a WebGPU browser.`;
+        }
         if (anyCachedReuse) {
           pushMessage({
             role: "assistant",

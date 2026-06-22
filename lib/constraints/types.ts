@@ -118,4 +118,10 @@ export interface ConstraintFilterReport {
   includeFloor: number;
   /** Whether a HARD gate actually ran (vs a pass-through). */
   hardApplied: boolean;
+  /** v2.8 — true when a hard include could not be MEASURED at all (no semantic
+   *  signal across the whole source: SigLIP/cloud vision unavailable this run).
+   *  The gate degrades to a pass-through so the pipeline still builds a reel
+   *  from motion/saliency, and the caller can be honest that scene matching
+   *  wasn't possible. */
+  unmeasurable?: boolean;
 }
