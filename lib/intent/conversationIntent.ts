@@ -140,8 +140,41 @@ const AMBIGUOUS_FIX =
 const VISUAL_Q =
   /\b(what(?:'?s| is| are)?\s+(?:in|happening|going on|shown|visible)|who(?:'?s| is| are)?\s+(?:in|shown)|describe|summari[sz]e|what happens? in)\b[\w\s'’,]*\b(video|clip|footage|frame|frames|scene|scenes|screen|shot|shots|recording)\b/;
 
+// "Watch / look at my video" — a request for the assistant to VIEW the
+// footage. Also a vision ask (the local text model can't, so it's answered
+// honestly by the describe lane). Kept tight (verb + a video object) so it
+// doesn't fire on incidental uses of "watch".
+const WATCH_VIDEO_Q =
+  /\b(?:watch|look\s+at|view)\s+(?:my|the|this|that|our)\s+(?:video|clip|footage|recording|vid|film)\b|\bwatch\s+(?:this|it)\b/;
+
+// Identity / "what model are you" — asks about the assistant itself, not the
+// edit. Must be answered honestly (which brain is running) instead of falling
+// through to the generic "no edit applied yet" explanation.
+const IDENTITY_CUE =
+  /\byour\s+(?:model|llm|engine|brain|ai|name)\b|\bwhat(?:'?s)?\s+(?:ai\s+)?(?:model|llm)\b|\bwhich\s+(?:ai\s+)?(?:model|llm)\b|\bwho\s+are\s+you\b|\bare\s+you\s+(?:an?\s+)?(?:ai|llm|gpt|chatgpt|a\s+bot|human|real|sentient)\b|\bwhat(?:'?s)?\s+your\s+name\b|\bwhat(?:'?s)?\s+powering\s+you\b/;
+
+// Common typos for the few "look at the footage" verbs, corrected inline so a
+// describe/watch request like "wath my video" is still understood. Kept inline
+// (no import) so this classifier stays PURE.
+const VISION_VERB_TYPOS: Record<string, string> = {
+  wath: "watch",
+  watchh: "watch",
+  wacth: "watch",
+  wathc: "watch",
+  wtach: "watch",
+  waatch: "watch",
+  discribe: "describe",
+  descibe: "describe",
+  describ: "describe",
+  desribe: "describe"
+};
+
+function fixVisionTypos(s: string): string {
+  return s.replace(/\b[a-z]+\b/g, (w) => VISION_VERB_TYPOS[w] ?? w);
+}
+
 function normalize(text: string): string {
-  return (text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  return fixVisionTypos((text ?? "").toLowerCase().replace(/\s+/g, " ").trim());
 }
 
 // ---------------------------------------------------------------------
@@ -167,14 +200,27 @@ export function classifyConversationIntentSync(
   const interrogative = INTERROGATIVE_START.test(s);
   const isQuestion = endsQ || interrogative || reasoning || explainReq;
 
-  // 1) "What's in the video?" → needs vision; let the normal flow handle it.
-  if (VISUAL_Q.test(s)) {
+  // 1) "What's in the video?" / "watch my video" → needs vision; let the
+  //    normal (describe) flow handle it honestly.
+  if (VISUAL_Q.test(s) || WATCH_VIDEO_Q.test(s)) {
     return {
       kind: "visual_question",
       confidence: 0.85,
       readOnly: true,
       target: "source_video",
-      reason: "asks what is visible in the footage (needs vision)"
+      reason: "asks to see / describe the footage (needs vision)"
+    };
+  }
+
+  // 1.5) Identity / "what model are you" → read-only capability answer, so it
+  //      honestly explains the brain instead of "no edit applied yet".
+  if (IDENTITY_CUE.test(s) && !EDIT_VERB_START.test(s) && !CONTROL_VERB_START.test(s)) {
+    return {
+      kind: "read_only_meta",
+      confidence: 0.86,
+      readOnly: true,
+      target: "capability",
+      reason: "asks about the assistant's identity / model"
     };
   }
 

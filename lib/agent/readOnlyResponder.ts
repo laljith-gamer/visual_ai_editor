@@ -74,6 +74,11 @@ export async function answerReadOnly(
 ): Promise<string> {
   const deterministic = deterministicAnswer(intent, state);
 
+  // Capability / identity answers are scripted and honesty-critical (feature
+  // support, which model is running). Never let a small local model paraphrase
+  // them — it tends to over-claim. Always use the deterministic answer.
+  if (intent.target === "capability") return deterministic;
+
   if (opts.generate) {
     try {
       const { system, user } = buildReadOnlyAnswerPrompt(

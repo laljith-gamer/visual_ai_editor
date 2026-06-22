@@ -150,7 +150,7 @@ export async function tryLocalPlannerFallback(
           const message =
             typeof parsed.message === "string" && parsed.message.trim()
               ? parsed.message.trim().slice(0, 200)
-              : "Cloud AI was unavailable, so I planned this on your device. Heads up — local AI can't watch the video frames yet.";
+              : "Planned this on your device. Heads up \u2014 I can't watch the video frames locally yet, so I went by your description.";
           return { kind: "plan", plan: norm.plan, message };
         }
       }
@@ -167,7 +167,11 @@ export async function tryLocalPlannerFallback(
 }
 
 function isLocalVisionRequest(userRequest: string): boolean {
-  const text = userRequest.toLowerCase();
+  // Fix the common "watch" typos first so "wath my video" is still recognised
+  // as a (vision) describe request rather than an edit for "wath moments".
+  const text = userRequest
+    .toLowerCase()
+    .replace(/\b(?:wath|wacth|wathc|wtach|waatch|watchh)\b/g, "watch");
   return (
     /\b(describe|watch|see|identify|recognize|detect|analyse|analyze)\b/.test(text) &&
     /\b(video|clip|frame|footage|scene|screen)\b/.test(text)

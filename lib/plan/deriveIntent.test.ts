@@ -267,3 +267,24 @@ test("intensifier next to a real subject keeps the subject ('amazing cooking')",
   assert.equal(i.rawFocus, "cooking");
   assert.equal(i.focus, "cooking moments");
 });
+
+
+test("analysis/confidence reply is not turned into content subjects (safety net)", () => {
+  // Primary routing for this is detectQuickScanCommand (→ deeper scan), but if
+  // it ever reaches the interpreter it must NOT become "ok and analys and high
+  // and confidence moments".
+  const i = deriveActionableIntent("ok analys for high confidence", {
+    hasVideo: true
+  });
+  const banned = ["ok", "analys", "analyse", "analyze", "confidence", "scan"];
+  for (const label of i.scenarioLabels) {
+    for (const b of banned) {
+      assert.ok(
+        !label.split(/\s+/).includes(b),
+        `scenario label "${label}" leaked meta word "${b}"`
+      );
+    }
+  }
+  const msg = actionableIntentMessage(i, true);
+  assert.ok(!/analys|confidence/i.test(msg), msg);
+});

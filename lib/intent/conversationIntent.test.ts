@@ -97,6 +97,31 @@ test("'what's in this video' is a visual_question", () => {
   assert.equal(classifyConversationIntentSync("describe the footage").kind, "visual_question");
 });
 
+// ---- "watch my video" (incl. the "wath" typo) → visual_question ------
+test("'watch my video' and the 'wath' typo route to visual_question", () => {
+  for (const s of ["watch my video", "wath my video", "look at this video", "watch this"]) {
+    const intent = classifyConversationIntentSync(s);
+    assert.equal(intent.kind, "visual_question", `${s} → ${intent.kind} (${intent.reason})`);
+  }
+});
+
+// ---- identity / "what model are you" → read-only capability ----------
+test("identity questions classify as read_only_meta + capability", () => {
+  for (const s of [
+    "tell me about your model name",
+    "what model are you",
+    "who are you",
+    "what's your name",
+    "are you chatgpt",
+    "which llm is this"
+  ]) {
+    const intent = classifyConversationIntentSync(s);
+    assert.equal(intent.kind, "read_only_meta", `${s} → ${intent.kind} (${intent.reason})`);
+    assert.equal(intent.target, "capability", `${s} target`);
+    assert.equal(intent.readOnly, true);
+  }
+});
+
 // ---- clarification answer while a clarify is pending -----------------
 test("short reply during pendingClarify is a clarification_answer", () => {
   const intent = classifyConversationIntentSync("the first one", ctx({ pendingClarify: true }));

@@ -49,6 +49,24 @@ test("explain_previous_changes with no clips says no edit applied yet", () => {
   assert.match(answer, /No edit has been applied yet/i);
 });
 
+// Identity / "what model are you" → honest brain answer, NOT "no edit yet".
+test("capability_explanation answers identity questions about the model", () => {
+  const answer = answerMetaQuestion(
+    q("capability_explanation", "capability"),
+    emptyState({ questionText: "tell me about your model name" })
+  );
+  assert.doesNotMatch(answer, /No edit has been applied yet/i);
+  assert.match(answer, /on-device|local|webgpu|webllm|cloud|model/i);
+});
+
+test("capability_explanation still answers 'what can you do' (not identity)", () => {
+  const answer = answerMetaQuestion(
+    q("capability_explanation", "capability"),
+    emptyState({ questionText: "what can this app do" })
+  );
+  assert.match(answer, /supported/i);
+});
+
 test("what_changed with no clips says no edit applied yet", () => {
   const answer = answerMetaQuestion(q("what_changed"), emptyState());
   assert.match(answer, /No edit has been applied yet/i);

@@ -20,7 +20,7 @@ export type AIMode = "cloud" | "local" | "manual";
 export type LocalPhase = "idle" | "loading" | "ready" | "error";
 
 export interface LocalAIStatus {
-  /** Current AI path. Defaults to "cloud" (the primary path). */
+  /** Current AI path. Defaults to "local" (the on-device brain). */
   mode: AIMode;
   /** Local engine lifecycle. */
   phase: LocalPhase;
@@ -30,7 +30,7 @@ export interface LocalAIStatus {
   text?: string;
 }
 
-let state: LocalAIStatus = { mode: "cloud", phase: "idle", progress: 0 };
+let state: LocalAIStatus = { mode: "local", phase: "idle", progress: 0 };
 const listeners = new Set<() => void>();
 
 export function getLocalAIStatus(): LocalAIStatus {
@@ -43,9 +43,9 @@ export function setLocalAIStatus(patch: Partial<LocalAIStatus>): void {
   for (const listener of listeners) listener();
 }
 
-/** Reset back to the default cloud state. */
+/** Reset back to the default on-device state. */
 export function resetLocalAIStatus(): void {
-  setLocalAIStatus({ mode: "cloud", phase: "idle", progress: 0, text: undefined });
+  setLocalAIStatus({ mode: "local", phase: "idle", progress: 0, text: undefined });
 }
 
 function subscribe(cb: () => void): () => void {
