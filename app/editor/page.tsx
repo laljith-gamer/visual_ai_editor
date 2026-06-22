@@ -94,11 +94,10 @@ interface QuotaWarning {
 }
 
 /**
- * Result of the optional second-tier LOCAL WebLLM planner recovery
- * (cloud → local → manual). "planned" carries a synthesized plan-mode
- * response to continue with; "handled" means the local path already
- * messaged the user (e.g. a vision ask it can't satisfy); "none" means
- * fall back to surfacing the original cloud error.
+ * Result of the on-device WebLLM planner (WebLLM → deterministic net).
+ * "planned" carries a plan-mode response to continue with; "handled" means
+ * the on-device path already messaged the user (e.g. a vision ask it can't
+ * satisfy); "none" means there was nothing actionable to plan.
  */
 type LocalRecovery =
   | { outcome: "planned"; response: Exclude<AgentResponse, { mode: "error" }> }
@@ -1453,11 +1452,12 @@ export default function Home() {
       try {
         const { runIntake } = await import("@/lib/agentic-intake/runIntake");
         const intake = runIntake(userRequest, {
-          // The editor always has the /api/agent path; the local planner is
-          // gated by its own flags + WebGPU inside tryLocalPlannerRecovery.
-          cloudAvailable: true,
-          localPlannerAvailable: false,
-          cloudVisionAvailable: true
+          // WebLLM-only build: the on-device text planner is the brain. There
+          // is no cloud planner or cloud frame-vision, so describe/"what's in
+          // the video" asks are routed honestly to the unsupported path.
+          cloudAvailable: false,
+          localPlannerAvailable: true,
+          cloudVisionAvailable: false
         });
         if (intake.kind === "clarify") {
           // Ask ONE focused question with option chips. No raw-text echo.
@@ -1479,9 +1479,8 @@ export default function Home() {
           return;
         }
         if (intake.kind === "proceed") {
-          // Enough info — hand a clean compiled prompt to the local-planner
-          // fallback and clear any stale clarify. The cloud planner still runs
-          // on the full conversation; this only improves the offline path.
+          // Enough info — hand a clean compiled prompt to the on-device
+          // planner and clear any stale clarify.
           intakeCompiledPrompt = intake.compiledPrompt;
           useEditorStore.getState().setPendingClarify(null);
           logSession.ai(
@@ -1548,34 +1547,32 @@ export default function Home() {
           `Shortcut path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
         );
       }
-      // ---- Cloud planner ---------------------------------------------
-      // The browser WebLLM local-first router was removed; language/tool
-      // routing now happens server-side via /api/agent (OpenRouter →
-      // Gemini → Groq). The deterministic quick-shortcut gate above still
-      // handles high-confidence turns without a round-trip.
-      //
-      // v1.9.x — an OPTIONAL on-device WebLLM planner is re-introduced as a
-      // SECOND-tier fallback (cloud → local → manual), gated behind
-      // NEXT_PUBLIC_LOCAL_LLM_* flags and WebGPU. It is text-only and never
-      // loads on page load — see lib/local-llm/*. This helper performs the
-      // local recovery attempt and is invoked only when the cloud call
-      // below fails.
+      // ---- On-device planner (WebLLM-only brain) ---------------------
+      // This is a local-first build: the AI brain is the on-device WebLLM
+      // planner with a deterministic safety net (no cloud planner). The
+      // deterministic quick-shortcut gate above still handles high-confidence
+      // turns instantly. The helper below runs the on-device plan; it is
+      // text-only and the model is lazy-loaded on first use — see
+      // lib/local-llm/*. A legacy network planner remains available ONLY when
+      // the build is explicitly not local-only (NEXT_PUBLIC_LOCAL_AI_ONLY).
       const tryLocalPlannerRecovery = async (
         req: string
       ): Promise<LocalRecovery> => {
         const { LOCAL_LLM } = await import("@/lib/local-llm/config");
-        if (!LOCAL_LLM.enabled || !LOCAL_LLM.autoFallback) {
+        if (!LOCAL_LLM.enabled) {
           return { outcome: "none" };
         }
         const { isWebGPUAvailable } = await import("@/lib/local-llm/webllm");
         const { setLocalAIStatus } = await import("@/lib/local-llm/status");
-        // No WebGPU → fail gracefully; the manual editor keeps working.
-        if (!isWebGPUAvailable()) {
-          setLocalAIStatus({ mode: "manual", phase: "idle" });
-          return { outcome: "none" };
-        }
+        // WebGPU drives WHICH on-device path runs (the WebLLM model vs the
+        // deterministic net), but we never bail out for missing WebGPU — the
+        // deterministic planner still produces a usable plan offline.
+        const hasGpu = isWebGPUAvailable();
         try {
-          setStatus("planning", "Cloud AI unavailable \u2014 trying local AI\u2026");
+          setStatus(
+            "planning",
+            hasGpu ? "Planning on your device\u2026" : "Planning locally\u2026"
+          );
           const { tryLocalPlannerFallback } = await import(
             "@/lib/local-llm/localPlanner"
           );
@@ -1586,8 +1583,10 @@ export default function Home() {
           if (local && local.kind === "plan") {
             logSession.ai(
               "local.planner.used",
-              { request: req.slice(0, 120) },
-              "Planned on-device with local AI (WebLLM)"
+              { request: req.slice(0, 120), gpu: hasGpu },
+              hasGpu
+                ? "Planned on-device with local AI (WebLLM)"
+                : "Planned on-device (deterministic, no WebGPU)"
             );
             return {
               outcome: "planned",
@@ -1596,23 +1595,22 @@ export default function Home() {
                 plan: local.plan,
                 message: local.message,
                 inferred: [],
-                warnings: [
-                  "Cloud AI was unavailable \u2014 planned locally on your device."
-                ]
+                warnings: []
               }
             };
           }
           if (local && local.kind === "unsupported") {
-            // Truthful: local AI can plan edits but cannot watch frames.
+            // Truthful: the on-device brain can plan edits but cannot watch
+            // video frames.
             setLocalAIStatus({
-              mode: "manual",
+              mode: hasGpu ? "local" : "manual",
               phase: "ready",
-              text: "Local AI ready (text only)"
+              text: "On-device AI ready (text only)"
             });
             pushMessage({
               role: "assistant",
               content:
-                "Local AI is available for edit planning, but local video-frame vision is not enabled yet. I couldn't reach the cloud to analyse the footage \u2014 try again in a moment, or tell me what to clip and I'll plan it locally."
+                "I can plan and assemble edits on your device, but I can\u2019t watch the video frames locally yet. Tell me what to clip \u2014 e.g. \u201cthe fight scenes\u201d or \u201ca 30s highlights reel\u201d \u2014 and I\u2019ll build it."
             });
             setStatus(
               useEditorStore.getState().highlights.length > 0 ? "ready" : "idle",
@@ -1621,11 +1619,11 @@ export default function Home() {
             setProgress(0);
             return { outcome: "handled" };
           }
-          // local === null → engine missing/failed/unparseable.
-          setLocalAIStatus({ mode: "manual", phase: "error", text: "Local AI unavailable" });
+          // local === null → nothing actionable to plan from this turn.
+          setLocalAIStatus({ mode: hasGpu ? "local" : "manual", phase: "idle" });
           return { outcome: "none" };
         } catch (err) {
-          setLocalAIStatus({ mode: "manual", phase: "error", text: "Local AI unavailable" });
+          setLocalAIStatus({ mode: "manual", phase: "error", text: "On-device AI unavailable" });
           logSession.system(
             "local.planner.failed",
             { message: (err as Error).message },
@@ -1636,7 +1634,7 @@ export default function Home() {
       };
 
       try {
-        setStatus("planning", "Talking to the planner");
+        setStatus("planning", "Planning on your device\u2026");
         setProgress(0.05);
 
         const history = [...useEditorStore.getState().messages];
@@ -1727,57 +1725,55 @@ export default function Home() {
             : undefined
         };
         const t0 = Date.now();
-        const planResp = await fetch("/api/agent", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(reqBody)
-        });
-        let data = (await planResp.json().catch(() => ({}))) as AgentResponse;
+        // ---- ON-DEVICE BRAIN FIRST (WebLLM + deterministic net) ----------
+        // WebLLM is the primary and only planner. We plan the turn on-device
+        // before any network call so the result reflects real on-device
+        // reasoning — not a server keyword synthesis. When the browser lacks
+        // WebGPU, the same path returns a deterministic plan (the user's
+        // stated focus + motion/saliency), so planning still works offline.
+        let data: AgentResponse;
+        const localOutcome = await tryLocalPlannerRecovery(userRequest);
         const plannerMs = Date.now() - t0;
-
-        // ---- error mode ---------------------------------------------------
-        if (!planResp.ok || data.mode === "error") {
-          // ---- Provider router tier 2: optional LOCAL WebLLM planner -----
-          // The cloud planner failed (overload, quota, network, 402, etc.).
-          // When the local-LLM feature is enabled AND auto-fallback is on AND
-          // the browser has WebGPU, try to plan this turn entirely on-device.
-          // WebLLM is text-only — it can plan edits but cannot watch frames.
-          // Everything is lazy-loaded here so nothing touches page load.
-          const cloudErr =
-            data.mode === "error"
-              ? data.error
-              : `Planner returned ${planResp.status}`;
-          const cloudErrStatus = planResp.status;
-          const cloudRetryAfter =
-            data.mode === "error" ? data.retryAfterSeconds : undefined;
-
-          const localOutcome = await tryLocalPlannerRecovery(userRequest);
-          if (localOutcome.outcome === "planned") {
-            // Continue into the normal plan-handling path with the
-            // locally-produced plan. The in-browser pipeline runs unchanged.
-            data = localOutcome.response;
-          } else if (localOutcome.outcome === "handled") {
-            // The local path already pushed a truthful message (e.g. it was
-            // a vision/describe ask local AI can't satisfy).
-            return;
-          } else {
-            // No local recovery → surface the original cloud error.
-            pushMessage({ role: "assistant", content: cloudErr });
-            setStatus("failed", cloudErr);
+        if (localOutcome.outcome === "planned") {
+          data = localOutcome.response;
+        } else if (localOutcome.outcome === "handled") {
+          // The on-device path already messaged the user (e.g. a vision ask).
+          return;
+        } else if (!LOCAL_LLM.localOnly) {
+          // Legacy network planner — ONLY when the build is explicitly not
+          // local-only. Off by default; kept behind the flag for self-hosters
+          // who opt back into a server planner.
+          const planResp = await fetch("/api/agent", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(reqBody)
+          });
+          data = (await planResp.json().catch(() => ({}))) as AgentResponse;
+          if (!planResp.ok || data.mode === "error") {
+            const err =
+              data.mode === "error"
+                ? data.error
+                : `Planner returned ${planResp.status}`;
+            pushMessage({ role: "assistant", content: err });
+            setStatus("failed", err);
             setProgress(0);
-            if (cloudErrStatus === 429 || cloudErrStatus === 503) {
-              logSession.system(
-                "ratelimit.hit",
-                {
-                  layer: "agent",
-                  status: cloudErrStatus,
-                  retryAfterSeconds: cloudRetryAfter
-                },
-                `Rate-limited (${cloudErrStatus})`
-              );
-            }
             return;
           }
+        } else {
+          // Local-only, and there was nothing actionable to plan from this
+          // turn. Ask one short question instead of guessing. (The intake
+          // layer already shepherds most vague turns before this point.)
+          pushMessage({
+            role: "assistant",
+            content:
+              "Tell me what to make \u2014 e.g. \u201ca 30s highlights reel\u201d or \u201cthe fight scenes\u201d \u2014 and I\u2019ll plan it on your device."
+          });
+          setStatus(
+            useEditorStore.getState().highlights.length > 0 ? "ready" : "idle",
+            undefined
+          );
+          setProgress(0);
+          return;
         }
 
         // ---- soft-tier quota banner --------------------------------------
