@@ -515,15 +515,42 @@
   word-break: break-word;
 }
 
-/* A missing source reuses .libraryItem but reads as "needs re-upload". */
+/* A missing source reuses .libraryItem but reads as "needs re-upload".
+   It drops the cramped right-hand action column and instead lays the
+   name/meta across the full width, with the Missing pill + Re-upload
+   button on their own row beneath — so nothing wraps under the narrow
+   rail and gets clipped by the card's rounded corner. */
 .libraryItem.missing {
+  grid-template-columns: 12px minmax(0, 1fr);
+  grid-template-areas:
+    "dot  body"
+    "foot foot";
+  align-items: start;
+  row-gap: 10px;
   opacity: 0.9;
   border-style: dashed;
   border-color: color-mix(in srgb, var(--warn) 38%, var(--line) 62%);
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 90%, transparent), var(--bg-1));
 }
+.libraryItem.missing .colorDot {
+  grid-area: dot;
+  margin-top: 4px;
+  color: var(--warn);
+}
+.libraryItem.missing .libraryItemBody {
+  grid-area: body;
+}
 .libraryItem.missing .libraryItemName {
   color: var(--text-faint);
+}
+
+.missingFooter {
+  grid-area: foot;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .missingTag {
