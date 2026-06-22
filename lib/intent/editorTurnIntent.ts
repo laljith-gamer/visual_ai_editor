@@ -69,6 +69,16 @@ export interface EditorTurnIntent {
 const VAGUE_MOMENT_RE =
   /\b(find|pick|get|show|grab|look for|search for)\b[\s\w]*\b(moment|scene|part|clip|bit|spot|section)\b|\b(a|the|some|any)?\s*(specific|particular|certain)\s+(moment|scene|part|clip|bit)\b/i;
 
+// A "proceed and build it" continuation — "then create", "create it",
+// "make it", "go ahead and make the reel", "now build it", "ok create".
+// When a pending action is queued, this CONFIRMS it (carries the agreed
+// intent forward) rather than starting a new, subject-less search. It only
+// matches when the verb stands alone (no new topic / no trailing modifier
+// like "30 seconds"), so "make it vertical" or "create a cooking reel" are
+// NOT swallowed.
+const PROCEED_BUILD_RE =
+  /^(?:so[,\s]+|ok(?:ay)?[,\s]+|yes[,\s]+|yeah[,\s]+|sure[,\s]+|then[,\s]+|now[,\s]+|and[,\s]+|please[,\s]+|go ahead and |go ahead[,\s]+)*(?:create|make|build|generate|produce|assemble|start)(?:\s+(?:it|that|this|them|one|the (?:short|reel|video|edit|clip|clips|highlights?|montage)|a (?:short|reel|video|montage)))?[\s.!]*$/i;
+
 function clarifyMissingMomentMessage(): string {
   return (
     "Which moment do you want? Tell me what's on screen \u2014 e.g. the action, " +
@@ -109,6 +119,24 @@ export function classifyEditorTurn(text: string, ctx: EditorTurnContext): Editor
   }
   if (fast?.kind === "cancel" && (ctx.hasPendingAction || nothingElsePending)) {
     return { kind: "cancel_pending", ...base, confidence: 0.95 };
+  }
+
+  // 1b) "then create" / "make it" / "go ahead and build the reel" while a
+  //     concrete action is pending → CONFIRM it. This is conversational
+  //     continuity: the user is agreeing to the thing we just proposed
+  //     ("Want me to search for fighting?"), NOT asking for "then"/"create"
+  //     moments. Requires a pending action and no NEW topic of its own.
+  if (
+    ctx.hasPendingAction &&
+    fast?.kind !== "affirm" &&
+    PROCEED_BUILD_RE.test(raw)
+  ) {
+    return {
+      kind: "confirm_pending",
+      ...base,
+      confidence: 0.9,
+      normalizedText: refine.normalizedText || raw
+    };
   }
   // A scope answer ("from current video clips") confirms a pending action
   // with that scope rather than starting over.

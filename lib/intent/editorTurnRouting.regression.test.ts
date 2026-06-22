@@ -141,3 +141,26 @@ test("regression: refinement/control turns never route to a raw search", () => {
     }
   }
 });
+
+
+// 8) Conversational continuity: after we ask "Want me to search for fighting?"
+//    (a pending action), "then create" / "create it" / "make it" CONFIRM that
+//    action — they must NEVER become a "then"/"create" search.
+test("regression 8: 'then create' confirms a pending action (not a search)", () => {
+  for (const s of ["then create", "create it", "make it", "ok make it", "go ahead and make the reel", "now build it"]) {
+    const r = classifyEditorTurn(s, ctx({ hasPendingAction: true }));
+    assert.equal(r.kind, "confirm_pending", `${s} → ${r.kind}`);
+  }
+});
+
+test("regression 8b: a build-continuation with a NEW topic is not a confirm", () => {
+  // "create a cooking reel" introduces a fresh subject → let the planner take
+  // it (passthrough), even if an action is pending.
+  const r = classifyEditorTurn("create a cooking reel", ctx({ hasPendingAction: true }));
+  assert.notEqual(r.kind, "confirm_pending");
+});
+
+test("regression 8c: 'make it 30 seconds' is a duration op, not a confirm", () => {
+  const r = classifyEditorTurn("make it 30 seconds", ctx({ hasTimeline: true, clipCount: 2, hasPendingAction: true }));
+  assert.notEqual(r.kind, "confirm_pending");
+});
