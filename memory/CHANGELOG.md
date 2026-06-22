@@ -17,7 +17,29 @@
 
 ---
 
-### 2026-06-20 — Chat Brain Preload (text-only LLM fallback) + dynamic clip durations
+### 2026-06-22 — Nearest-match graceful fallback (fixes "top score 0.00" dead-end)
+- **Change made:** When a constraint-driven request ("fighting attack combo
+  alone", "only lab scenes") matched the concept only FAINTLY — every frame
+  below the absolute noise floor — the hard gate used to drop everything and
+  the app replied *"Nothing matched strongly enough (top score 0.00)"*. The
+  gate now keeps the **nearest-matching** footage instead (ranked by the
+  model's include score, still exclude-gated, capped by the duration target),
+  flagged `approximate` and surfaced as low-confidence / needs_review with an
+  honest "closest moments I could find" note. No hardcoded keywords, no faked
+  matches — uses only the SigLIP scores already computed, and never widens to
+  off-constraint or zero-signal frames.
+- **Files affected:** `lib/constraints/filter.ts` (fallback + header doc),
+  `lib/constraints/types.ts` (`approximate` on report),
+  `lib/pipeline/executePerSource.ts` (thread `approximate`, mark `weakOnly`,
+  log), `app/editor/page.tsx` (honest chat note),
+  `lib/constraints/filter.test.ts` (rewrote 1 test + 5 new). Note:
+  `memory/NEAREST_MATCH_FALLBACK_2026-06-22.md`.
+- **Reason:** User asked for the run to return the nearest/best-available
+  parts ("make mostly near") instead of dead-ending, since CLIP/SigLIP scores
+  for abstract action phrases on stylized footage routinely sit below the
+  noise floor.
+- **Validation:** `test:constraints` 30 pass; `npm test` 558 pass / 0 fail;
+  typecheck ✓; build ✓. Browser/WebGPU end-to-end run still required.
 - **Change made:** Two user-facing improvements. (1) A privacy-safe, TEXT-ONLY
   "chat brain" is warmed in the background after the editor is ready / first
   upload, and is used ONLY as a fallback when the deterministic pending-answer

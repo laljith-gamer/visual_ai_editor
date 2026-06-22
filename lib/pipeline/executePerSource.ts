@@ -94,6 +94,10 @@ export interface ExecuteForSourceResult {
    *  signal — SigLIP/cloud vision unavailable this run), so the gate degraded
    *  to a motion/saliency pass-through instead of dropping to zero clips. */
   unmeasurable?: boolean;
+  /** v2.9 — true when the hard constraint WAS measurable but no frame cleared
+   *  the match floor, so the gate kept the NEAREST-matching footage instead of
+   *  returning zero clips. The caller presents these as approximate matches. */
+  approximate?: boolean;
 }
 
 /**
@@ -243,6 +247,7 @@ export async function executeForSource(
 
   // ---- CONSTRAINT HARD GATE (v2.6) --------------------------------
   let constraintUnmeasurable = false;
+  let constraintApproximate = false;
   // For a constraint-driven plan ("only lab scenes", "avoid the intro"),
   // drop every frame that does not satisfy the constraint graph BEFORE any
   // candidate-window detection, ranking, or selection runs. From here on the
@@ -263,6 +268,7 @@ export async function executeForSource(
     );
     frameScores = gated;
     constraintUnmeasurable = report.unmeasurable === true;
+    constraintApproximate = report.approximate === true;
     log.ai(
       "constraints.filtered",
       {
@@ -274,13 +280,16 @@ export async function executeForSource(
         includeFloor: report.includeFloor,
         hardInclude: plan.constraints.include.some((c) => c.priority === "hard"),
         excludes: plan.constraints.exclude.length,
-        unmeasurable: report.unmeasurable === true
+        unmeasurable: report.unmeasurable === true,
+        approximate: report.approximate === true
       },
       report.unmeasurable
         ? `Couldn't measure the constraint on "${source.meta.name}" — visual scene scoring was unavailable, so I kept all ${before} frames and ranked by motion/visual interest instead`
-        : report.keptCount > 0
-          ? `Constraint gate kept ${report.keptCount}/${before} frames from "${source.meta.name}" (dropped ${report.droppedByInclude} off-topic, ${report.droppedByExclude} excluded)`
-          : `Constraint gate removed all ${before} frames from "${source.meta.name}" — no footage matched the constraints`
+        : report.approximate
+          ? `No frame in "${source.meta.name}" cleared an exact match for the constraint — kept the ${report.keptCount} NEAREST-matching frames (approximate) so the run returns the closest available footage instead of nothing`
+          : report.keptCount > 0
+            ? `Constraint gate kept ${report.keptCount}/${before} frames from "${source.meta.name}" (dropped ${report.droppedByInclude} off-topic, ${report.droppedByExclude} excluded)`
+            : `Constraint gate removed all ${before} frames from "${source.meta.name}" — no footage matched the constraints`
     );
     if (frameScores.length === 0) {
       // Honest empty result — NEVER fall back to generic highlights when the
@@ -373,11 +382,12 @@ export async function executeForSource(
 
   return {
     highlights: tagged,
-    weakOnly: buildResult.weakOnly,
+    weakOnly: buildResult.weakOnly || constraintApproximate,
     scoreMax: scoreStats.max,
     scoreStats,
     cacheHit,
-    unmeasurable: constraintUnmeasurable
+    unmeasurable: constraintUnmeasurable,
+    approximate: constraintApproximate
   };
 }
 

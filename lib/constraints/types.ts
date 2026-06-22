@@ -124,4 +124,11 @@ export interface ConstraintFilterReport {
    *  from motion/saliency, and the caller can be honest that scene matching
    *  wasn't possible. */
   unmeasurable?: boolean;
+  /** v2.9 — true when the hard include WAS measurable (some signal existed) but
+   *  NO frame cleared the absolute noise floor, so a strict gate would drop
+   *  everything ("top score 0.00"). Instead the gate kept the frames the model
+   *  judged CLOSEST to the concept (ranked by include match, exclude-gated) so
+   *  the run returns the NEAREST available footage rather than dead-ending. The
+   *  caller must present these as approximate, not exact, matches. */
+  approximate?: boolean;
 }

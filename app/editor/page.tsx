@@ -684,6 +684,15 @@ export default function Home() {
           summary +=
             ` Note: visual scene matching wasn't available on this device, so these are the most active moments by motion \u2014 for true "${activePlan.scenarios[0]?.prompt ?? "scene"}" detection, enable cloud vision or open in a WebGPU browser.`;
         }
+        // v2.9 — Honest note when NO frame cleared an exact match for the
+        // requested scene, so the gate kept the NEAREST-matching footage instead
+        // of dead-ending with "top score 0.00". We must present these as the
+        // closest available moments, not a confirmed match.
+        const approximateMatch = aggregate.some((r) => r?.approximate === true);
+        if (approximateMatch && !sceneMatchUnavailable && mode !== "moment") {
+          summary +=
+            ` Note: I couldn't find an exact match for "${activePlan.scenarios[0]?.prompt ?? "that"}", so these are the closest moments I could find. A more visual description (colours, who's doing what, the setting) usually tightens the match.`;
+        }
         if (anyCachedReuse) {
           pushMessage({
             role: "assistant",
