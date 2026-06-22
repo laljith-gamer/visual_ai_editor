@@ -82,7 +82,22 @@ const TYPO_FIXES: Record<string, string> = {
   ingridient: "ingredient",
   ingredients: "ingredient",
   ingrdients: "ingredient",
-  ingrediants: "ingredient"
+  ingrediants: "ingredient",
+  // Intensity / quality-descriptor typos. These normalize to words that live
+  // in GENERIC_EDIT_VOCAB below, so they are dropped from the SUBJECT instead
+  // of surviving as fake search terms (e.g. "intensly"/"amaing" combat).
+  intensly: "intensely",
+  intensley: "intensely",
+  intensiv: "intensive",
+  amaing: "amazing",
+  amazng: "amazing",
+  amzing: "amazing",
+  amazeing: "amazing",
+  incrediable: "incredible",
+  incredibe: "incredible",
+  awsome: "awesome",
+  awesom: "awesome",
+  epicc: "epic"
 };
 
 // Command / filler / person / connective tokens stripped when deriving the
@@ -138,7 +153,32 @@ const GENERIC_EDIT_VOCAB = new Set([
   "highlight", "highlights", "standout", "standouts", "memorable",
   "interesting", "exciting", "epic", "cool", "awesome", "good", "great",
   "nice", "fun", "montage", "compilation", "compile", "recap", "summary",
-  "overview", "wrapup", "wrap", "bestof"
+  "overview", "wrapup", "wrap", "bestof",
+  // Intensity / quality descriptors. They describe HOW a moment feels, not
+  // WHAT is on screen, so they must never become literal search subjects
+  // ("intensly amaing combat" → subject is "combat", not "intense"/"amazing").
+  // Grouped with the generic-quality vocabulary so a request made of ONLY
+  // these words ("make it epic and intense") is still treated as a generic
+  // best-parts ask rather than a meaningless literal search.
+  "intense", "intensely", "intensive", "amazing", "amazingly", "incredible",
+  "incredibly", "insane", "insanely", "crazy", "wild", "brutal", "brutally",
+  "fierce", "fiercely", "savage", "hardcore", "badass", "dramatic",
+  "dramatically", "stunning", "powerful", "explosive", "legendary",
+  "mindblowing", "jawdropping", "breathtaking", "intensee"
+]);
+
+// Conversational / meta follow-up vocabulary. These words refer to the
+// CONVERSATION ("explain more", "in more detail", "again") — they are never a
+// content subject. They are stripped from the subject like GENERIC_EDIT_VOCAB,
+// but unlike it they do NOT trigger a generic best-parts reel: a turn made of
+// ONLY these words ("more detailed") is a follow-up to the previous answer, so
+// it stays NON-actionable and the caller routes it to the explanation lane
+// instead of searching the footage for "more"/"detailed" moments.
+const META_FOLLOWUP = new Set([
+  "more", "less", "detail", "detailed", "details", "explain", "explanation",
+  "elaborate", "deeper", "depth", "expand", "clarify", "further",
+  "additional", "extra", "again", "specifically", "thorough", "comprehensive",
+  "why", "reason", "reasons", "because"
 ]);
 
 // Output / format words that signal a short-form reel is wanted. These are
@@ -249,10 +289,14 @@ export function deriveActionableIntent(
   }
 
   // Issue #62 — generic best-parts detection. Separate genuine SUBJECT tokens
-  // from generic editing/output vocabulary. If nothing concrete remains, the
-  // request is a generic "best parts / highlights / make a reel" ask: it must
-  // NOT turn "best"/"picks" into literal SigLIP search subjects.
-  const subjectTokens = coreTokens.filter((w) => !GENERIC_EDIT_VOCAB.has(w));
+  // from generic editing/output vocabulary AND conversational meta words. If
+  // nothing concrete remains, the request is either a generic "best parts /
+  // highlights / make a reel" ask (handled below) or a bare conversational
+  // follow-up ("more detailed") that must NOT turn "more"/"detailed" into
+  // literal SigLIP search subjects.
+  const subjectTokens = coreTokens.filter(
+    (w) => !GENERIC_EDIT_VOCAB.has(w) && !META_FOLLOWUP.has(w)
+  );
   const hasGenericEditWord = coreTokens.some((w) => GENERIC_EDIT_VOCAB.has(w));
   const wantsReelOutput = REEL_OUTPUT_RE.test(lower);
   const genericBestParts =

@@ -188,3 +188,82 @@ test("'duration' is a meta word, never a subject ('fighting alone' → fighting-
     assert.ok(!label.includes("duration"), `leaked "duration" in "${label}"`);
   }
 });
+
+
+// ---------------------------------------------------------------------
+// Intensity / filler / conversational-meta cleanup. Quality descriptors
+// ("intense", "amazing"), fillers ("again"), and follow-up words ("more",
+// "detailed") must NEVER survive as literal search subjects — that was the
+// "look for fight and again and red and boy and intensly and amaing combat
+// moments" keyword-soup bug.
+// ---------------------------------------------------------------------
+
+test("messy fight request drops intensifiers/fillers, keeps real subjects", () => {
+  const i = deriveActionableIntent(
+    "find best moment where her fight again red boy intensly and amaing combats",
+    { hasVideo: true }
+  );
+  assert.equal(i.actionable, true);
+  assert.equal(i.genericBestParts, false);
+
+  const banned = [
+    "best", "again", "intensly", "intensely", "amaing", "amazing", "moment",
+    "where", "find", "her"
+  ];
+  for (const label of i.scenarioLabels) {
+    for (const b of banned) {
+      assert.ok(
+        !label.split(/\s+/).includes(b),
+        `scenario label "${label}" leaked non-subject word "${b}"`
+      );
+    }
+  }
+  // Real subjects survive.
+  assert.ok(i.rawFocus?.includes("fight"), i.rawFocus ?? "");
+
+  // The confirm message must not promise the junk-word soup.
+  const msg = actionableIntentMessage(i, true);
+  assert.ok(!/again|intensly|amaing|amazing/i.test(msg), msg);
+});
+
+test("'intense amazing combat' → single 'combat' subject, no intensifier leak", () => {
+  const i = deriveActionableIntent("intense amazing combat", { hasVideo: true });
+  assert.equal(i.actionable, true);
+  assert.equal(i.genericBestParts, false);
+  assert.equal(i.rawFocus, "combat");
+  assert.equal(i.focus, "combat moments");
+  assert.deepEqual(i.scenarioLabels, ["combat moments"]);
+});
+
+test("bare follow-up 'more detailed' is NOT a new search", () => {
+  const i = deriveActionableIntent("more detailed", { hasVideo: true });
+  assert.equal(i.actionable, false);
+  assert.equal(i.genericBestParts, false);
+  assert.equal(i.rawFocus, null);
+  assert.equal(i.focus, null);
+  assert.deepEqual(i.scenarioLabels, []);
+  const msg = actionableIntentMessage(i, true);
+  assert.ok(!/more|detailed/i.test(msg), msg);
+});
+
+test("'explain why you picked these' is a follow-up, not a search", () => {
+  const i = deriveActionableIntent("explain why you picked these", {
+    hasVideo: true
+  });
+  assert.equal(i.actionable, false);
+  assert.equal(i.rawFocus, null);
+});
+
+test("'make it epic and intense' → generic best-parts (quality-only ask)", () => {
+  const i = deriveActionableIntent("make it epic and intense", { hasVideo: true });
+  assert.equal(i.genericBestParts, true);
+  assert.equal(i.actionable, true);
+  assert.deepEqual(i.scenarioLabels, ["visually rich moments"]);
+});
+
+test("intensifier next to a real subject keeps the subject ('amazing cooking')", () => {
+  const i = deriveActionableIntent("amazing cooking parts", { hasVideo: true });
+  assert.equal(i.genericBestParts, false);
+  assert.equal(i.rawFocus, "cooking");
+  assert.equal(i.focus, "cooking moments");
+});

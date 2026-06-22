@@ -53,9 +53,19 @@ Otherwise return an edit plan:
   "transition":"none"
 }
 
+HOW TO REASON ABOUT THE REQUEST (think before you emit, but output ONLY the JSON):
+- Read the WHOLE request as the description of a moment or scene the user wants, NOT a bag of keywords. "find the intense fight against the red boy with amazing combat" is ONE scene: an intense fight against a character called "Red Boy". It is NOT five separate searches.
+- Write scenarios as natural visual descriptions of what the camera would show. Prefer ONE scenario that captures the scene. Use 2-3 ONLY when the user clearly lists distinct separate moments ("the cooking part AND the taste test"). Never emit one scenario per word.
+- Keep multi-word names/entities together ("red boy", "boss fight", "final battle") — do not split them.
+- IGNORE intensity/quality words (intense, amazing, epic, insane, brutal) and conversational words (more, again, please, detailed) when deciding WHAT to find — they change tone, not content. You may reflect the intensity in the "message", not in the search prompt.
+- For action/fight/combat/chase/sports requests, weight motion higher: e.g. {"semantic":0.5,"motion":0.4,"saliency":0.1}. For calm/dialogue/scenery requests, weight semantic higher.
+
+SPECIAL CASES:
+- "best parts"/"highlights"/"make a reel" with NO concrete topic → empty scenarios array [] and signals {"semantic":0,"motion":0.6,"saliency":0.4}.
+- A bare conversational follow-up with no new content to find ("more detailed", "explain", "why those") is NOT an edit. Return {"mode":"unsupported","reason":"vision"} only if it asks about footage; otherwise emit an empty-scenario best-parts plan and say in the message that you kept the current focus.
+
 Rules:
-- scenarios: 1-4 items describing visible moments to keep. If the user just says "best parts"/"highlights" with no topic, use an empty scenarios array [] and set signals to {"semantic":0,"motion":0.6,"saliency":0.4}.
-- format: "vertical" | "horizontal" | "square". Default "vertical" for shorts/reels/tiktok.
+- scenarios: 0-3 items. format: "vertical" | "horizontal" | "square" (default "vertical" for shorts/reels/tiktok).
 - Only include numbers the user actually stated (e.g. "30s"). Omit fields you are unsure about; defaults are applied for you.
 - Never invent what is visually in the video. Describe only what the user asked for.`;
 
@@ -106,44 +116,54 @@ export async function tryLocalPlannerFallback(
       : userRequest;
 
   const quick = quickOfflinePlan(userRequest);
-  if (quick) return quick;
 
-  if (!isWebGPUAvailable()) return null;
+  // Trivial, unambiguous asks (why-questions, generic "best parts", a bare
+  // "make a vertical reel") need no model reasoning — answer them instantly so
+  // the user never waits on a model download. Everything DESCRIPTIVE (a real
+  // scene/topic, e.g. "the intense fight against the red boy") is routed to the
+  // on-device LLM below so the plan reflects real intent instead of token soup.
+  if (quick && isInstantDeterministicCase(userRequest)) return quick;
 
-  let raw: string;
-  try {
-    raw = await localChatJson(
-      LOCAL_PLANNER_SYSTEM,
-      buildUserPrompt(planningInput, ctx),
-      { maxTokens: 1024, temperature: 0.3 }
-    );
-  } catch {
-    // Engine load/generation failed — caller degrades to manual.
-    return null;
+  // Prefer the on-device LLM for descriptive requests: it reads the request as
+  // one coherent scene (entity-aware) rather than splitting it into per-word
+  // searches. On any failure we fall back to the cleaned deterministic plan.
+  if (isWebGPUAvailable()) {
+    try {
+      const raw = await localChatJson(
+        LOCAL_PLANNER_SYSTEM,
+        buildUserPrompt(planningInput, ctx),
+        { maxTokens: 1024, temperature: 0.3 }
+      );
+      const parsed = extractJsonObject<LocalPlannerJson>(raw);
+      if (parsed) {
+        if (parsed.mode === "unsupported") {
+          return {
+            kind: "unsupported",
+            reason: typeof parsed.reason === "string" ? parsed.reason : "vision"
+          };
+        }
+        // Plan fields may be nested under `plan` or emitted at the top level.
+        const planSource =
+          parsed.plan && typeof parsed.plan === "object" ? parsed.plan : parsed;
+        const norm = normalizePlan(planSource);
+        if (norm.plan) {
+          const message =
+            typeof parsed.message === "string" && parsed.message.trim()
+              ? parsed.message.trim().slice(0, 200)
+              : "Cloud AI was unavailable, so I planned this on your device. Heads up — local AI can't watch the video frames yet.";
+          return { kind: "plan", plan: norm.plan, message };
+        }
+      }
+      // Unparseable / empty plan → fall through to the deterministic plan.
+    } catch {
+      // Engine load/generation failed → fall through to the deterministic plan.
+    }
   }
 
-  const parsed = extractJsonObject<LocalPlannerJson>(raw);
-  if (!parsed) return null;
-
-  if (parsed.mode === "unsupported") {
-    return {
-      kind: "unsupported",
-      reason: typeof parsed.reason === "string" ? parsed.reason : "vision"
-    };
-  }
-
-  // Plan fields may be nested under `plan` or emitted at the top level.
-  const planSource =
-    parsed.plan && typeof parsed.plan === "object" ? parsed.plan : parsed;
-  const norm = normalizePlan(planSource);
-  if (!norm.plan) return null;
-
-  const message =
-    typeof parsed.message === "string" && parsed.message.trim()
-      ? parsed.message.trim().slice(0, 200)
-      : "Cloud AI was unavailable, so I planned this on your device. Heads up — local AI can't watch the video frames yet.";
-
-  return { kind: "plan", plan: norm.plan, message };
+  // Deterministic safety net: no WebGPU, or the local model failed/!parsed.
+  // Reuses the SAME cleaned intent interpreter, so even this path no longer
+  // emits keyword soup.
+  return quick;
 }
 
 function isLocalVisionRequest(userRequest: string): boolean {
@@ -153,6 +173,33 @@ function isLocalVisionRequest(userRequest: string): boolean {
     /\b(video|clip|frame|footage|scene|screen)\b/.test(text)
   ) || /what('| i)?s in (this|the) (video|clip|footage)/.test(text) ||
     /what happens? in (this|the) (video|clip|footage)/.test(text);
+}
+
+/**
+ * True for requests that need NO model reasoning and can be answered instantly
+ * and deterministically:
+ *   - "why did you pick these" explanations,
+ *   - generic "best parts / highlights / make a reel" (pure visual-interest),
+ *   - a bare "make a vertical reel" with no concrete subject.
+ * Everything else (a concrete described scene/topic) is deferred to the
+ * on-device LLM so it can reason about the whole request as one scene.
+ */
+function isInstantDeterministicCase(rawRequest: string): boolean {
+  const text = (rawRequest || "").toLowerCase();
+  const asksWhy =
+    /\bwhy\b.*\b(pick|picked|choose|chosen|select|selected)\b/.test(text) ||
+    /\bwhy\b.*\bclips?\b/.test(text);
+  if (asksWhy) return true;
+
+  const intent = deriveActionableIntent(rawRequest, {});
+  if (intent.genericBestParts) return true;
+
+  const explicitVertical =
+    /\b(vertical|reels?|shorts?|tiktok|9:16)\b/.test(text) &&
+    /\b(make|create|turn|convert|build)\b/.test(text);
+  if (explicitVertical && intent.scenarioLabels.length === 0) return true;
+
+  return false;
 }
 
 /**
