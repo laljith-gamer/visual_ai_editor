@@ -164,3 +164,21 @@ test("regression 8c: 'make it 30 seconds' is a duration op, not a confirm", () =
   const r = classifyEditorTurn("make it 30 seconds", ctx({ hasTimeline: true, clipCount: 2, hasPendingAction: true }));
   assert.notEqual(r.kind, "confirm_pending");
 });
+
+
+// 9) "not only X" / "not just X" must NOT be read as a keep-only refinement
+//    (it means the opposite). It should fall through to the planner, not
+//    turn the words into a content search.
+test("regression 9: 'not only fixed center' is not a keep_only refinement", () => {
+  const r = detectRefinement(
+    "i need a 3 min short not only fixed center but dynamic based on scene"
+  );
+  assert.notEqual(r.kind, "keep_only");
+  assert.notEqual(r.kind, "filter");
+
+  const turn = classifyEditorTurn(
+    "i need a 3 min short not only fixed center but dynamic based on scene",
+    ctx()
+  );
+  assert.notEqual(turn.kind, "refine_timeline");
+});
