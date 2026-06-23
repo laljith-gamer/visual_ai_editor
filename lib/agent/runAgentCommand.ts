@@ -43,6 +43,7 @@ import {
   parseSourceControlCommand,
   type ToolCommand
 } from "@/lib/intent/toolCommands";
+import { parseReframeIntent, type ReframeIntent } from "@/lib/intent/reframeCommand";
 import { classifyTurnSync, respondReadOnlySync } from "@/lib/agent/conversationLane";
 import { mapTransition } from "@/lib/transitions/map";
 import { normalizeTransitionDuration, type BoundaryTransition } from "@/lib/transitions/types";
@@ -195,6 +196,13 @@ export async function tryAgentCommand(
   if (sourceCmd) {
     deps.logSession.ai("agent.source", { kind: sourceCmd.kind }, `Source command: ${sourceCmd.kind}`);
     return handleSourceCommand(sourceCmd, deps);
+  }
+
+  // ---- Reframe / framing talk (acknowledge; reframe is automatic) ---
+  const reframe = parseReframeIntent(userText);
+  if (reframe) {
+    deps.logSession.ai("agent.reframe", { wants: reframe.wants }, `Reframe intent: ${reframe.wants}`);
+    return handleReframeCommand(reframe, deps);
   }
 
   const memory = getAgentMemory(deps.sessionId);
@@ -570,6 +578,31 @@ function handleSourceCommand(cmd: ToolCommand, deps: AgentCommandDeps): AgentCom
     default:
       return { handled: false };
   }
+}
+
+/** Acknowledge framing/reframe intent AND apply it: "auto" = dynamic
+ *  smart-reframe (default), "center" = locked center crop. */
+function handleReframeCommand(intent: ReframeIntent, deps: AgentCommandDeps): AgentCommandOutcome {
+  const store = useEditorStore.getState();
+  if (intent.wants === "center") {
+    store.setReframeMode("center");
+    deps.pushMessage({
+      role: "assistant",
+      content:
+        "Locked to a centered crop \u2014 vertical/square shorts will stay center-framed (no dynamic reframe) until you say \u201cdynamic\u201d again.",
+      attachment: { mode: "agent", kind: "reframe" }
+    });
+    return { handled: true };
+  }
+  // dynamic / explain → ensure dynamic and reassure.
+  store.setReframeMode("auto");
+  deps.pushMessage({
+    role: "assistant",
+    content:
+      "Dynamic reframe is on: for vertical/square output the crop follows each clip's motion/subject (and only centers when the frame is flat), blended by confidence \u2014 so your short won't be fixed-center. Tell me what to clip and I'll build it.",
+    attachment: { mode: "agent", kind: "reframe" }
+  });
+  return { handled: true };
 }
 
 interface ApplyResult {

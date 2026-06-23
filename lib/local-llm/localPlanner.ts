@@ -71,11 +71,14 @@ Rules:
 
 function buildUserPrompt(
   userRequest: string,
-  ctx: { videoDurationSeconds?: number }
+  ctx: { videoDurationSeconds?: number; conversation?: string }
 ): string {
   const lines: string[] = [];
   if (typeof ctx.videoDurationSeconds === "number" && ctx.videoDurationSeconds > 0) {
     lines.push(`Video duration: ${ctx.videoDurationSeconds.toFixed(0)}s`);
+  }
+  if (ctx.conversation && ctx.conversation.trim()) {
+    lines.push(`Recent conversation (for context):\n${ctx.conversation.slice(0, 1200)}`);
   }
   lines.push(`User request: ${userRequest.slice(0, 500)}`);
   return lines.join("\n");
@@ -100,7 +103,7 @@ interface LocalPlannerJson {
  */
 export async function tryLocalPlannerFallback(
   userRequest: string,
-  ctx: { videoDurationSeconds?: number; compiledPrompt?: string } = {}
+  ctx: { videoDurationSeconds?: number; compiledPrompt?: string; conversation?: string } = {}
 ): Promise<LocalPlanResult> {
   if (isLocalVisionRequest(userRequest)) {
     return { kind: "unsupported", reason: "vision" };

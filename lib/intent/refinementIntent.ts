@@ -85,7 +85,14 @@ function detectScope(text: string): RefineScope | undefined {
  */
 export function detectRefinement(text: string): RefinementIntent {
   const { normalized } = normalizeEditingText(text ?? "");
-  const lower = normalized;
+  // "not only X" / "not just X" means the user wants MORE than X — it is NOT a
+  // "keep only X" refinement. Neutralize the negated marker so the keep/only
+  // detector below can't mis-read it (e.g. "not only fixed center" must not
+  // become "keep only fixed center"). Generic grammar fix, no keyword table.
+  const lower = normalized.replace(
+    /\b(?:not|do(?:es)?\s*n'?t|don'?t|dont)\s+(?:only|just)\b/g,
+    "not"
+  );
   const none = (): RefinementIntent => ({
     kind: "none",
     include: [],
