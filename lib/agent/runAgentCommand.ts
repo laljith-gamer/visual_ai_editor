@@ -580,14 +580,28 @@ function handleSourceCommand(cmd: ToolCommand, deps: AgentCommandDeps): AgentCom
   }
 }
 
-/** Acknowledge framing/reframe intent. Smart-reframe is automatic, so this
- *  reassures (dynamic) or is honest about the lack of a locked-center toggle. */
+/** Acknowledge framing/reframe intent AND apply it: "auto" = dynamic
+ *  smart-reframe (default), "center" = locked center crop. */
 function handleReframeCommand(intent: ReframeIntent, deps: AgentCommandDeps): AgentCommandOutcome {
-  const content =
-    intent.wants === "center"
-      ? "Right now vertical/square shorts auto-reframe to follow the action and only sit center when the shot is flat \u2014 a hard locked-center mode isn't a per-edit toggle yet. Want me to keep the dynamic reframe and build the short?"
-      : "Dynamic reframe is already on: for vertical/square output the crop follows each clip's motion/subject (and only centers when the frame is flat), blended by confidence \u2014 so your short won't be fixed-center. Tell me what to clip (e.g. \u201cthe fight + cutscenes, 3 min\u201d) and I'll build it.";
-  deps.pushMessage({ role: "assistant", content, attachment: { mode: "agent", kind: "reframe" } });
+  const store = useEditorStore.getState();
+  if (intent.wants === "center") {
+    store.setReframeMode("center");
+    deps.pushMessage({
+      role: "assistant",
+      content:
+        "Locked to a centered crop \u2014 vertical/square shorts will stay center-framed (no dynamic reframe) until you say \u201cdynamic\u201d again.",
+      attachment: { mode: "agent", kind: "reframe" }
+    });
+    return { handled: true };
+  }
+  // dynamic / explain → ensure dynamic and reassure.
+  store.setReframeMode("auto");
+  deps.pushMessage({
+    role: "assistant",
+    content:
+      "Dynamic reframe is on: for vertical/square output the crop follows each clip's motion/subject (and only centers when the frame is flat), blended by confidence \u2014 so your short won't be fixed-center. Tell me what to clip and I'll build it.",
+    attachment: { mode: "agent", kind: "reframe" }
+  });
   return { handled: true };
 }
 

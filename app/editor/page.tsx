@@ -3539,10 +3539,16 @@ export default function Home() {
       // referenced by highlights' `sourceId`), encodes them as `in0.mp4`,
       // `in1.mp4`, …, and remaps each clip's inputIndex so the filter
       // graph stitches across uploaded sources cleanly.
+      // Locked-center reframe → force each clip's crop to center (focus 0.5);
+      // otherwise keep the per-clip dynamic focal points (smart-reframe).
+      const renderHighlights =
+        cur.reframeMode === "center"
+          ? highlights.map((h) => ({ ...h, focusX: 0.5, focusY: 0.5 }))
+          : highlights;
       const blob = await ffmpeg.render({
         sources: sources.length > 0 ? sources : undefined,
         videoBlob: sources.length === 0 ? videoBlob ?? undefined : undefined,
-        highlights,
+        highlights: renderHighlights,
         format,
         transition,
         boundaryRenders,

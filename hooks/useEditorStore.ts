@@ -148,6 +148,11 @@ interface EditorState {
    *  plan.format. Null = derive from the plan or the source's native aspect. */
   outputFormat: "vertical" | "horizontal" | "square" | null;
 
+  /** Reframe mode for vertical/square crops: "auto" = dynamic smart-reframe
+   *  (default; crop follows the subject), "center" = locked center crop. Set
+   *  by a chat command, read by the renderer. */
+  reframeMode: "auto" | "center";
+
   /** v1.4.0 — user tier as classified by the LLM on the most recent
    *  agent turn. Drives adaptive selection in events.ts / highlights.ts
    *  / moment.ts. Defaults to "novice" so the wide-net behavior is in
@@ -329,6 +334,8 @@ interface EditorState {
   setActiveTargetSeconds: (seconds: number | null) => void;
   /** Set (or clear) the output-aspect override from a chat command. */
   setOutputFormat: (format: "vertical" | "horizontal" | "square" | null) => void;
+  /** Set the reframe mode (dynamic "auto" vs locked "center"). */
+  setReframeMode: (mode: "auto" | "center") => void;
   /** v2.3 — Trim the timeline to fit a target duration (drops WHOLE clips,
    *  snapshots for undo). Returns what changed. */
   trimTimelineToTarget: (
@@ -412,6 +419,7 @@ function freshState() {
     pendingAction: null as EditorState["pendingAction"],
     activeTargetSeconds: null as number | null,
     outputFormat: null as "vertical" | "horizontal" | "square" | null,
+    reframeMode: "auto" as "auto" | "center",
     pendingExecution: false,
     userTier: "novice" as UserTier,
     lastBriefing: null as EditorState["lastBriefing"],
@@ -780,6 +788,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       pendingAction: null,
       activeTargetSeconds: null,
       outputFormat: null,
+      reframeMode: "auto",
       pendingExecution: false,
       renderedBlob: null,
       renderedUrl: null,
@@ -1246,6 +1255,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setPendingAction: (p) => set({ pendingAction: p }),
   setActiveTargetSeconds: (seconds) => set({ activeTargetSeconds: seconds }),
   setOutputFormat: (outputFormat) => set({ outputFormat, updatedAt: Date.now() }),
+  setReframeMode: (reframeMode) => set({ reframeMode, updatedAt: Date.now() }),
 
   trimTimelineToTarget: (targetSeconds, strategy = "strongest") => {
     const s = get();
