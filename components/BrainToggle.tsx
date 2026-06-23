@@ -20,8 +20,13 @@ import styles from "./BrainToggle.module.css";
 
 export function BrainToggle() {
   const brain = useAIBrain();
-  // null = still checking; true/false = configured or not.
-  const [cloudReady, setCloudReady] = useState<boolean | null>(null);
+  // Diagnostic from /api/agent/intent status: configured + the specific reason.
+  const [diag, setDiag] = useState<{
+    configured: boolean;
+    cloudEnabled?: boolean;
+    hasProviderKey?: boolean;
+    checked: boolean;
+  }>({ configured: false, checked: false });
 
   useEffect(() => {
     let alive = true;
@@ -31,18 +36,42 @@ export function BrainToggle() {
       body: JSON.stringify({ task: "status" })
     })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { configured?: boolean } | null) => {
-        if (alive) setCloudReady(Boolean(d?.configured));
-      })
+      .then(
+        (d: {
+          configured?: boolean;
+          cloudEnabled?: boolean;
+          hasProviderKey?: boolean;
+        } | null) => {
+          if (!alive) return;
+          setDiag({
+            configured: Boolean(d?.configured),
+            cloudEnabled: d?.cloudEnabled,
+            hasProviderKey: d?.hasProviderKey,
+            checked: true
+          });
+        }
+      )
       .catch(() => {
-        if (alive) setCloudReady(false);
+        if (alive) setDiag({ configured: false, checked: true });
       });
     return () => {
       alive = false;
     };
   }, []);
 
-  const cloudUnconfigured = brain === "cloud" && cloudReady === false;
+  const cloudReady = diag.configured;
+  const cloudUnconfigured = brain === "cloud" && diag.checked && !cloudReady;
+
+  // Specific, actionable reason for the tooltip when not configured.
+  const cloudReason = cloudReady
+    ? "OpenRouter — plan with the cloud model"
+    : !diag.checked
+      ? "Checking OpenRouter availability\u2026"
+      : diag.cloudEnabled === false
+        ? "OpenRouter off: set DISABLE_CLOUD_AI=false in your deploy env and redeploy."
+        : diag.hasProviderKey === false
+          ? "No API key found: set OPENROUTER_API_KEY in your deploy env and redeploy."
+          : "OpenRouter isn\u2019t reachable on this deployment yet (it falls back to Local).";
 
   return (
     <div className={styles.toggle} role="group" aria-label="AI brain">
@@ -51,15 +80,11 @@ export function BrainToggle() {
         className={`${styles.seg} ${brain === "cloud" ? styles.active : ""}`}
         onClick={() => setAIBrain("cloud")}
         aria-pressed={brain === "cloud"}
-        title={
-          cloudReady === true
-            ? "OpenRouter — plan with the cloud model"
-            : "OpenRouter — set OPENROUTER_API_KEY + DISABLE_CLOUD_AI=false to enable. Until then it falls back to Local."
-        }
+        title={cloudReason}
       >
         <Cloud size={12} aria-hidden /> OpenRouter
         {cloudUnconfigured && (
-          <span className={styles.warnDot} aria-hidden title="Not configured yet">
+          <span className={styles.warnDot} aria-hidden title={cloudReason}>
             !
           </span>
         )}

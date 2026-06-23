@@ -23,7 +23,7 @@ import { getIronSession } from "iron-session";
 import { cookies } from "next/headers";
 import { sessionOptions, type SessionData } from "@/lib/session/cookie";
 import { checkAllLimits } from "@/lib/ratelimit";
-import { cloudAiDisabled, hasAnyChatProvider } from "@/lib/env";
+import { cloudAiDisabled, hasAnyChatProvider, serverEnv } from "@/lib/env";
 import { cloudPlannerJson } from "@/lib/providers/cloud";
 import { extractJsonObject } from "@/lib/util/safeJson";
 import { newId } from "@/lib/util/id";
@@ -105,11 +105,21 @@ export async function POST(req: NextRequest) {
   // ---- STATUS ------------------------------------------------------------
   // Cheap, side-effect-free readiness check for the chat brain toggle. It
   // reports whether a cloud provider is CONFIGURED (cloud enabled + a key),
-  // WITHOUT making a model call — so a flaky/rate-limited free model never
-  // makes the toggle falsely show "not configured".
+  // WITHOUT a model call, and the SPECIFIC reason when it isn't — so the
+  // toggle can tell the user exactly what to fix (no key vs cloud disabled).
   if (task === "status") {
-    const configured = !cloudAiDisabled() && hasAnyChatProvider();
-    return NextResponse.json({ configured });
+    const cloudEnabled = !cloudAiDisabled();
+    const hasProviderKey = Boolean(
+      serverEnv.OPENROUTER_API_KEY ||
+        serverEnv.CUSTOM_OPENAI_API_KEY ||
+        serverEnv.GEMINI_API_KEY ||
+        serverEnv.GROQ_API_KEY
+    );
+    return NextResponse.json({
+      configured: cloudEnabled && hasProviderKey,
+      cloudEnabled,
+      hasProviderKey
+    });
   }
 
   // ---- WARMUP ------------------------------------------------------------
