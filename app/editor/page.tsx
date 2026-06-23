@@ -76,6 +76,11 @@ import { LOCAL_LLM } from "@/lib/local-llm/config";
 import { getAIBrain } from "@/lib/ai/brainPreference";
 import { tryConversationalReply } from "@/lib/agent/conversationalReply";
 import { parseFormatCommand, parseSourceControlCommand } from "@/lib/intent/toolCommands";
+import {
+  isBackReference,
+  lastSubstantiveRequest,
+  buildConversationContext
+} from "@/lib/agent/conversationMemory";
 import type {
   AgentRequest,
   AgentResponse,
@@ -1091,6 +1096,27 @@ export default function Home() {
       if (!agentOpts?.silent) pushMessage({ role: "user", content: userRequest });
       const previousPlan = useEditorStore.getState().plan;
 
+      // ---- Conversation memory: resolve a back-reference ----------------
+      // "do what I said before" / "same as before" / "whatever I asked" →
+      // recall the most recent REAL request and plan from THAT, so the user
+      // never has to retype it. Deterministic (works on any brain); runs first
+      // so the rest of the pipeline sees the recalled request.
+      if (!agentOpts?.silent && isBackReference(userRequest)) {
+        const prior = lastSubstantiveRequest(
+          useEditorStore.getState().messages,
+          userRequest
+        );
+        if (prior) {
+          const shown = prior.length > 140 ? `${prior.slice(0, 137)}\u2026` : prior;
+          pushMessage({
+            role: "assistant",
+            content: `Picking up your earlier request: \u201c${shown}\u201d.`
+          });
+          logSession.ai("chat.backref", { prior: prior.slice(0, 120) }, "Re-used the prior request");
+          userRequest = prior;
+        }
+      }
+
       // ---- v2.2 — Quick local scan command (deterministic, LOCAL-only) ----
       // "Run a quick local scan" / "scan this video" / "deeper scan" run a
       // bounded, model-free structural scan (motion + saliency over a few
@@ -1610,7 +1636,10 @@ export default function Home() {
           );
           const local = await tryLocalPlannerFallback(req, {
             videoDurationSeconds: videoMeta?.duration,
-            compiledPrompt: intakeCompiledPrompt
+            compiledPrompt: intakeCompiledPrompt,
+            conversation: buildConversationContext(
+              useEditorStore.getState().messages
+            )
           });
           if (local && local.kind === "plan") {
             logSession.ai(
