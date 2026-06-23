@@ -16,6 +16,7 @@ import {
 } from "@/lib/util/uploadHandoff";
 import { probeVideo, sampleFrames } from "@/lib/pipeline/sample";
 import { sha256Blob } from "@/lib/util/hash";
+import { materializeStableBlob } from "@/lib/util/stableBlob";
 import { friendlyStorageError } from "@/lib/store/idb";
 import styles from "./launch.module.css";
 
@@ -218,8 +219,12 @@ export default function LaunchPage() {
         // v2.1 — hydrateRestoredSource reconnects to a restored project by
         // hash when applicable, otherwise behaves exactly like addSource.
         markStep("ready", "active");
+        // Snapshot the file's bytes into an in-memory blob so preview/render
+        // never throw NotReadableError later if the on-disk file goes stale
+        // (moved/renamed/edited, or the browser drops the handle).
+        const stableBlob = await materializeStableBlob(file!);
         const added = hydrateRestoredSource(
-          file!,
+          stableBlob,
           {
             name: file!.name,
             size: file!.size,

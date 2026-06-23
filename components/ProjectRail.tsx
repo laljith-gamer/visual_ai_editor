@@ -12,6 +12,7 @@ import {
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { safeVideoFingerprint } from "@/lib/util/hash";
 import { probeVideo } from "@/lib/pipeline/sample";
+import { materializeStableBlob } from "@/lib/util/stableBlob";
 import { formatTime } from "@/lib/util/time";
 import { logUser } from "@/lib/log/recorders";
 import { LIBRARY_LIMITS, SOURCE_COLORS } from "@/lib/config";
@@ -73,7 +74,7 @@ export function ProjectRail() {
           .missingSources.find((p) => p.hash === hash);
 
         const added = hydrateRestoredSource(
-          file,
+          await materializeStableBlob(file),
           {
             name: file.name,
             size: file.size,
