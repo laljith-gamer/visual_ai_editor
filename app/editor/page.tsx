@@ -3622,6 +3622,65 @@ export default function Home() {
       0
     );
 
+    // v2.8 — pre-render readability probe. canRenderCurrentTimeline only
+    // checks a source blob is PRESENT, not that its underlying file is still
+    // READABLE. A File handle from the upload input goes stale after a reload
+    // or if the file is moved/renamed/edited on disk, and reading it throws a
+    // NotReadableError deep inside the encoder ("could not be read … permission
+    // problems"). Probe a small slice of each source up front; if it fails,
+    // flag the source for re-upload and ask for a clean re-upload instead of
+    // crashing mid-encode.
+    const probeSources: { id: string; name: string; blob: Blob }[] =
+      sources.length > 0
+        ? (() => {
+            const seen = new Set<string>();
+            const out: { id: string; name: string; blob: Blob }[] = [];
+            for (const h of highlights) {
+              const sid = h.sourceId ?? sources[0].id;
+              if (seen.has(sid)) continue;
+              seen.add(sid);
+              const s = sources.find((x) => x.id === sid);
+              if (s) out.push({ id: s.id, name: s.meta.name, blob: s.blob });
+            }
+            return out;
+          })()
+        : videoBlob
+          ? [{ id: "", name: cur.videoMeta?.name ?? "your video", blob: videoBlob }]
+          : [];
+    const unreadable: { id: string; name: string }[] = [];
+    for (const p of probeSources) {
+      try {
+        await p.blob.slice(0, 65536).arrayBuffer();
+      } catch {
+        unreadable.push({ id: p.id, name: p.name });
+      }
+    }
+    if (unreadable.length > 0) {
+      for (const u of unreadable) {
+        if (u.id) useEditorStore.getState().markSourceUnreadable(u.id);
+      }
+      const names = Array.from(new Set(unreadable.map((u) => u.name))).join(", ");
+      const one = unreadable.length === 1;
+      pushMessage({
+        role: "assistant",
+        content:
+          `I can\u2019t read ${one ? "the source video" : "those source videos"} anymore: ${names}. ` +
+          `The file reference expired \u2014 this happens after a page reload, or if the file was moved, renamed, or edited on disk. ` +
+          `I\u2019ve flagged ${one ? "it" : "them"} for re-upload in the Library \u2014 re-upload the same file${one ? "" : "s"} and I\u2019ll render right away.`
+      });
+      logSession.system(
+        "render.source.unreadable",
+        { names, count: unreadable.length },
+        `Source(s) unreadable before render: ${names.slice(0, 80)}`
+      );
+      setStatus(
+        useEditorStore.getState().canRenderCurrentTimeline() ? "ready" : "needs_review",
+        undefined
+      );
+      setProgress(0);
+      return;
+    }
+
     setBusy(true);
     setStatus("rendering", "Encoding short");
     setProgress(0);
@@ -3687,7 +3746,16 @@ export default function Home() {
         content: `Rendered ${(blob.size / 1024 / 1024).toFixed(1)}MB ${format} short.`
       });
     } catch (err) {
-      const msg = friendlyStorageError(err) ?? (err as Error).message;
+      // A read failure can still surface mid-encode (the probe passed but the
+      // file changed during decode). Map the browser NotReadableError to a
+      // clear, actionable message instead of leaking the raw DOMException.
+      const e = err as { name?: string; message?: string };
+      const readErr =
+        e?.name === "NotReadableError" ||
+        /could not be read|permission problems|NotReadableError/i.test(e?.message ?? "");
+      const msg = readErr
+        ? "I couldn\u2019t read the source video while encoding \u2014 its file reference expired (after a page reload, or the file was moved, renamed, or edited). Re-upload it from the Library and I\u2019ll render again."
+        : friendlyStorageError(err) ?? (err as Error).message;
       pushMessage({
         role: "assistant",
         content: `Render failed: ${msg}`

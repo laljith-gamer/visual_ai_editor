@@ -230,6 +230,11 @@ interface EditorState {
    *  source whose bytes aren't loaded. The render guard reads this. */
   canRenderCurrentTimeline: () => boolean;
   removeSource: (id: string) => void;
+  /** Demote a hydrated source whose blob/file can no longer be read (a stale
+   *  File handle after reload / the file moved/renamed/edited) back to a
+   *  missing placeholder, so the Library prompts a re-upload and a same-hash
+   *  re-upload reconnects the timeline automatically. */
+  markSourceUnreadable: (id: string) => void;
   setActiveSource: (id: string) => void;
   toggleSourceSelection: (id: string) => void;
   setSourceSelection: (ids: string[]) => void;
@@ -695,11 +700,36 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     syncMirrorFields(set, newActive);
   },
 
+  markSourceUnreadable: (id) => {
+    const cur = get();
+    const target = cur.sources.find((s) => s.id === id);
+    if (!target) return;
+    URL.revokeObjectURL(target.url);
+    const sources = cur.sources.filter((s) => s.id !== id);
+    // Re-create the missing placeholder (inverse of hydrateRestoredSource) so
+    // the Library shows Re-upload and a same-hash re-upload reconnects the
+    // existing timeline clips. Highlights + selection are intentionally kept.
+    const placeholder: RestoredSourcePlaceholder = {
+      id: target.id,
+      hash: target.hash,
+      meta: target.meta,
+      addedAt: target.addedAt,
+      missing: true
+    };
+    const missingSources = cur.missingSources.some((p) => p.id === id)
+      ? cur.missingSources
+      : [...cur.missingSources, placeholder];
+    let activeSourceId = cur.activeSourceId;
+    if (activeSourceId === id) activeSourceId = sources[0]?.id ?? null;
+    set({ sources, missingSources, activeSourceId, updatedAt: Date.now() });
+    const newActive = sources.find((s) => s.id === activeSourceId) ?? null;
+    syncMirrorFields(set, newActive);
+  },
+
   setActiveSource: (id) => {
     const cur = get();
     const target = cur.sources.find((s) => s.id === id);
-    if (target) {
-      set({ activeSourceId: id, updatedAt: Date.now() });
+    if (target) {      set({ activeSourceId: id, updatedAt: Date.now() });
       syncMirrorFields(set, target);
       return;
     }
