@@ -73,3 +73,28 @@ test("all videos", () => {
   const r = resolveSource(ref, ctx({ sources: TWO }));
   assert.deepEqual(r.sourceIds, ["a", "b"]);
 });
+
+
+test("multi-source, no ref, user selected ALL → use all, no clarify (no loop)", () => {
+  const r = resolveSource(null, ctx({ sources: TWO, activeSourceId: null, selectedSourceIds: ["a", "b"] }));
+  assert.deepEqual(r.sourceIds, ["a", "b"]);
+  assert.equal(r.needsClarification, false);
+  assert.ok(r.assumptions.length > 0);
+});
+
+test("multi-source, no ref, user selected a SUBSET → use it, no clarify", () => {
+  const r = resolveSource(null, ctx({ sources: TWO, activeSourceId: null, selectedSourceIds: ["b"] }));
+  assert.deepEqual(r.sourceIds, ["b"]);
+  assert.equal(r.needsClarification, false);
+});
+
+test("selection takes precedence over a stale active when nothing is named", () => {
+  const r = resolveSource(null, ctx({ sources: TWO, activeSourceId: "a", selectedSourceIds: ["a", "b"] }));
+  assert.deepEqual(r.sourceIds, ["a", "b"]);
+  assert.equal(r.needsClarification, false);
+});
+
+test("selection with ids no longer present is ignored (falls back to clarify)", () => {
+  const r = resolveSource(null, ctx({ sources: TWO, activeSourceId: null, selectedSourceIds: ["gone"] }));
+  assert.equal(r.needsClarification, true);
+});

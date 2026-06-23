@@ -192,7 +192,14 @@ export async function tryAgentCommand(
     deps.logSession.ai("agent.format", { format: formatCmd.format }, `Output format → ${formatCmd.format}`);
     return handleFormatCommand(formatCmd.format, deps);
   }
-  const sourceCmd = parseSourceControlCommand(userText);
+  // Gate source-control parsing while a clarify is pending. Otherwise a
+  // bare "both" / "all" reply to "Which video should I use?" gets eaten as a
+  // selection toggle and the clarify never resolves (the "Which video?" loop).
+  // When a clarify is pending we let the turn fall through to the editor's
+  // pending-answer resolver, which knows how to map "both"/"all" to sources.
+  const sourceCmd = useEditorStore.getState().pendingClarify
+    ? null
+    : parseSourceControlCommand(userText);
   if (sourceCmd) {
     deps.logSession.ai("agent.source", { kind: sourceCmd.kind }, `Source command: ${sourceCmd.kind}`);
     return handleSourceCommand(sourceCmd, deps);

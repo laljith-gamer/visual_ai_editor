@@ -98,6 +98,20 @@ export function parseSourceControlCommand(text: string): ToolCommand | null {
     }
   }
 
+  // A CREATE / COMPOSE request that merely mentions videos is NOT a pure
+  // source-selection command. "pick best scenes in both videos and make a 30s
+  // short" must go to the planner/compose (which fans across the selected
+  // videos), not just toggle the selection and stop. Checked AFTER the
+  // active-switch above so "make video 2 active" still works.
+  if (
+    /\b(make|create|build|generate|produce|combine\w*|merg\w*|compose|montage|stitch|render|export|highlight\w*)\b/.test(t) ||
+    /\b(reel|short|shorts|montage|clip)\s+(?:of|from|combining|out of)\b/.test(t) ||
+    /\d+\s*(?:sec|secs|second|seconds|min|mins|minute|minutes)\b/.test(t) ||
+    /\bbest\s+(?:scenes?|moments?|parts?|bits?|clips?)\b/.test(t)
+  ) {
+    return null;
+  }
+
   // Selection for the AI run.
   const wantsOnly = /\b(only|just|nothing but)\b/.test(t);
   const wantsInclude = /\b(also|include|add|plus|too)\b/.test(t);

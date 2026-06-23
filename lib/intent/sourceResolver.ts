@@ -10,6 +10,8 @@
  *
  *       1. One video uploaded + no named source → assume that video.
  *       2. Multiple videos + named source → use it.
+ *       2b. Multiple videos, no named source, but the user has selected
+ *           videos in the Library → honor that selection (no clarify).
  *       3. Multiple videos + unnamed but a high-confidence active /
  *          last-used source → use it (surfaced as an assumption).
  *       4. Otherwise → needsClarification.
@@ -183,6 +185,32 @@ export function resolveSource(
   // Rule 1: exactly one video → assume it, no clarification needed.
   if (sources.length === 1) {
     return { sourceIds: [sources[0].id], confidence: 0.92, assumptions: [], needsClarification: false };
+  }
+
+  // Rule 2: the user has ALREADY chosen which videos the AI should use via
+  // the Library selection. That explicit choice IS the answer — honor it
+  // instead of asking "Which video?" (the source of the clarify loop). Only
+  // count still-present sources. A strict subset is surfaced as an
+  // assumption; selecting everything is the natural multi-video default.
+  const selected = ctx.selectedSourceIds.filter((id) => sources.some((s) => s.id === id));
+  if (selected.length >= 1) {
+    if (selected.length === sources.length) {
+      return {
+        sourceIds: selected,
+        confidence: 0.85,
+        assumptions:
+          selected.length > 1 ? [`Using all ${selected.length} videos you've selected.`] : [],
+        needsClarification: false
+      };
+    }
+    return {
+      sourceIds: selected,
+      confidence: 0.82,
+      assumptions: [
+        `Using the ${selected.length} video${selected.length === 1 ? "" : "s"} you selected for AI.`
+      ],
+      needsClarification: false
+    };
   }
 
   // Rule 3: multiple videos, no name → lean on active / last-used, but

@@ -55,3 +55,21 @@ test("source: ignores plain content / edit requests", () => {
   assert.equal(parseSourceControlCommand("trim the first 5 seconds"), null);
   assert.equal(parseSourceControlCommand("hi"), null);
 });
+
+
+test("source: a CREATE/COMPOSE request mentioning videos is NOT hijacked (falls to planner)", () => {
+  // The reported regression: this used to just toggle the selection and stop
+  // instead of building the short. It must return null so the planner/compose
+  // path runs.
+  assert.equal(parseSourceControlCommand("pick best scenes in both video and make a 30 sec shorts combines"), null);
+  assert.equal(parseSourceControlCommand("combine both videos into a 30s reel"), null);
+  assert.equal(parseSourceControlCommand("merge all videos into a highlight reel"), null);
+  assert.equal(parseSourceControlCommand("make a montage from all videos"), null);
+  assert.equal(parseSourceControlCommand("best moments from both videos"), null);
+});
+
+test("source: plain selection still works after the create/compose guard", () => {
+  assert.equal(parseSourceControlCommand("use all videos")?.kind, "select_all_sources");
+  assert.equal(parseSourceControlCommand("use only video 2")?.kind, "select_only");
+  assert.equal(parseSourceControlCommand("switch to video 2")?.kind, "switch_active");
+});
