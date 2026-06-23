@@ -43,6 +43,7 @@ import {
   parseSourceControlCommand,
   type ToolCommand
 } from "@/lib/intent/toolCommands";
+import { parseReframeIntent, type ReframeIntent } from "@/lib/intent/reframeCommand";
 import { classifyTurnSync, respondReadOnlySync } from "@/lib/agent/conversationLane";
 import { mapTransition } from "@/lib/transitions/map";
 import { normalizeTransitionDuration, type BoundaryTransition } from "@/lib/transitions/types";
@@ -195,6 +196,13 @@ export async function tryAgentCommand(
   if (sourceCmd) {
     deps.logSession.ai("agent.source", { kind: sourceCmd.kind }, `Source command: ${sourceCmd.kind}`);
     return handleSourceCommand(sourceCmd, deps);
+  }
+
+  // ---- Reframe / framing talk (acknowledge; reframe is automatic) ---
+  const reframe = parseReframeIntent(userText);
+  if (reframe) {
+    deps.logSession.ai("agent.reframe", { wants: reframe.wants }, `Reframe intent: ${reframe.wants}`);
+    return handleReframeCommand(reframe, deps);
   }
 
   const memory = getAgentMemory(deps.sessionId);
@@ -570,6 +578,17 @@ function handleSourceCommand(cmd: ToolCommand, deps: AgentCommandDeps): AgentCom
     default:
       return { handled: false };
   }
+}
+
+/** Acknowledge framing/reframe intent. Smart-reframe is automatic, so this
+ *  reassures (dynamic) or is honest about the lack of a locked-center toggle. */
+function handleReframeCommand(intent: ReframeIntent, deps: AgentCommandDeps): AgentCommandOutcome {
+  const content =
+    intent.wants === "center"
+      ? "Right now vertical/square shorts auto-reframe to follow the action and only sit center when the shot is flat \u2014 a hard locked-center mode isn't a per-edit toggle yet. Want me to keep the dynamic reframe and build the short?"
+      : "Dynamic reframe is already on: for vertical/square output the crop follows each clip's motion/subject (and only centers when the frame is flat), blended by confidence \u2014 so your short won't be fixed-center. Tell me what to clip (e.g. \u201cthe fight + cutscenes, 3 min\u201d) and I'll build it.";
+  deps.pushMessage({ role: "assistant", content, attachment: { mode: "agent", kind: "reframe" } });
+  return { handled: true };
 }
 
 interface ApplyResult {

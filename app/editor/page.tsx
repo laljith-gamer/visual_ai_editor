@@ -76,6 +76,7 @@ import { LOCAL_LLM } from "@/lib/local-llm/config";
 import { getAIBrain } from "@/lib/ai/brainPreference";
 import { tryConversationalReply } from "@/lib/agent/conversationalReply";
 import { parseFormatCommand, parseSourceControlCommand } from "@/lib/intent/toolCommands";
+import { parseReframeIntent } from "@/lib/intent/reframeCommand";
 import {
   isBackReference,
   lastSubstantiveRequest,
@@ -1306,7 +1307,8 @@ export default function Home() {
           !st.pendingClarify &&
           !st.pendingExecution &&
           !parseFormatCommand(userRequest) &&
-          !parseSourceControlCommand(userRequest)
+          !parseSourceControlCommand(userRequest) &&
+          !parseReframeIntent(userRequest)
         ) {
           const chat = await tryConversationalReply(userRequest);
           if (chat) {
