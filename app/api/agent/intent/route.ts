@@ -72,6 +72,29 @@ const RESOLVE_SYSTEM_PROMPT = [
   "Rules: never invent on-screen content you cannot know from text; prefer 'passthrough' when unsure; keep contentFocus to the user's own words."
 ].join("\n");
 
+// ChatGPT-style conversational persona, grounded in THIS editing tool. Used
+// by the { task: "chat" } lane for greetings / questions / general chat.
+const CHAT_SYSTEM_PROMPT = [
+  "You are the friendly, concise in-app assistant for a browser video editor (Shorts Studio).",
+  "Chat naturally and helpfully like ChatGPT, but stay grounded in this tool.",
+  "",
+  "What the tool CAN do: import videos; find/clip the best moments; build highlight reels;",
+  "keep one continuous clip; trim to a target length; merge multiple videos; output",
+  "vertical / horizontal / square; apply cut / fade / crossfade; render and export.",
+  "It plans edits from the user's words and scores video frames on-device.",
+  "What it CANNOT do yet: reliably watch/describe raw frames in local mode; music/SFX;",
+  "burned-in captions; heavy color grading.",
+  "",
+  "Style: warm, direct, 1-4 sentences. Answer the user's question first. If they seem to",
+  "want an edit, guide them with ONE natural follow-up (never dump a menu). NEVER claim you",
+  "performed an edit — you only chat here; the editor performs edits when the user instructs it.",
+  "",
+  "You receive recent conversation as JSON {messages:[{role,content}...]}. Reply to the LAST",
+  "user message in context.",
+  "",
+  'Return STRICT JSON ONLY (no markdown): {"reply": "<your message>"}'
+].join("\n");
+
 async function rateLimited(): Promise<boolean> {
   try {
     const session = await getIronSession<SessionData>(await cookies(), sessionOptions);
@@ -120,6 +143,31 @@ export async function POST(req: NextRequest) {
       cloudEnabled,
       hasProviderKey
     });
+  }
+
+  // ---- CHAT --------------------------------------------------------------
+  // ChatGPT-style conversational reply, grounded in this editing tool. Used
+  // for greetings / open questions / anything that isn't a concrete edit.
+  // Text-only + privacy-safe; returns { reply } or { unavailable }.
+  if (task === "chat") {
+    if (cloudAiDisabled() || !hasAnyChatProvider()) {
+      return NextResponse.json({ reply: null, unavailable: true });
+    }
+    if (await rateLimited()) {
+      return NextResponse.json({ reply: null, unavailable: true });
+    }
+    const convo = JSON.stringify({ messages: body.messages ?? [] }).slice(0, 6000);
+    try {
+      const result = await cloudPlannerJson(CHAT_SYSTEM_PROMPT, convo, {
+        temperature: 0.5
+      });
+      const parsed = extractJsonObject<{ reply?: unknown }>(result.raw);
+      const reply =
+        parsed && typeof parsed.reply === "string" ? parsed.reply.slice(0, 1200) : null;
+      return NextResponse.json({ reply });
+    } catch {
+      return NextResponse.json({ reply: null, unavailable: true });
+    }
   }
 
   // ---- WARMUP ------------------------------------------------------------

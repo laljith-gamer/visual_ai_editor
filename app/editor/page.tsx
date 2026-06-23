@@ -74,6 +74,8 @@ import { summarizeRecentActivity } from "@/lib/log/summarize";
 import { useBriefingActions } from "@/hooks/useBriefingActions";
 import { LOCAL_LLM } from "@/lib/local-llm/config";
 import { getAIBrain } from "@/lib/ai/brainPreference";
+import { tryConversationalReply } from "@/lib/agent/conversationalReply";
+import { parseFormatCommand, parseSourceControlCommand } from "@/lib/intent/toolCommands";
 import type {
   AgentRequest,
   AgentResponse,
@@ -1264,6 +1266,35 @@ export default function Home() {
           );
           setBusy(false);
           return;
+        }
+
+        // ---- Conversational lane (ChatGPT-style, tool-aware) ----------
+        // Greetings / open questions / anything that isn't a concrete edit
+        // get a NATURAL reply from the selected brain instead of the rigid
+        // "What should I make?". Only fires when an LLM is actually available
+        // (OpenRouter configured, or WebLLM already loaded) — so when there's
+        // no model the deterministic flow below is unchanged. Never mutates.
+        const st = useEditorStore.getState();
+        if (
+          intent.kind === "unknown" &&
+          !st.pendingClarify &&
+          !st.pendingExecution &&
+          !parseFormatCommand(userRequest) &&
+          !parseSourceControlCommand(userRequest)
+        ) {
+          const chat = await tryConversationalReply(userRequest);
+          if (chat) {
+            pushMessage({ role: "assistant", content: chat.text });
+            logSession.ai(
+              "chat.reply",
+              { brain: chat.brain },
+              chat.text.slice(0, 140)
+            );
+            setStatus(st.highlights.length > 0 ? "ready" : "idle", undefined);
+            setProgress(0);
+            setBusy(false);
+            return;
+          }
         }
       } catch (err) {
         logSession.system(
@@ -3430,7 +3461,7 @@ export default function Home() {
 
     // Derive render parameters from the plan when available, otherwise
     // sensible defaults so paths like "just merge the videos" work.
-    const format: "vertical" | "horizontal" | "square" = plan?.format ?? (() => {
+    const format: "vertical" | "horizontal" | "square" = cur.outputFormat ?? plan?.format ?? (() => {
       const meta = sources[0]?.meta ?? cur.videoMeta;
       if (!meta) return "horizontal";
       const aspect = meta.width / Math.max(1, meta.height);

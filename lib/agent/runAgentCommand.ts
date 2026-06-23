@@ -23,7 +23,7 @@
 import { useEditorStore } from "@/hooks/useEditorStore";
 import type { Highlight, JobStatus } from "@/lib/types";
 import type { Transcript } from "@/lib/audio/types";
-import type { AgentCommandContext } from "@/lib/intent/command";
+import type { AgentCommandContext, SourceRef } from "@/lib/intent/command";
 import { AgentMemoryStore } from "@/lib/agent-memory/store";
 import {
   addClipRef,
@@ -38,6 +38,11 @@ import { orchestrate, type AgentDecision, type ResolvedOp } from "./orchestrator
 import { classifyFastCommand, decideFastAction, type FastCommand } from "@/lib/intent/fastCommands";
 import { hydrateAgentMemory, saveAgentMemory } from "@/lib/agent-memory/persistence";
 import { parseTransitionCommand, type TransitionCommand } from "@/lib/intent/transitionCommands";
+import {
+  parseFormatCommand,
+  parseSourceControlCommand,
+  type ToolCommand
+} from "@/lib/intent/toolCommands";
 import { classifyTurnSync, respondReadOnlySync } from "@/lib/agent/conversationLane";
 import { mapTransition } from "@/lib/transitions/map";
 import { normalizeTransitionDuration, type BoundaryTransition } from "@/lib/transitions/types";
@@ -178,6 +183,18 @@ export async function tryAgentCommand(
   if (transitionCmd) {
     deps.logSession.ai("agent.transition", { kind: transitionCmd.kind }, `Transition command: ${transitionCmd.kind}`);
     return handleTransitionCommand(transitionCmd, deps);
+  }
+
+  // ---- Tool commands: output format + library/source control --------
+  const formatCmd = parseFormatCommand(userText);
+  if (formatCmd) {
+    deps.logSession.ai("agent.format", { format: formatCmd.format }, `Output format → ${formatCmd.format}`);
+    return handleFormatCommand(formatCmd.format, deps);
+  }
+  const sourceCmd = parseSourceControlCommand(userText);
+  if (sourceCmd) {
+    deps.logSession.ai("agent.source", { kind: sourceCmd.kind }, `Source command: ${sourceCmd.kind}`);
+    return handleSourceCommand(sourceCmd, deps);
   }
 
   const memory = getAgentMemory(deps.sessionId);
@@ -458,6 +475,101 @@ function summarizeBoundaries(deps: AgentCommandDeps, cmd: TransitionCommand): st
     });
 
   return [header, ...lines].join("\n");
+}
+
+// ---------------------------------------------------------------------
+// Tool commands: output format + library/source control
+// ---------------------------------------------------------------------
+
+/** Set the output aspect override (read by the renderer over plan.format). */
+function handleFormatCommand(
+  format: "vertical" | "horizontal" | "square",
+  deps: AgentCommandDeps
+): AgentCommandOutcome {
+  const store = useEditorStore.getState();
+  store.setOutputFormat(format);
+  const label =
+    format === "vertical"
+      ? "vertical (9:16)"
+      : format === "horizontal"
+        ? "horizontal (16:9)"
+        : "square (1:1)";
+  const tail =
+    store.highlights.length > 0
+      ? " I'll use it on the next render."
+      : " I'll use it once there are clips to render.";
+  deps.pushMessage({
+    role: "assistant",
+    content: `Output aspect set to ${label}.${tail}`,
+    attachment: { mode: "agent", kind: "format" }
+  });
+  return { handled: true };
+}
+
+/** Apply a library/source-control command (which videos the AI uses, and
+ *  which is active in the preview) to the store. */
+function handleSourceCommand(cmd: ToolCommand, deps: AgentCommandDeps): AgentCommandOutcome {
+  const store = useEditorStore.getState();
+  const sources = store.sources;
+  const say = (content: string): AgentCommandOutcome => {
+    deps.pushMessage({ role: "assistant", content, attachment: { mode: "agent", kind: "library" } });
+    return { handled: true };
+  };
+
+  if (sources.length === 0) {
+    return say("Upload a video first, then I can choose which one to use.");
+  }
+
+  const nameOf = (id: string) => sources.find((s) => s.id === id)?.meta.name ?? "that video";
+  const resolveRef = (ref: SourceRef): { id: string } | { error: string } => {
+    if (ref.kind === "index") {
+      const src = sources[ref.index];
+      return src
+        ? { id: src.id }
+        : { error: `There's no video ${ref.index + 1} — you have ${sources.length}.` };
+    }
+    if (ref.kind === "name_hint") {
+      const m = sources.filter((s) => s.meta.name.toLowerCase().includes(ref.hint));
+      if (m.length === 1) return { id: m[0].id };
+      return {
+        error:
+          m.length === 0
+            ? `No video matches "${ref.hint}".`
+            : `More than one video matches "${ref.hint}" — say "video 1", "video 2", …`
+      };
+    }
+    return { error: 'Tell me which video — e.g. "video 2".' };
+  };
+
+  switch (cmd.kind) {
+    case "select_all_sources":
+      store.selectAllSources();
+      return say(`Using all ${sources.length} videos for the next AI run.`);
+    case "select_active_only":
+      store.selectActiveOnlySource();
+      return say("Using only the active video for the next AI run.");
+    case "select_only": {
+      const r = resolveRef(cmd.ref);
+      if ("error" in r) return say(r.error);
+      store.setSourceSelection([r.id]);
+      return say(`Using only "${nameOf(r.id)}" for the next AI run.`);
+    }
+    case "select_include": {
+      const r = resolveRef(cmd.ref);
+      if ("error" in r) return say(r.error);
+      const next = Array.from(new Set([...store.selectedSourceIds, r.id]));
+      store.setSourceSelection(next);
+      return say(`Added "${nameOf(r.id)}" — ${next.length} video${next.length === 1 ? "" : "s"} selected for AI.`);
+    }
+    case "switch_active": {
+      const r = resolveRef(cmd.ref);
+      if ("error" in r) return say(r.error);
+      store.setActiveSource(r.id);
+      return say(`Switched the preview to "${nameOf(r.id)}".`);
+    }
+    default:
+      return { handled: false };
+  }
 }
 
 interface ApplyResult {
