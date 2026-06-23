@@ -4,26 +4,25 @@
 // components/BrainToggle.tsx
 //
 // A small segmented control in the chat header to choose the AI brain:
-//   Kiro (cloud Claude)  ↔  Local (on-device WebLLM)
+//   OpenRouter (cloud)  ↔  Local (on-device WebLLM)
 //
-// "Kiro" is only selectable when the server reports a cloud provider is
-// configured (a /api/agent/intent warmup returns {status:"ready"} — which
-// requires DISABLE_CLOUD_AI=false + an API key). Otherwise it is shown
-// disabled with a tooltip explaining how to enable it, and the choice falls
-// back to Local. The planner reads the choice from lib/ai/brainPreference.
+// BOTH options are always selectable — the user is never blocked from
+// toggling. We probe /api/agent/intent (warmup) only to show a hint when
+// OpenRouter isn't configured yet; if it's selected but unreachable, the
+// planner falls back to on-device and says so. The choice is read by the
+// planner from lib/ai/brainPreference.
 // =====================================================================
 
 import { useEffect, useState } from "react";
 import { Cloud, Cpu } from "lucide-react";
-import { getAIBrain, setAIBrain, useAIBrain } from "@/lib/ai/brainPreference";
+import { setAIBrain, useAIBrain } from "@/lib/ai/brainPreference";
 import styles from "./BrainToggle.module.css";
 
 export function BrainToggle() {
   const brain = useAIBrain();
-  const [cloudReady, setCloudReady] = useState(false);
+  // null = still checking; true/false = configured or not.
+  const [cloudReady, setCloudReady] = useState<boolean | null>(null);
 
-  // Detect whether a cloud brain is actually configured on this deployment.
-  // The warmup is cheap and returns "ready" only when a provider + key exist.
   useEffect(() => {
     let alive = true;
     fetch("/api/agent/intent", {
@@ -36,33 +35,34 @@ export function BrainToggle() {
         if (alive) setCloudReady(d?.status === "ready");
       })
       .catch(() => {
-        /* offline / no provider → stays local-only */
+        if (alive) setCloudReady(false);
       });
     return () => {
       alive = false;
     };
   }, []);
 
-  // If cloud was selected but isn't (or is no longer) available, fall back.
-  useEffect(() => {
-    if (!cloudReady && getAIBrain() === "cloud") setAIBrain("local");
-  }, [cloudReady]);
+  const cloudUnconfigured = brain === "cloud" && cloudReady === false;
 
   return (
     <div className={styles.toggle} role="group" aria-label="AI brain">
       <button
         type="button"
         className={`${styles.seg} ${brain === "cloud" ? styles.active : ""}`}
-        onClick={() => cloudReady && setAIBrain("cloud")}
-        disabled={!cloudReady}
+        onClick={() => setAIBrain("cloud")}
         aria-pressed={brain === "cloud"}
         title={
-          cloudReady
-            ? "Kiro — plan with the cloud model (Claude)"
-            : "Kiro is unavailable here. Set your API key and DISABLE_CLOUD_AI=false to enable."
+          cloudReady === true
+            ? "OpenRouter — plan with the cloud model"
+            : "OpenRouter — set OPENROUTER_API_KEY + DISABLE_CLOUD_AI=false to enable. Until then it falls back to Local."
         }
       >
-        <Cloud size={12} aria-hidden /> Kiro
+        <Cloud size={12} aria-hidden /> OpenRouter
+        {cloudUnconfigured && (
+          <span className={styles.warnDot} aria-hidden title="Not configured yet">
+            !
+          </span>
+        )}
       </button>
       <button
         type="button"

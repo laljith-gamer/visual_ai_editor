@@ -1763,7 +1763,7 @@ export default function Home() {
         };
 
         if (useCloud) {
-          setStatus("planning", "Asking Kiro\u2026");
+          setStatus("planning", "Asking OpenRouter\u2026");
           const cloud = await runCloudBrain();
           if (cloud) {
             data = cloud;
@@ -1772,7 +1772,7 @@ export default function Home() {
             pushMessage({
               role: "assistant",
               content:
-                "Kiro (cloud) wasn\u2019t reachable, so I planned this on your device instead."
+                "OpenRouter wasn\u2019t reachable, so I planned this on your device instead."
             });
             const local = await runLocalBrain();
             if (local === "handled") return;
