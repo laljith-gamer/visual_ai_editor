@@ -28,11 +28,11 @@ export function BrainToggle() {
     fetch("/api/agent/intent", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task: "warmup" })
+      body: JSON.stringify({ task: "status" })
     })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { status?: string } | null) => {
-        if (alive) setCloudReady(d?.status === "ready");
+      .then((d: { configured?: boolean } | null) => {
+        if (alive) setCloudReady(Boolean(d?.configured));
       })
       .catch(() => {
         if (alive) setCloudReady(false);

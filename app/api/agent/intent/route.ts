@@ -102,6 +102,16 @@ export async function POST(req: NextRequest) {
 
   const task = typeof body.task === "string" ? body.task : "";
 
+  // ---- STATUS ------------------------------------------------------------
+  // Cheap, side-effect-free readiness check for the chat brain toggle. It
+  // reports whether a cloud provider is CONFIGURED (cloud enabled + a key),
+  // WITHOUT making a model call — so a flaky/rate-limited free model never
+  // makes the toggle falsely show "not configured".
+  if (task === "status") {
+    const configured = !cloudAiDisabled() && hasAnyChatProvider();
+    return NextResponse.json({ configured });
+  }
+
   // ---- WARMUP ------------------------------------------------------------
   if (task === "warmup") {
     if (cloudAiDisabled() || !hasAnyChatProvider()) {
