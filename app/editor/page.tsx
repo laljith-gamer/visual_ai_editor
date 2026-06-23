@@ -73,6 +73,7 @@ import { logAi, logSystem, logUser } from "@/lib/log/recorders";
 import { summarizeRecentActivity } from "@/lib/log/summarize";
 import { useBriefingActions } from "@/hooks/useBriefingActions";
 import { LOCAL_LLM } from "@/lib/local-llm/config";
+import { getAIBrain } from "@/lib/ai/brainPreference";
 import type {
   AgentRequest,
   AgentResponse,
@@ -1725,53 +1726,89 @@ export default function Home() {
             : undefined
         };
         const t0 = Date.now();
-        // ---- ON-DEVICE BRAIN FIRST (WebLLM + deterministic net) ----------
-        // WebLLM is the primary and only planner. We plan the turn on-device
-        // before any network call so the result reflects real on-device
-        // reasoning — not a server keyword synthesis. When the browser lacks
-        // WebGPU, the same path returns a deterministic plan (the user's
-        // stated focus + motion/saliency), so planning still works offline.
-        let data: AgentResponse;
-        const localOutcome = await tryLocalPlannerRecovery(userRequest);
-        const plannerMs = Date.now() - t0;
-        if (localOutcome.outcome === "planned") {
-          data = localOutcome.response;
-        } else if (localOutcome.outcome === "handled") {
-          // The on-device path already messaged the user (e.g. a vision ask).
-          return;
-        } else if (!LOCAL_LLM.localOnly) {
-          // Legacy network planner — ONLY when the build is explicitly not
-          // local-only. Off by default; kept behind the flag for self-hosters
-          // who opt back into a server planner.
-          const planResp = await fetch("/api/agent", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(reqBody)
-          });
-          data = (await planResp.json().catch(() => ({}))) as AgentResponse;
-          if (!planResp.ok || data.mode === "error") {
-            const err =
-              data.mode === "error"
-                ? data.error
-                : `Planner returned ${planResp.status}`;
-            pushMessage({ role: "assistant", content: err });
-            setStatus("failed", err);
-            setProgress(0);
-            return;
+        // ---- BRAIN ROUTER: Kiro (cloud) vs Local (WebLLM) ----------------
+        // The chat toggle (lib/ai/brainPreference) chooses which brain plans
+        // this turn. "cloud" asks the configured Kiro/Claude model first and
+        // falls back to the on-device planner if the network fails; "local"
+        // plans on-device (WebLLM + deterministic net) and never calls out.
+        const useCloud = getAIBrain() === "cloud";
+        let data: AgentResponse | null = null;
+
+        // Local brain → returns the plan response, "handled" (it already
+        // replied to the user), or null (nothing actionable). Returns rather
+        // than capturing `data` so `data` stays narrowable after the guard.
+        const runLocalBrain = async (): Promise<
+          AgentResponse | "handled" | null
+        > => {
+          const local = await tryLocalPlannerRecovery(userRequest);
+          if (local.outcome === "planned") return local.response;
+          if (local.outcome === "handled") return "handled";
+          return null;
+        };
+
+        // Cloud brain (Kiro) → returns the plan response, or null on failure.
+        const runCloudBrain = async (): Promise<AgentResponse | null> => {
+          try {
+            const planResp = await fetch("/api/agent", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(reqBody)
+            });
+            const d = (await planResp.json().catch(() => ({}))) as AgentResponse;
+            if (!planResp.ok || d.mode === "error") return null;
+            return d;
+          } catch {
+            return null;
+          }
+        };
+
+        if (useCloud) {
+          setStatus("planning", "Asking Kiro\u2026");
+          const cloud = await runCloudBrain();
+          if (cloud) {
+            data = cloud;
+          } else {
+            // Cloud failed/unreachable — keep the turn alive on-device.
+            pushMessage({
+              role: "assistant",
+              content:
+                "Kiro (cloud) wasn\u2019t reachable, so I planned this on your device instead."
+            });
+            const local = await runLocalBrain();
+            if (local === "handled") return;
+            if (local) data = local;
           }
         } else {
-          // Local-only, and there was nothing actionable to plan from this
-          // turn. Ask one short question instead of guessing. (The intake
-          // layer already shepherds most vague turns before this point.)
+          const local = await runLocalBrain();
+          if (local === "handled") return;
+          if (local) data = local;
+        }
+        const plannerMs = Date.now() - t0;
+
+        if (!data) {
+          // Nothing produced a plan (e.g. nothing actionable to act on yet,
+          // and no cloud configured). Ask one short question instead of
+          // guessing. The intake layer handles most vague turns before here.
           pushMessage({
             role: "assistant",
             content:
-              "Tell me what to make \u2014 e.g. \u201ca 30s highlights reel\u201d or \u201cthe fight scenes\u201d \u2014 and I\u2019ll plan it on your device."
+              "Tell me what to make \u2014 e.g. \u201ca 30s highlights reel\u201d or \u201cthe fight scenes\u201d \u2014 and I\u2019ll plan it."
           });
           setStatus(
             useEditorStore.getState().highlights.length > 0 ? "ready" : "idle",
             undefined
           );
+          setProgress(0);
+          return;
+        }
+
+        // Defensive: an explicit error-mode response (only possible via the
+        // cloud brain) is surfaced and stops here. This also narrows `data`
+        // to the non-error variants for all the handling below.
+        if (data.mode === "error") {
+          const err = data.error;
+          pushMessage({ role: "assistant", content: err });
+          setStatus("failed", err);
           setProgress(0);
           return;
         }

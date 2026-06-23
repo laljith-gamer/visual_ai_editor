@@ -17,7 +17,7 @@ import { useEditorStore } from "@/hooks/useEditorStore";
 import { useShare } from "@/hooks/useShare";
 import { CapabilityBadge } from "./CapabilityBadge";
 import { AIModeBadge } from "./AIModeBadge";
-import { ChatBrainBadge } from "./ChatBrainBadge";
+import { BrainToggle } from "./BrainToggle";
 import { PlanPreview } from "./PlanPreview";
 import { BriefingCard } from "./BriefingCard";
 import { logUser } from "@/lib/log/recorders";
@@ -191,7 +191,7 @@ export function AssistantPanel({
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <ChatBrainBadge />
+          <BrainToggle />
           <AIModeBadge />
           <CapabilityBadge />
         </div>
