@@ -244,6 +244,52 @@ function clampDuration(secs: number): number {
   return Math.min(DURATION_BOUNDS.max, Math.max(DURATION_BOUNDS.min, Math.round(secs)));
 }
 
+/**
+ * Group ADJACENT content words into phrases instead of splitting every word
+ * into its own search subject. This is the GENERIC anti-soup rule: a maximal
+ * run of consecutive content tokens is one phrase; a "break" token (function
+ * word, number, generic editing/quality vocab, or conversational filler)
+ * ends the current phrase. So "black myth wukong tiger vanguard fight" stays
+ * ONE phrase rather than six.
+ *
+ * It reuses the SAME predicates the interpreter already uses (STOPWORDS,
+ * WORD_NUMBERS, GENERIC_EDIT_VOCAB, META_FOLLOWUP) — there is deliberately NO
+ * genre/entity/command table here.
+ */
+function buildSubjectPhrases(stripped: string): string[] {
+  const phrases: string[] = [];
+  const seen = new Set<string>();
+  let cur: string[] = [];
+
+  const flush = () => {
+    if (cur.length === 0) return;
+    const phrase = cur.slice(0, 6).join(" ");
+    if (phrase && !seen.has(phrase)) {
+      seen.add(phrase);
+      phrases.push(phrase);
+    }
+    cur = [];
+  };
+
+  for (const rawWord of stripped.split(/\s+/)) {
+    const w0 = rawWord.trim();
+    if (!w0) continue;
+    const w = TYPO_FIXES[w0] ?? w0;
+    const isBreak =
+      w.length < 2 ||
+      STOPWORDS.has(w) ||
+      w in WORD_NUMBERS ||
+      GENERIC_EDIT_VOCAB.has(w) ||
+      META_FOLLOWUP.has(w);
+    if (isBreak) flush();
+    else cur.push(w);
+  }
+  flush();
+
+  // Cap so the "Looking for" list stays readable; source order preserved.
+  return phrases.slice(0, 4);
+}
+
 function detectFormat(text: string): ActionableIntent["format"] {
   const t = text.toLowerCase();
   if (/\b(horizontal|landscape|widescreen|16:9)\b/.test(t)) return "horizontal";
@@ -318,6 +364,12 @@ export function deriveActionableIntent(
 
   // Build clean, display-ready scenario labels + a focus phrase. We NEVER
   // surface the user's raw text here.
+  //
+  // CRITICAL (generic, no hardcoding): group ADJACENT content words into
+  // PHRASES instead of one search per word. "black myth wukong tiger vanguard
+  // fight" is ONE scenario, not six. Phrase boundaries use the same generic
+  // predicates as above — no genre/keyword/command table.
+  const phrases = buildSubjectPhrases(stripped);
   let focus: string | null = null;
   const scenarioLabels: string[] = [];
 
@@ -326,17 +378,17 @@ export function deriveActionableIntent(
     // (semantic = 0); the scenario label is for DISPLAY only. No subject words.
     focus = "best moments";
     scenarioLabels.push("visually rich moments");
-  } else if (subjectTokens.length > 0) {
+  } else if (phrases.length > 0) {
     if (exclusiveOnly) {
-      const joined = subjectTokens.join(" ");
+      const joined = phrases.join(" ");
       focus = `${joined}-only moments`;
       scenarioLabels.push(`${joined}-only moments`);
-    } else if (subjectTokens.length === 1) {
-      focus = `${subjectTokens[0]} moments`;
-      scenarioLabels.push(`${subjectTokens[0]} moments`);
+    } else if (phrases.length === 1) {
+      focus = `${phrases[0]} moments`;
+      scenarioLabels.push(`${phrases[0]} moments`);
     } else {
-      focus = `${subjectTokens.join(" and ")} moments`;
-      for (const t of subjectTokens) scenarioLabels.push(`${t} moments`);
+      focus = `${phrases.join(" and ")} moments`;
+      for (const p of phrases) scenarioLabels.push(`${p} moments`);
     }
   }
 

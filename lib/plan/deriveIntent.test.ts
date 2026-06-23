@@ -298,3 +298,36 @@ test("'then create' never becomes a 'then' search (continuation safety net)", ()
   const msg = actionableIntentMessage(i, true);
   assert.ok(!/\bthen\b/i.test(msg), msg);
 });
+
+
+test("multi-word title stays ONE phrase, not per-word soup", () => {
+  const i = deriveActionableIntent(
+    "this is black myth wukong tiger vanguard fight make a best combat and starting and ending of fighting and best moment in it make a shorts for 1 min",
+    { hasVideo: true }
+  );
+  assert.equal(i.actionable, true);
+  assert.equal(i.targetSeconds, 60);
+  // The game title is kept together as one scenario.
+  assert.ok(
+    i.scenarioLabels.some((l) => l.includes("black myth wukong")),
+    JSON.stringify(i.scenarioLabels)
+  );
+  // It must NOT explode into one search per word.
+  for (const bad of ["black moments", "myth moments", "wukong moments", "tiger moments"]) {
+    assert.ok(
+      !i.scenarioLabels.includes(bad),
+      `soup label "${bad}" in ${JSON.stringify(i.scenarioLabels)}`
+    );
+  }
+});
+
+test("adjacent content words group into phrases ('red boy', 'wukong fight')", () => {
+  const i = deriveActionableIntent("red boy and wukong fight best combat scene", {
+    hasVideo: true
+  });
+  assert.deepEqual(i.scenarioLabels, [
+    "red boy moments",
+    "wukong fight moments",
+    "combat moments"
+  ]);
+});
