@@ -15,7 +15,8 @@
 
 import { useEditorStore } from "@/hooks/useEditorStore";
 import { planIntake, type IntakeContext, type IntakeOutcome } from "./intake";
-import type { EditBrief } from "./editBrief";
+import { createEmptyBrief, type EditBrief } from "./editBrief";
+import type { BriefPatch } from "./pendingAnswerResolver";
 
 /** Per-session partial brief, so vague requests can be completed over
  *  several turns ("make this cool" → "Best-moments reel" → "30s"). */
@@ -64,4 +65,43 @@ export function runIntake(userText: string, opts: RunIntakeOptions): IntakeOutco
 /** Drop a session's accumulated brief (e.g. on explicit reset). */
 export function clearIntakeBrief(sessionId: string): void {
   briefBySession.delete(sessionId);
+}
+
+/**
+ * Merge a resolved pending-answer PATCH into the session's persisted brief.
+ *
+ * This is the fix for the "Which video should I use?" loop: when the user
+ * answers a clarify question, the resolver produces a BriefPatch (e.g.
+ * source_scope = "all"). Without applying it to the persisted brief, the
+ * follow-up runIntake() would re-infer only from the bare answer word
+ * ("both"/"all"), find no scope, and re-ask the SAME question forever.
+ *
+ * Call this with the resolved patch BEFORE re-running runIntake, so the next
+ * planIntake merges the now-known field instead of losing it. PURE w.r.t. the
+ * patch shape — only the session store id is read.
+ */
+export function applyAnswerToSessionBrief(patch: BriefPatch): void {
+  const s = useEditorStore.getState();
+  const prior = briefBySession.get(s.sessionId) ?? createEmptyBrief();
+  const merged: EditBrief = {
+    ...prior,
+    intentKind: patch.intentKind ?? prior.intentKind,
+    sourceScope: patch.sourceScope
+      ? {
+          type: patch.sourceScope.type as EditBrief["sourceScope"]["type"],
+          reason: patch.sourceScope.reason ?? prior.sourceScope.reason
+        }
+      : prior.sourceScope,
+    output: { ...prior.output, ...(patch.output ?? {}) },
+    content: { ...prior.content, ...(patch.content ?? {}) }
+  };
+  // Lock the resolved field's confidence high so finalizeBrief can't override
+  // it back to a default on the next turn.
+  if (patch.sourceScope) {
+    merged.confidence = {
+      ...merged.confidence,
+      sourceScope: Math.max(merged.confidence.sourceScope, 0.9)
+    };
+  }
+  briefBySession.set(s.sessionId, merged);
 }

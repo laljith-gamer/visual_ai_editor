@@ -85,3 +85,45 @@ test("'merge them' matches merge chip", () => {
   assert.ok(r);
   assert.equal(r!.patch.output?.outputType, "as_is_merge");
 });
+
+
+// ---------------------------------------------------------------------
+// Source-scope answers — the "Which video should I use?" loop fix.
+// "both" / "all" / "everything" / "uploaded videos" must all resolve to the
+// "all" scope (generic quantifiers, not a command table). "this video" →
+// current; "selected videos" → selected. Previously "both"/"everything" did
+// not resolve at all (loop) and "uploaded" wrongly mapped to current.
+// ---------------------------------------------------------------------
+
+const sourceScopeQ: PendingQuestionContext = {
+  question: {
+    id: "intake-source-scope",
+    prompt: "Which video should I use?",
+    suggestions: ["Current video only", "Selected videos", "All uploaded videos"],
+    kind: "single-choice"
+  },
+  targetField: "source_scope"
+};
+
+for (const word of ["both", "all", "everything", "uploaded videos", "all videos", "all of them"]) {
+  test(`source scope: "${word}" → all (no loop)`, () => {
+    const r = resolvePendingAnswer(word, sourceScopeQ);
+    assert.ok(r, `"${word}" should resolve`);
+    assert.equal(r!.patch.sourceScope?.type, "all");
+    assert.ok(r!.confidence >= 0.6);
+  });
+}
+
+test('source scope: "selected videos" → selected', () => {
+  const r = resolvePendingAnswer("selected videos", sourceScopeQ);
+  assert.ok(r);
+  assert.equal(r!.patch.sourceScope?.type, "selected");
+});
+
+test('source scope: "this video" / "current" → current', () => {
+  for (const word of ["this video", "current", "just this one"]) {
+    const r = resolvePendingAnswer(word, sourceScopeQ);
+    assert.ok(r, `"${word}" should resolve`);
+    assert.equal(r!.patch.sourceScope?.type, "current", word);
+  }
+});

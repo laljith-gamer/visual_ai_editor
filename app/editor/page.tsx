@@ -1490,7 +1490,7 @@ export default function Home() {
         const st1 = useEditorStore.getState();
         if (st1.pendingClarify && st1.pendingClarify.questions.length > 0) {
           const { resolvePendingAnswerWithBrain } = await import("@/lib/agentic-intake/llmPendingAnswerResolver");
-          const { runIntake: runIntakeImport } = await import("@/lib/agentic-intake/runIntake");
+          const { runIntake: runIntakeImport, applyAnswerToSessionBrief } = await import("@/lib/agentic-intake/runIntake");
           const q = st1.pendingClarify.questions[0];
 
           // Map question id to the brief field it targets.
@@ -1543,6 +1543,11 @@ export default function Home() {
               // ensures the brief is MERGED (not reset) and the next decision
               // (proceed vs ask-next-question) happens correctly.
               setPendingClarify(null);
+              // Apply the resolved answer to the PERSISTED brief first, so the
+              // re-run merges the now-known field instead of losing it (this is
+              // the fix for the "Which video?" loop — a bare "both"/"all" reply
+              // re-inferred to nothing and the same question was re-asked).
+              applyAnswerToSessionBrief(resolved.patch);
               // Re-run intake so the brief merges the new info and decides:
               // either proceed (enough info) or ask the NEXT question.
               const intake2 = runIntakeImport(userRequest, {

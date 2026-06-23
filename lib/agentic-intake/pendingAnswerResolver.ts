@@ -84,10 +84,19 @@ function extractContentHints(text: string): string[] {
 }
 
 // ---- Source scope --------------------------------------------------------
+// Generic English quantifiers / pointers only — NOT a genre/command table.
+// Order matters: "selected" is the most specific, then "all", then "current".
 
-const CURRENT_RE = /\b(current|this|active|here|the video|uploaded)\b/i;
+const SELECTED_RE =
+  /\b(selected|the ones i (?:picked|selected|ticked|chose)|ticked|the picked|chosen)\b/i;
+const ALL_RE =
+  /\b(all|both|everything|every ?one|every (?:video|clip)|all of (?:them|it)|all (?:the )?(?:videos?|clips?|uploaded)|uploaded (?:videos?|clips?)|whole library|the (?:two|three|four|2|3|4) videos?)\b/i;
+const CURRENT_RE =
+  /\b(current|this (?:video|clip|one)|active|just this|only this|the active)\b/i;
 
 function inferScope(text: string): EditBrief["sourceScope"]["type"] | null {
+  if (SELECTED_RE.test(text)) return "selected";
+  if (ALL_RE.test(text)) return "all";
   if (CURRENT_RE.test(text)) return "current";
   return null;
 }

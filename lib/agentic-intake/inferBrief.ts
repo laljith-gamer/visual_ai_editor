@@ -303,6 +303,19 @@ function inferSourceScope(
     return { type: "selected", reason: "user referenced the selected videos", confidence: 0.85 };
   }
 
+  // Generic "all / both / everything" quantifiers (English, not a genre or
+  // command table). When there's more than one video, treat these as "use
+  // every uploaded video" so we never ask "Which video?" for a request that
+  // already said "both" / "all".
+  if (
+    ctx.libraryCount > 1 &&
+    /\b(all|both|everything|every ?one|every (?:video|clip)|all of (?:them|it)|all (?:the )?(?:videos?|clips?|uploaded)|uploaded (?:videos?|clips?)|the (?:two|three|four|2|3|4) videos?)\b/.test(
+      t
+    )
+  ) {
+    return { type: "all", reason: "user referenced all/both videos", confidence: 0.82 };
+  }
+
   const scope = parseSourceScope(t);
   if (scope.type === "all") {
     return { type: "all", reason: scope.reason, confidence: 0.85 };

@@ -170,3 +170,32 @@ test("'but avoid intro' is captured as an avoid, not a focus", () => {
   assert.ok((brief.content.avoid ?? []).includes("intro"));
   assert.equal(brief.content.focus, "cooking");
 });
+
+
+// ---------------------------------------------------------------------
+// Multi-video "both / all" → all scope on the FIRST turn, so intake never
+// asks "Which video should I use?" for a request that already said "both".
+// ---------------------------------------------------------------------
+const twoVideos: InferContext = {
+  libraryCount: 2,
+  selectedCount: 2,
+  timelineClipCount: 0,
+  hasActiveSource: true
+};
+
+test("'combine best moments in both videos, 10 min' → all scope, does not ask source", () => {
+  const brief = inferBrief("combine best moments in both video and make a 10 min shorts", twoVideos);
+  assert.equal(brief.sourceScope.type, "all", JSON.stringify(brief.sourceScope));
+  assert.ok(!brief.missing.includes("source_scope"), JSON.stringify(brief.missing));
+});
+
+test("'use all videos for a highlights reel' → all scope (multi-video)", () => {
+  const brief = inferBrief("use all videos for a highlights reel", manyVideos);
+  assert.equal(brief.sourceScope.type, "all");
+  assert.ok(!brief.missing.includes("source_scope"));
+});
+
+test("'this video only' still resolves to current scope (multi-video)", () => {
+  const brief = inferBrief("make a reel from this video only", manyVideos);
+  assert.equal(brief.sourceScope.type, "current");
+});
