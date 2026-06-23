@@ -4,12 +4,46 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-22 (nearest-match graceful fallback for the constraint
-> hard gate — fixes "top score 0.00" dead-end; on a feature branch)
+> Last updated: 2026-06-22 pm (conversational chat + brain toggle (OpenRouter ↔
+> Local) + more AI-commandable tools; branch fix/intent-llm-reasoning)
 
 ---
 
-## 0. Latest change (2026-06-22) — nearest-match fallback (no more "top score 0.00")
+## 0. Latest change (2026-06-22, pm) — conversational chat, brain toggle, more AI-commandable tools
+
+Made the chat a genuine tool-aware assistant and closed the remaining "every
+tool should work by AI command" gaps — all under a hard rule of NO hardcoded
+command/keyword/genre tables (`.kiro/steering/no-hardcoded-intent.md`).
+Verified: typecheck clean; `npm test` **583 pass / 0 fail**; `npm run build` ✓.
+Cloud path still needs a configured OpenRouter key on the deploy (see TODO).
+
+- **Keyword-soup killed generically.** `deriveActionableIntent.buildSubjectPhrases`
+  groups ADJACENT content words into phrases (one scenario, not one-per-word);
+  intensifiers/fillers/affirmations/analysis words are dropped from subjects.
+- **WebLLM is the PRIMARY brain.** The client plans on-device first; the cloud
+  `/api/agent` keyword-synth no longer pre-empts it. `local` is the default mode.
+- **Brain toggle** in the chat header (`components/BrainToggle.tsx`,
+  `lib/ai/brainPreference.ts`): OpenRouter ↔ Local, always switchable, with a
+  self-diagnosing `!` (via `/api/agent/intent {task:"status"}`).
+- **Conversational lane** (`lib/agent/conversationalReply.ts` + `{task:"chat"}`):
+  greetings / "what is this about" get a real, tool-aware reply from the
+  selected brain instead of the canned "What should I make?". Non-edit turns
+  only; LLM-only; deterministic flows unchanged.
+- **More tools AI-commandable** (`lib/intent/toolCommands.ts` in `tryAgentCommand`):
+  output FORMAT/aspect ("make it vertical/16:9/square" → store `outputFormat`
+  override the renderer prefers) and LIBRARY/source control ("use all videos",
+  "active only", "use only video 2", "switch to video 2").
+- **Continuity + fixes:** "then create" confirms the pending action; identity
+  Q ("what model are you") answered honestly; "wath my video" typo understood;
+  Library "MISSING" card + "1 of 0 selected" footer fixed.
+
+Cloud note: a Kiro CLI key (`ksk_`) can't run on Vercel; use an OpenRouter key
+(recommended free model `deepseek/deepseek-chat-v3-0324:free`). See `.env.example`.
+Full detail: `memory/AI_BRAIN_TOGGLE_AND_TOOL_COMMANDS_2026-06-22.md`.
+
+---
+
+## 0. Earlier change (2026-06-22) — nearest-match fallback (no more "top score 0.00")
 
 Fixes a reported dead-end: a constraint-driven request whose concept the
 on-device model only matched FAINTLY (every frame below the absolute noise

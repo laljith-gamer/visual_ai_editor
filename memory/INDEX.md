@@ -2,9 +2,10 @@
 
 > **Read this first.** This folder is the handoff brain for the repo. A fresh AI/helper session should read this file before making changes, then follow the reading order below.
 >
-> Last organized: **2026-06-20** — editor stage preview/timeline scroll-layout
-> fix indexed (`EditorStage` fixed two-row layout + independent preview/timeline
-> body scrolling). Previous issue #64 / #62 notes remain indexed below.
+> Last organized: **2026-06-22 pm** — conversational chat + brain toggle
+> (OpenRouter ↔ Local) + AI-commandable format/source tools indexed
+> (`AI_BRAIN_TOGGLE_AND_TOOL_COMMANDS_2026-06-22.md`). Previous editor-stage
+> scroll-layout + issue #64/#62 notes remain indexed below.
 
 ---
 

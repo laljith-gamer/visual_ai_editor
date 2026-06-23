@@ -8,6 +8,26 @@
 
 ## High priority
 
+- [ ] **Manual browser test — brain toggle + conversational chat + tool
+      commands (2026-06-22 pm).** Needs the live Vercel deploy with an
+      OpenRouter key set (DISABLE_CLOUD_AI=false, CLOUD_PROVIDER_ORDER=openrouter,
+      OPENROUTER_API_KEY, OPENROUTER_DEFAULT_MODEL=deepseek/deepseek-chat-v3-0324:free,
+      NEXT_PUBLIC_LOCAL_AI_ONLY=false) — then REDEPLOY. Verify:
+      1. The chat header shows the OpenRouter ↔ Local toggle; with the key set
+         the "!" on OpenRouter clears (hover shows the reason while unset). A
+         Kiro `ksk_` key does NOT work on Vercel — must be OpenRouter/Anthropic.
+      2. With OpenRouter selected: "hi" / "what is this about" get a natural,
+         tool-aware reply (NOT "What should I make?").
+      3. Edit commands still work and aren't eaten by chat: "make it vertical"
+         / "16:9" / "square" change the render aspect; "use only video 2",
+         "use all videos", "active only", "switch to video 2" change selection /
+         preview; "make a 30s reel of the fight" still plans + runs.
+      4. "then create" after a pending "search for fighting?" runs that plan
+         (not a "then" search).
+      5. Toggle to Local with no WebGPU → still plans deterministically (no
+         keyword-soup: "black myth wukong tiger vanguard fight" stays one focus).
+      See `memory/AI_BRAIN_TOGGLE_AND_TOOL_COMMANDS_2026-06-22.md`.
+
 - [ ] **Manual browser test — chat brain preload + dynamic clips (2026-06-20,
       v2.5).** Needs a real browser + a configured provider key (no GPU/decode
       and no provider in sandbox). Verify:

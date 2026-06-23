@@ -17,6 +17,31 @@
 
 ---
 
+### 2026-06-22 (pm) — Conversational chat + brain toggle + more AI-commandable tools
+- **Change made:** (1) Killed keyword-soup generically — adjacent content words
+  group into phrases (`buildSubjectPhrases`), no per-word searches, no hardcoded
+  tables. (2) Made WebLLM the PRIMARY brain (cloud keyword-synth no longer
+  pre-empts it). (3) Added a chat-header **brain toggle** OpenRouter ↔ Local
+  with a self-diagnosing "!" (`{task:"status"}`). (4) Added a **conversational
+  lane** so greetings/questions get a real tool-aware reply (`{task:"chat"}`)
+  instead of "What should I make?". (5) Made output FORMAT/aspect and
+  LIBRARY/source control AI-commandable (`lib/intent/toolCommands.ts`).
+  (6) "then create" confirms a pending action; identity + "wath my video" typo
+  handled; Library "MISSING" card + footer fixed.
+- **Files affected:** `lib/plan/deriveIntent.ts`, `lib/local-llm/{localPlanner,status}.ts`,
+  `app/editor/page.tsx`, `app/api/agent/intent/route.ts`, `lib/ai/brainPreference.ts`,
+  `components/BrainToggle.tsx(+css)`, `components/AssistantPanel.tsx`,
+  `lib/agent/{conversationalReply,runAgentCommand}.ts`, `lib/intent/{toolCommands,editorTurnIntent,conversationIntent}.ts`,
+  `lib/agent/metaAnswer.ts`, `hooks/useEditorStore.ts` (outputFormat),
+  `components/ProjectRail.*`, `.kiro/steering/no-hardcoded-intent.md`, `.env.example`.
+- **Reason:** Make the chat behave like ChatGPT/Codex but drive the editing
+  tool; let the user pick the brain; ensure every tool responds to AI commands —
+  without hardcoding commands. Verified: typecheck ✓; `npm test` 583/0; build ✓.
+  Cloud path needs an OpenRouter key on the deploy (Kiro `ksk_` keys don't work
+  on Vercel). See `memory/AI_BRAIN_TOGGLE_AND_TOOL_COMMANDS_2026-06-22.md`.
+
+---
+
 ### 2026-06-22 — Nearest-match graceful fallback (fixes "top score 0.00" dead-end)
 - **Change made:** When a constraint-driven request ("fighting attack combo
   alone", "only lab scenes") matched the concept only FAINTLY — every frame
