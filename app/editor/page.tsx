@@ -3650,7 +3650,24 @@ export default function Home() {
     const unreadable: { id: string; name: string }[] = [];
     for (const p of probeSources) {
       try {
-        await p.blob.slice(0, 65536).arrayBuffer();
+        // Probe START, MIDDLE and END of each source — not just the first
+        // bytes. A stale File handle often still reads its opening chunk (so a
+        // short output that only touches the start renders fine), but fails on
+        // deeper reads — which is exactly what a long (e.g. 10-minute) output
+        // hits mid-encode. Reading all three regions catches the stale handle
+        // up front and turns it into a clean re-upload prompt instead of a
+        // failure deep into the encode.
+        const sz = p.blob.size;
+        const chunk = 65536;
+        const reads: Promise<ArrayBuffer>[] = [
+          p.blob.slice(0, Math.min(chunk, sz)).arrayBuffer()
+        ];
+        if (sz > chunk * 3) {
+          const mid = Math.floor(sz / 2);
+          reads.push(p.blob.slice(mid, mid + chunk).arrayBuffer());
+          reads.push(p.blob.slice(Math.max(0, sz - chunk)).arrayBuffer());
+        }
+        await Promise.all(reads);
       } catch {
         unreadable.push({ id: p.id, name: p.name });
       }
