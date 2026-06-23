@@ -43,3 +43,19 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+
+.warnDot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  margin-left: 4px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  color: #1a1205;
+  background: var(--warn);
+}
