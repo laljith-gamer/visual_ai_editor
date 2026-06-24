@@ -61,6 +61,21 @@ test("buildChatBrainPayload includes ONLY allowed text fields", () => {
   assert.equal(payloadHasForbiddenKeys(payload), false);
 });
 
+test("buildChatBrainPayload carries the running-goal activeSubject (length-capped)", () => {
+  const payload = buildChatBrainPayload({
+    userMessage: "combat scene on this",
+    activeSubject: "combat moments",
+    activeTargetSeconds: 60
+  });
+  assert.equal(payload.activeSubject, "combat moments");
+  assert.equal(payload.activeTargetSeconds, 60);
+
+  const longSubject = "x".repeat(400);
+  const capped = buildChatBrainPayload({ userMessage: "hi", activeSubject: longSubject });
+  assert.ok((capped.activeSubject ?? "").length <= 120);
+  assert.equal(payloadHasForbiddenKeys(capped), false);
+});
+
 test("privacy: payload NEVER carries media/secret keys even if input smuggles them", () => {
   // Simulate a caller accidentally passing forbidden fields.
   const dirty = {

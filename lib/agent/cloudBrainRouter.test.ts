@@ -88,3 +88,62 @@ test("planCloudAction: read_only / confirm / cancel / answer / trim → passthro
 test("planCloudAction: low confidence never overrides the deterministic pipeline", () => {
   assert.equal(planCloudAction(intent({ route: "create_highlight", confidence: 0.3 })).kind, "passthrough");
 });
+
+// ---- resolveCloudBrainIntent: conversation memory carry -----------------
+
+test("resolveCloudBrainIntent: restores a dropped duration from activeTargetSeconds", async () => {
+  const { resolveCloudBrainIntent } = await import("./cloudBrainRouter.ts");
+  const realFetch = globalThis.fetch;
+  // Model returns a subject-only intent that DROPPED the duration.
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        intent: {
+          route: "create_highlight",
+          confidence: 0.8,
+          normalizedUserText: "combat scene on this",
+          reason: "subject only",
+          targetSeconds: null
+        }
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    )) as typeof fetch;
+  try {
+    const out = await resolveCloudBrainIntent({
+      userMessage: "combat scene on this",
+      activeTargetSeconds: 60,
+      activeSubject: "best moments"
+    });
+    assert.ok(out);
+    assert.equal(out?.targetSeconds, 60); // remembered 60s re-applied
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("resolveCloudBrainIntent: keeps the model's explicit duration over memory", async () => {
+  const { resolveCloudBrainIntent } = await import("./cloudBrainRouter.ts");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        intent: {
+          route: "create_highlight",
+          confidence: 0.8,
+          normalizedUserText: "make it 20s",
+          reason: "explicit",
+          targetSeconds: 20
+        }
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    )) as typeof fetch;
+  try {
+    const out = await resolveCloudBrainIntent({
+      userMessage: "make it 20s",
+      activeTargetSeconds: 60
+    });
+    assert.equal(out?.targetSeconds, 20); // latest explicit wins
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -78,3 +78,41 @@ test("'yes' is NOT hijacked when a planner run / clarify is parked", () => {
   const r = classifyEditorTurn("yes", ctx({ hasPendingAction: false, hasPendingExecution: true }));
   assert.equal(r.kind, "passthrough");
 });
+
+// --- Fix 1 regression: scope mention + an actionable request must NOT be
+//     downgraded into a "what should I do with it" scope clarify. -----------
+test("'pick best parts in this video for 1 min' → passthrough (acts), target 60", () => {
+  const r = classifyEditorTurn(
+    "pick best parts in this video for 1 min",
+    ctx({ hasTimeline: false, sourceCount: 1, priorTargetSeconds: null })
+  );
+  // Carries a generic best-parts ask + a duration → the planner handles it.
+  assert.equal(r.kind, "passthrough");
+  assert.equal(r.latestDurationSeconds, 60);
+  assert.equal(r.durationChanged, true);
+});
+
+test("'best parts in this video' (no duration) → passthrough, not scope clarify", () => {
+  const r = classifyEditorTurn(
+    "best parts in this video",
+    ctx({ hasTimeline: false, sourceCount: 1, priorTargetSeconds: null })
+  );
+  assert.equal(r.kind, "passthrough");
+});
+
+test("'wukong fight in this video' → passthrough (subject wins over scope)", () => {
+  const r = classifyEditorTurn(
+    "wukong fight in this video",
+    ctx({ hasTimeline: false, sourceCount: 1 })
+  );
+  assert.equal(r.kind, "passthrough");
+});
+
+test("bare scope answer 'from current video clips' (no pending) STILL resolves scope", () => {
+  const r = classifyEditorTurn(
+    "from current video clips",
+    ctx({ hasTimeline: true, clipCount: 5, hasPendingAction: false, priorTargetSeconds: null })
+  );
+  assert.equal(r.kind, "scope_resolution");
+  assert.equal(r.scope, "current_video");
+});

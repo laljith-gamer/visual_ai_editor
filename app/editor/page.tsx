@@ -60,6 +60,7 @@ import {
   type RenderTransition
 } from "@/lib/plan/composeTransition";
 import { planSignaturePayload } from "@/lib/plan/normalize";
+import { applyRememberedTarget } from "@/lib/plan/applyRememberedTarget";
 import {
   getPredictions,
   savePredictions,
@@ -336,6 +337,16 @@ export default function Home() {
           };
         }
       }
+
+      // v2.6 — Conversation memory: carry the remembered TARGET DURATION into
+      // selection. If the user stated a duration on an EARLIER turn (kept in
+      // store.activeTargetSeconds) but THIS plan didn't capture one (e.g. a
+      // later subject-only turn "combat scene on this"), honour the remembered
+      // target so a "1 min" ask isn't silently truncated to the no-budget
+      // quality floor. Only fills the MISSING constraint — never overrides a
+      // duration the current plan already set. Runs for every brain because
+      // all selection funnels through this activePlan chokepoint.
+      activePlan = applyRememberedTarget(activePlan, state.activeTargetSeconds);
 
       // Resolve eligible sources.
       const allSources = state.sources;
@@ -1239,6 +1250,7 @@ export default function Home() {
               : null,
             pendingActionKind: stc.pendingAction?.kind ?? null,
             activeTargetSeconds: stc.activeTargetSeconds ?? null,
+            activeSubject: stc.plan?.scenarios?.[0]?.prompt ?? null,
             timelineClipCount: stc.highlights.length,
             selectedSourceCount: stc.selectedSourceIds.length,
             sourceName: activeSrc?.meta.name ?? null

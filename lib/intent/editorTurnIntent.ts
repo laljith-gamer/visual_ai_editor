@@ -21,6 +21,7 @@ import { EDITOR_TURN } from "../config";
 import { classifyFastCommand } from "./fastCommands";
 import { detectRefinement, type RefineScope, type RefinementKind } from "./refinementIntent";
 import { extractTopicPhrases } from "./topicPhrases";
+import { deriveActionableIntent } from "../plan/deriveIntent";
 import {
   resolveActiveTarget,
   isDurationOnlyInstruction
@@ -187,9 +188,25 @@ export function classifyEditorTurn(text: string, ctx: EditorTurnContext): Editor
     };
   }
 
+  // The turn's OWN actionable signal. Reuses the SAME generic interpreter the
+  // planner uses (no new keyword/genre table): a duration stated this turn, a
+  // generic "best parts / highlights" ask, or a concrete subject phrase all
+  // mean the turn carries a real request. The scope/vague branches below use
+  // this so a turn that merely MENTIONS a scope ("…in this video") or looks
+  // vague ("pick best parts…") but ALSO states what to do is never downgraded
+  // into a clarifying question — it passes through to the planner instead.
+  const derived = deriveActionableIntent(raw);
+  const carriesOwnAction =
+    target.changed ||
+    derived.genericBestParts ||
+    extractTopicPhrases(raw).length > 0;
+
   // 5) Scope-only answer with no pending action ("from current video clips"
-  //    out of the blue) → treat as a current-scope refine/replan signal.
-  if (refine.kind === "scope_only") {
+  //    out of the blue) → treat as a current-scope replan signal. ONLY when
+  //    the turn is JUST a scope answer; if it also carries an actionable
+  //    request ("pick best parts in this video for 1 min") fall through so the
+  //    planner honours it rather than asking "what should I do with it".
+  if (refine.kind === "scope_only" && !carriesOwnAction) {
     return {
       kind: "scope_resolution",
       ...base,
@@ -199,8 +216,16 @@ export function classifyEditorTurn(text: string, ctx: EditorTurnContext): Editor
     };
   }
 
-  // 6) Vague "find a specific moment" with no concrete subject → ASK.
-  if (VAGUE_MOMENT_RE.test(raw) && extractTopicPhrases(raw).length === 0 && target.seconds === null) {
+  // 6) Vague "find a specific moment" with no concrete subject, no duration,
+  //    and no generic best-parts intent → ASK what moment. A generic
+  //    best-parts ask ("pick the best parts") IS actionable, so it must build
+  //    a reel rather than ask.
+  if (
+    VAGUE_MOMENT_RE.test(raw) &&
+    extractTopicPhrases(raw).length === 0 &&
+    target.seconds === null &&
+    !derived.genericBestParts
+  ) {
     return {
       kind: "clarify_missing_specific_moment",
       ...base,
