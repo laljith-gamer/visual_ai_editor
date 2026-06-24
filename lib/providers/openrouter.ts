@@ -128,7 +128,11 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 type TextPart = { type: "text"; text: string };
 type ImagePart = { type: "image_url"; image_url: { url: string } };
-type Content = string | Array<TextPart | ImagePart>;
+type AudioPart = {
+  type: "input_audio";
+  input_audio: { data: string; format: string };
+};
+type Content = string | Array<TextPart | ImagePart | AudioPart>;
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -285,7 +289,9 @@ function completionKind(messages: ChatMessage[]): AiUsageKind {
   for (const message of messages) {
     if (
       Array.isArray(message.content) &&
-      message.content.some((part) => part.type === "image_url")
+      message.content.some(
+        (part) => part.type === "image_url" || part.type === "input_audio"
+      )
     ) {
       return "vision";
     }
@@ -354,6 +360,45 @@ export async function openrouterMultiImageJson(
   ];
   // Vision/briefing JSON gets a little more headroom than the planner; still
   // hard-clamped to the ceiling inside attemptCompletion.
+  return createCompletion([{ role: "user", content }], {
+    fallbackMaxTokens: OPENROUTER.visionMaxTokens,
+    ...options
+  });
+}
+
+// ---------------------------------------------------------------------
+// Public: audio (transcription / analysis) JSON completion
+// ---------------------------------------------------------------------
+
+/**
+ * Audio JSON call. Takes ONE text prompt + ONE inline audio clip and asks an
+ * audio-capable model (e.g. a free multimodal Gemini slug on OpenRouter) to
+ * return structured JSON — used by the cloud transcription route to get
+ * timestamped speech segments fast, without the on-device Whisper download.
+ *
+ * Uses the OpenAI-compatible `input_audio` content part. Only works when the
+ * configured model accepts audio input; with a text/vision-only model the
+ * request errors and the caller falls back to on-device Whisper.
+ *
+ * SECURITY: the base64 audio lives in the request body only — never logged.
+ * The audio is extracted (mono 16 kHz) from the source the user already
+ * uploaded; full video bytes never leave the browser.
+ */
+export async function openrouterAudioJson(
+  prompt: string,
+  audio: { base64: string; format: string },
+  options: OpenRouterOptions = {}
+): Promise<string> {
+  if (!audio.base64) {
+    throw new Error("openrouterAudioJson called with empty audio");
+  }
+  const content: Array<TextPart | AudioPart> = [
+    { type: "text", text: prompt },
+    {
+      type: "input_audio",
+      input_audio: { data: audio.base64, format: audio.format }
+    }
+  ];
   return createCompletion([{ role: "user", content }], {
     fallbackMaxTokens: OPENROUTER.visionMaxTokens,
     ...options

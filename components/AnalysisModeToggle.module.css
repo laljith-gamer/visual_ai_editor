@@ -1,0 +1,35 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 11px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.btn:hover {
+  color: var(--text);
+  border-color: var(--line-strong, var(--line));
+}
+
+/* Cloud / fast mode — accent it so the active state reads at a glance. */
+.cloud {
+  color: #0b1f17;
+  background: var(--accent, #4ade80);
+  border-color: transparent;
+}
+
+.cloud:hover {
+  color: #0b1f17;
+}

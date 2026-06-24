@@ -33,6 +33,7 @@ import { planSignaturePayload } from "@/lib/plan/normalize";
 import { sha1String } from "@/lib/util/hash";
 import { getPredictions, savePredictions, trimCache } from "@/lib/store/cache";
 import { PLAN_DEFAULTS, REFRAME } from "@/lib/config";
+import { cloudAnalysisEnabled } from "@/lib/ai/cloudAnalysisPreference";
 import { planAnalysisBudget } from "@/lib/analysis/budget";
 import type { AnalysisBudget, DeviceTier } from "@/lib/analysis/types";
 
@@ -463,8 +464,19 @@ async function sampleAndScore(args: {
     Date.now() - tA
   );
 
-  progress.setStatus("scoring", `Scoring ${frames.length} frames (${capTier})`);
-  const tier = capTier === "low" ? "cloud" : "siglip-local";
+  // Scene-analysis backend selection:
+  //   - "cloud"        → POST /api/vision/frame (OpenRouter free analysis
+  //                       model, with Gemini fallback via the dispatcher).
+  //   - "siglip-local" → fully on-device SigLIP worker.
+  // The cloud path is used when the user enabled the cloud-analysis toggle
+  // (NEXT_PUBLIC_CLOUD_ANALYSIS / runtime override) OR when the device is too
+  // low-tier to run SigLIP locally. Otherwise we stay fully offline.
+  const tier: "siglip-local" | "cloud" =
+    cloudAnalysisEnabled() || capTier === "low" ? "cloud" : "siglip-local";
+  progress.setStatus(
+    "scoring",
+    `Scoring ${frames.length} frames (${tier === "cloud" ? "cloud" : capTier})`
+  );
   const tB = Date.now();
   const visualScores = await scoreFrames({
     frames,
