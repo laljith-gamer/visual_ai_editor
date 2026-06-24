@@ -15,6 +15,7 @@ import {
 } from "@/lib/pipeline/adapt";
 import { buildOfflineBestParts } from "@/lib/pipeline/bestParts";
 import { deriveClipDurationBounds } from "@/lib/pipeline/clipDuration";
+import { pickFillIndices } from "@/lib/pipeline/selectionFill";
 
 interface BuildArgs {
   candidates: CandidateWindow[];
@@ -213,6 +214,32 @@ export function buildHighlights(args: BuildArgs): BuildResult {
   }
 
   selected.sort((a, b) => a.candidate.start - b.candidate.start);
+
+  // Top-up to the target. The `balanced` strategy fills bucket-by-bucket with
+  // a capped number of rounds and drops overlapping picks, so it can stall at
+  // ~half the requested length (the reported "1 min → 30s"). When the user
+  // stated a duration and we're still short, greedily pull the best remaining
+  // non-overlapping clips until we reach the target — so the reel actually
+  // fills toward the requested length when the footage allows.
+  if (args.plan.userSpecifiedDuration && targetSeconds > 0) {
+    const totalNow = selected.reduce((acc, s) => acc + s.duration, 0);
+    if (totalNow < targetSeconds) {
+      const inSelection = new Set(selected);
+      const pool = scored.filter((s) => !inSelection.has(s));
+      const add = pickFillIndices(
+        pool.map((s) => ({
+          start: s.candidate.start,
+          end: s.candidate.end,
+          score: s.score
+        })),
+        selected.map((s) => ({ start: s.candidate.start, end: s.candidate.end })),
+        totalNow,
+        targetSeconds
+      );
+      for (const idx of add) selected.push(pool[idx]);
+      selected.sort((a, b) => a.candidate.start - b.candidate.start);
+    }
+  }
 
   // Issue #62 — offline best-parts underfill guard. When the user stated a
   // duration but the strong-match selection is materially short of it (or

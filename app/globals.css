@@ -193,6 +193,18 @@ a:hover {
     overflow: visible;
   }
 
+  /* Phone: the Library + History rail must NOT stay hidden (the ≤1239 rule
+     hides it for the 2-column tablet layout). Here the shell scrolls, so stack
+     the rail full-width with natural height — Library and History are reachable
+     again instead of being invisible on phones. */
+  .studio .rail {
+    display: flex;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
   .studio .assistant {
     display: flex;
     min-height: 72dvh;
