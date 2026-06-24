@@ -82,7 +82,7 @@ export function BrainToggle() {
         aria-pressed={brain === "cloud"}
         title={cloudReason}
       >
-        <Cloud size={12} aria-hidden /> OpenRouter
+        <Cloud size={13} aria-hidden /> Cloud
         {cloudUnconfigured && (
           <span className={styles.warnDot} aria-hidden title={cloudReason}>
             !
@@ -96,7 +96,7 @@ export function BrainToggle() {
         aria-pressed={brain === "local"}
         title="Local — plan on-device with WebLLM (private, no cloud)"
       >
-        <Cpu size={12} aria-hidden /> Local
+        <Cpu size={13} aria-hidden /> Local
       </button>
     </div>
   );

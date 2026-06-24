@@ -183,6 +183,20 @@
   gap: 6px !important;
 }
 
+/* Keep the brain toggle and the capability/mode pills the same height and
+   vertically centred so the header strip reads as one aligned row. */
+[class*="AssistantPanel_header"] > div:last-child > .pill {
+  height: 26px !important;
+  min-height: 26px !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Never clip the "Smart Chat" title — let the badges shrink instead. */
+[class*="AssistantPanel_title"] {
+  flex: 0 0 auto !important;
+}
+
 [class*="AssistantPanel_header"] > div:last-child > .pill[title^="Local-only mode"] {
   display: none !important;
 }
