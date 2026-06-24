@@ -18,6 +18,7 @@ import { useShare } from "@/hooks/useShare";
 import { CapabilityBadge } from "./CapabilityBadge";
 import { AIModeBadge } from "./AIModeBadge";
 import { BrainToggle } from "./BrainToggle";
+import { AnalysisModeToggle } from "./AnalysisModeToggle";
 import { PlanPreview } from "./PlanPreview";
 import { BriefingCard } from "./BriefingCard";
 import { logUser } from "@/lib/log/recorders";
@@ -191,6 +192,7 @@ export function AssistantPanel({
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <AnalysisModeToggle />
           <BrainToggle />
           <AIModeBadge />
           <CapabilityBadge />

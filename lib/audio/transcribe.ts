@@ -20,10 +20,12 @@
 
 import { newId } from "@/lib/util/id";
 import { AUDIO } from "@/lib/config";
+import { cloudAnalysisEnabled } from "@/lib/ai/cloudAnalysisPreference";
 import {
   extractMonoPCM16k,
   probeHasAudio
 } from "./extract";
+import { encodeWavBase64 } from "./wav";
 import { getTranscript, saveTranscript } from "./cache";
 import type {
   TranscribeOptions,
@@ -31,6 +33,16 @@ import type {
   Transcript,
   TranscriptSegment
 } from "./types";
+
+/** Cache/model id for transcripts produced by the cloud (OpenRouter) path.
+ *  Distinct from the on-device Whisper model ids so a device that flips the
+ *  toggle doesn't collide caches. */
+const CLOUD_TRANSCRIBE_MODEL = "cloud:openrouter-audio";
+
+/** Upper bound (seconds) on audio we send to the cloud transcription route.
+ *  Beyond this the WAV payload gets large and most free audio models cap their
+ *  context anyway, so we fall back to on-device Whisper for long sources. */
+const CLOUD_TRANSCRIBE_MAX_SECONDS = 600;
 
 // ---- Worker singleton ------------------------------------------------
 
@@ -154,6 +166,39 @@ export async function transcribe(args: TranscribeArgs): Promise<Transcript> {
   const modelId = args.modelId ?? pickModel(args.audioTier);
   const device = pickDevice(args.hasWebGPU);
   const onProgress = args.onProgress ?? (() => {});
+
+  // ---- Cloud analysis path (toggle ON) ------------------------------
+  // When the cloud-analysis toggle is enabled, transcribe via the free
+  // OpenRouter analysis model first — typically much faster than downloading
+  // and running Whisper on-device. On-device Whisper remains the guaranteed
+  // fallback (OFFLINE EDIT): any failure here falls through to the local path.
+  if (cloudAnalysisEnabled()) {
+    if (!args.force) {
+      const cachedCloud = await getTranscript(args.sourceHash, CLOUD_TRANSCRIBE_MODEL);
+      if (cachedCloud) {
+        onProgress({ phase: "done", progress: 1 });
+        return cachedCloud;
+      }
+    }
+    try {
+      const cloud = await transcribeViaCloud(args, onProgress);
+      await saveTranscript(cloud);
+      onProgress({
+        phase: "done",
+        progress: 1,
+        detail: `${cloud.segments.length} segment${cloud.segments.length === 1 ? "" : "s"} · cloud`
+      });
+      return cloud;
+    } catch (err) {
+      // A user cancel must propagate; everything else falls back to on-device.
+      if ((err as Error).name === "AbortError") {
+        onProgress({ phase: "error", progress: 0, error: "cancelled" });
+        throw err;
+      }
+      // Soft-fall-through: keep the offline guarantee. The local path below
+      // runs exactly as if the toggle were off.
+    }
+  }
 
   // ---- Cache hit? ---------------------------------------------------
   if (!args.force) {
@@ -326,6 +371,93 @@ export async function transcribe(args: TranscribeArgs): Promise<Transcript> {
   } finally {
     release();
   }
+}
+
+/**
+ * Cloud transcription via the OpenRouter analysis model. Extracts mono 16 kHz
+ * audio locally, encodes it to WAV, and POSTs it to /api/audio/transcribe.
+ * Returns a Transcript in the SAME shape as the on-device path so every
+ * consumer (cache, grounding, drawer) is unchanged. Throws on any failure so
+ * the caller can fall back to on-device Whisper.
+ */
+async function transcribeViaCloud(
+  args: TranscribeArgs,
+  onProgress: (p: TranscribeProgress) => void
+): Promise<Transcript> {
+  onProgress({ phase: "decoding", progress: 0 });
+
+  const hasAudio = await probeHasAudio(args.blob);
+  if (!hasAudio) {
+    // No speech track — return (and cache) an empty cloud transcript so we
+    // don't re-probe a silent file every run.
+    return {
+      sourceHash: args.sourceHash,
+      sourceId: args.sourceId,
+      language: "en",
+      model: CLOUD_TRANSCRIBE_MODEL,
+      ts: Date.now(),
+      durationSeconds: 0,
+      transcribeMs: 0,
+      segments: [],
+      fullText: "",
+      signals: { hasSpeech: false }
+    };
+  }
+
+  const pcm = await extractMonoPCM16k(args.blob);
+  const durationSeconds = pcm.length / 16_000;
+  if (durationSeconds > CLOUD_TRANSCRIBE_MAX_SECONDS) {
+    // Too long for the cloud payload — fall back to on-device.
+    throw new Error(
+      `audio ${Math.round(durationSeconds)}s exceeds cloud cap ${CLOUD_TRANSCRIBE_MAX_SECONDS}s`
+    );
+  }
+  if (args.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  onProgress({ phase: "transcribing", progress: 0, detail: "cloud model" });
+  const audioBase64 = await encodeWavBase64(pcm, 16_000);
+  const t0 = performance.now();
+
+  const resp = await fetch("/api/audio/transcribe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ audioBase64, format: "wav", durationSeconds }),
+    signal: args.signal
+  });
+  if (!resp.ok) {
+    throw new Error(`cloud transcribe failed [${resp.status}]`);
+  }
+  const json = (await resp.json()) as {
+    language?: string;
+    segments?: Array<{ start: number; end: number; text: string }>;
+    fullText?: string;
+  };
+  const transcribeMs = performance.now() - t0;
+
+  const segments: TranscriptSegment[] = (json.segments ?? [])
+    .filter((s) => typeof s?.text === "string" && s.text.trim())
+    .map((s) => ({
+      id: newId("seg"),
+      start: Math.max(0, Number(s.start) || 0),
+      end: Math.max(Number(s.start) || 0, Number(s.end) || 0) || (Number(s.start) || 0) + 1,
+      text: s.text.trim()
+    }));
+  const fullText =
+    json.fullText?.trim() ||
+    segments.map((s) => s.text).join(" ").replace(/\s+/g, " ").trim();
+
+  return {
+    sourceHash: args.sourceHash,
+    sourceId: args.sourceId,
+    language: typeof json.language === "string" ? json.language : "en",
+    model: CLOUD_TRANSCRIBE_MODEL,
+    ts: Date.now(),
+    durationSeconds,
+    transcribeMs,
+    segments,
+    fullText,
+    signals: { hasSpeech: segments.length > 0 }
+  };
 }
 
 /** Returns whether transcription is supported in this browser. Used
