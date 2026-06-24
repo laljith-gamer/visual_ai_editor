@@ -3,6 +3,7 @@ import type { SampledFrame } from "@/lib/pipeline/sample";
 import { blobToBase64 } from "@/lib/pipeline/sample";
 import { aggregateFrameScore } from "@/lib/vision/score-local";
 import { CLOUD_FRAME, SIGNAL_DEFAULTS } from "@/lib/config";
+import { composite, motionOnlyScores, isCloudResultUsable } from "@/lib/pipeline/scoreFallback";
 
 interface ScoreArgs {
   frames: SampledFrame[];
@@ -10,6 +11,9 @@ interface ScoreArgs {
   tier: "siglip-local" | "cloud";
   signal?: AbortSignal;
   onProgress?: (done: number, total: number) => void;
+  /** Fires once the on-device scorer reports which backend loaded
+   *  ("webgpu" | "wasm"), so the UI can honestly say it's running on CPU. */
+  onBackend?: (device: string) => void;
 }
 
 /**
@@ -33,7 +37,8 @@ export async function scoreFrames({
   plan,
   tier,
   signal,
-  onProgress
+  onProgress,
+  onBackend
 }: ScoreArgs): Promise<FrameScore[]> {
   const weights = resolveSignalWeights(plan);
   // Run SigLIP when the composite uses semantic OR when a constraint graph
@@ -51,23 +56,41 @@ export async function scoreFrames({
 
   if (!needsSemantic) {
     // Visual-interest-only path: motion + saliency from sampling, no model.
-    return frames.map<FrameScore>((f) => ({
-      t: f.t,
-      labels: {},
-      semantic: 0,
-      motion: f.motion,
-      saliency: f.saliency,
-      focusX: f.focusX,
-      focusY: f.focusY,
-      score: composite(0, f.motion, f.saliency, weights)
-    }));
+    return motionOnlyScores(frames, weights);
   }
 
-  if (tier === "siglip-local") {
-    return scoreLocalWithCompose({ frames, plan, weights, signal, onProgress });
+  const composeArgs: ComposeArgs = { frames, plan, weights, signal, onProgress, onBackend };
+
+  // DEGRADE LADDER (never silently "guess"):
+  //   cloud (if selected) → on-device SigLIP (WebGPU or CPU/wasm) → motion.
+  if (tier === "cloud") {
+    const cloud = await scoreCloudWithCompose(composeArgs);
+    if (isCloudResultUsable(cloud)) return cloud;
+    // Cloud unconfigured / unreachable (e.g. 503) → don't fall straight to the
+    // motion guess: try to UNDERSTAND on-device first. Only if that also fails
+    // do we use motion as the true last resort.
+    return scoreLocalOrMotion(composeArgs);
   }
-  return scoreCloudWithCompose({ frames, plan, weights, signal, onProgress });
+  return scoreLocalOrMotion(composeArgs);
 }
+
+/** On-device semantic scoring, with motion/saliency as the true last resort
+ *  (when no vision backend — WebGPU nor CPU/wasm — could load). */
+async function scoreLocalOrMotion(args: ComposeArgs): Promise<FrameScore[]> {
+  try {
+    return await scoreLocalWithCompose(args);
+  } catch (err) {
+    if ((err as Error).name === "AbortError") throw err;
+    // No on-device model could run at all → motion + saliency only. This is
+    // the one path that surfaces "visual AI unavailable" downstream.
+    return motionOnlyScores(args.frames, args.weights);
+  }
+}
+
+/** True when the cloud frame pass returned at least one real per-label score.
+ *  An all-empty result means the cloud route was unconfigured/blocked (503),
+ *  so the caller should fall back to on-device understanding.
+ *  (Implemented in scoreFallback.ts; re-exported there.) */
 
 let workerSingleton: Worker | null = null;
 
@@ -86,6 +109,7 @@ interface ComposeArgs {
   weights: SignalWeights;
   signal?: AbortSignal;
   onProgress?: (done: number, total: number) => void;
+  onBackend?: (device: string) => void;
 }
 
 async function scoreLocalWithCompose({
@@ -93,16 +117,22 @@ async function scoreLocalWithCompose({
   plan,
   weights,
   signal,
-  onProgress
+  onProgress,
+  onBackend
 }: ComposeArgs): Promise<FrameScore[]> {
   const worker = getWorker();
   const out: FrameScore[] = [];
 
-  await postToWorker(worker, {
+  const init = await postToWorker<{ ready: boolean; device: string } | boolean>(worker, {
     type: "init",
     labels: plan.scenarios.map((s) => s.prompt),
     ids: plan.scenarios.map((s) => s.id)
   });
+  // The worker reports which backend actually loaded (webgpu | wasm) so the UI
+  // can be honest about a slower CPU run.
+  if (init && typeof init === "object" && typeof init.device === "string") {
+    onBackend?.(init.device);
+  }
 
   for (let i = 0; i < frames.length; i++) {
     if (signal?.aborted) throw new DOMException("aborted", "AbortError");
@@ -204,16 +234,6 @@ function resolveSignalWeights(plan: EditPlan): SignalWeights {
   // Fallback: pick a profile based on whether scenarios are concrete.
   if (plan.scenarios.length === 0) return SIGNAL_DEFAULTS.visualInterest;
   return SIGNAL_DEFAULTS.scenarioHeavy;
-}
-
-function composite(
-  semantic: number,
-  motion: number,
-  saliency: number,
-  w: SignalWeights
-): number {
-  const score = w.semantic * semantic + w.motion * motion + w.saliency * saliency;
-  return Math.max(0, Math.min(1, score));
 }
 
 interface WorkerRequest {
