@@ -189,6 +189,11 @@ export interface ChatBrainPayload {
   pendingQuestion?: { id: string; prompt: string; suggestions?: string[] };
   pendingActionKind?: string;
   activeTargetSeconds?: number | null;
+  /** A compact, running-goal SUBJECT carried across turns (e.g. the current
+   *  plan's primary focus "combat moments"). Lets the router combine a prior
+   *  subject with a new duration-only turn (and vice-versa) instead of
+   *  reasoning from the latest sentence alone. Text-only; never media. */
+  activeSubject?: string;
   timelineClipCount?: number;
   selectedSourceCount?: number;
   sourceName?: string;
@@ -201,6 +206,7 @@ export interface ChatBrainPayloadInput {
   pendingQuestion?: { id: string; prompt: string; suggestions?: string[] } | null;
   pendingActionKind?: string | null;
   activeTargetSeconds?: number | null;
+  activeSubject?: string | null;
   timelineClipCount?: number;
   selectedSourceCount?: number;
   sourceName?: string | null;
@@ -259,6 +265,7 @@ export function buildChatBrainPayload(input: ChatBrainPayloadInput): ChatBrainPa
   if (input.activeTargetSeconds === null || typeof input.activeTargetSeconds === "number") {
     payload.activeTargetSeconds = input.activeTargetSeconds;
   }
+  if (input.activeSubject) payload.activeSubject = input.activeSubject.slice(0, 120);
   if (typeof input.timelineClipCount === "number") payload.timelineClipCount = input.timelineClipCount;
   if (typeof input.selectedSourceCount === "number") payload.selectedSourceCount = input.selectedSourceCount;
   if (input.sourceName) payload.sourceName = input.sourceName.slice(0, 120);

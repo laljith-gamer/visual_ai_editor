@@ -180,7 +180,20 @@ export async function resolveCloudBrainIntent(
     const data = (await res.json().catch(() => null)) as
       | { intent?: ChatBrainIntent | null }
       | null;
-    return data?.intent ?? null;
+    const intent = data?.intent ?? null;
+    if (!intent) return null;
+
+    // Memory carry (deterministic safety net): if the model dropped the
+    // duration but the user set one on an earlier turn, restore it so a
+    // subject-only follow-up ("combat scene on this") still targets the
+    // remembered length instead of falling back to a generic default.
+    if (
+      (intent.targetSeconds === null || intent.targetSeconds === undefined) &&
+      typeof input.activeTargetSeconds === "number"
+    ) {
+      intent.targetSeconds = input.activeTargetSeconds;
+    }
+    return intent;
   } catch {
     return null;
   }
