@@ -89,11 +89,12 @@ function buildQuestion(field: MissingField): ClarifyQuestion {
     case "format":
       return {
         id: "intake-format",
-        prompt: "Where will you post it?",
+        prompt:
+          "Vertical or horizontal? Shorts/Reels/TikTok are vertical; a normal video is horizontal.",
         suggestions: [
-          "YouTube Shorts / Reels / TikTok",
-          "YouTube normal",
-          "Square post"
+          "Vertical (9:16)",
+          "Horizontal (16:9)",
+          "Square (1:1)"
         ],
         kind: "single-choice"
       };

@@ -6,9 +6,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { inferBrief, type InferContext } from "./inferBrief.ts";
+import { inferBrief, inferOrientationFromIntent, type InferContext } from "./inferBrief.ts";
 import { decideQuestion } from "./questionEngine.ts";
 import { classifyEffects } from "./capabilityMatrix.ts";
+import { createEmptyBrief } from "./editBrief.ts";
+import { parseFormat } from "../intent/videoPromptInterpreter.ts";
 
 const oneVideo: InferContext = {
   libraryCount: 1,
@@ -198,4 +200,65 @@ test("'use all videos for a highlights reel' → all scope (multi-video)", () =>
 test("'this video only' still resolves to current scope (multi-video)", () => {
   const brief = inferBrief("make a reel from this video only", manyVideos);
   assert.equal(brief.sourceScope.type, "current");
+});
+
+
+// ---------------------------------------------------------------------
+// Orientation: infer generically (shorts → vertical, video → horizontal),
+// ask only when genuinely ambiguous. No hardcoded genre tables.
+// ---------------------------------------------------------------------
+
+test("inferOrientationFromIntent: short-form deliverables → vertical", () => {
+  for (const kind of ["highlight_reel", "continuous_clip", "specific_moment", "compose_montage"] as const) {
+    const b = createEmptyBrief("x");
+    b.intentKind = kind;
+    assert.equal(inferOrientationFromIntent(b), "vertical", kind);
+  }
+  const reel = createEmptyBrief("x");
+  reel.output.outputType = "multi_clip";
+  assert.equal(inferOrientationFromIntent(reel), "vertical");
+});
+
+test("inferOrientationFromIntent: whole-video assembly → horizontal", () => {
+  const merge = createEmptyBrief("x");
+  merge.intentKind = "merge_sources";
+  assert.equal(inferOrientationFromIntent(merge), "horizontal");
+  const asis = createEmptyBrief("x");
+  asis.output.outputType = "as_is_merge";
+  assert.equal(inferOrientationFromIntent(asis), "horizontal");
+});
+
+test("inferOrientationFromIntent: ambiguous creation → null (ask the user)", () => {
+  for (const kind of ["create_short", "unknown", "extract_range"] as const) {
+    const b = createEmptyBrief("x");
+    b.intentKind = kind;
+    assert.equal(inferOrientationFromIntent(b), null, kind);
+  }
+});
+
+test("'make a highlight reel of the best parts' → infers vertical, never asks format", () => {
+  const brief = inferBrief("make a highlight reel of the best parts", oneVideo);
+  assert.equal(brief.output.format, "vertical");
+  assert.ok(!brief.missing.includes("format"), JSON.stringify(brief.missing));
+});
+
+test("'merge the videos as is' → infers horizontal (video creation)", () => {
+  const brief = inferBrief("merge the videos as is", manyVideos);
+  assert.equal(brief.output.format, "horizontal");
+  assert.ok(!brief.missing.includes("format"));
+});
+
+test("explicit 'make a horizontal video of the best parts' → horizontal wins over inference", () => {
+  const brief = inferBrief("make a horizontal video of the best parts", oneVideo);
+  assert.equal(brief.output.format, "horizontal");
+  assert.ok(brief.confidence.format >= 0.85);
+  assert.ok(!brief.missing.includes("format"));
+});
+
+test("the orientation clarify chips are answerable (parseFormat maps each)", () => {
+  // The chips the question engine offers must round-trip through parseFormat
+  // so the pending-answer resolver can apply the user's pick to brief.format.
+  assert.equal(parseFormat("Vertical (9:16)"), "vertical");
+  assert.equal(parseFormat("Horizontal (16:9)"), "horizontal");
+  assert.equal(parseFormat("Square (1:1)"), "square");
 });

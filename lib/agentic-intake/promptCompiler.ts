@@ -105,8 +105,12 @@ export function compileBriefPrompt(brief: EditBrief): string {
   const fmt = formatLabel(brief.output.format);
   const platform = platformLabel(brief.output.platform);
   const platformPart = platform ? ` for ${platform}` : "";
+  // "short" reads naturally for vertical/square; a horizontal deliverable is a
+  // normal "video". The aspect words in `fmt` ("horizontal 16:9") are what the
+  // planner + the offline detectFormat actually key on for plan.format.
+  const deliverable = brief.output.format === "horizontal" ? "video" : "short";
   lines.push(
-    `Create a ${fmt} short from ${sourceScopeLabel(brief)}${platformPart}.`
+    `Create a ${fmt} ${deliverable} from ${sourceScopeLabel(brief)}${platformPart}.`
   );
 
   // ---- 2. Output structure ----

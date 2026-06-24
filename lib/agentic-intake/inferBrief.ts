@@ -286,6 +286,38 @@ function platformFormat(platform: OutputPlatform): OutputFormat | undefined {
   }
 }
 
+/**
+ * Generic orientation inference from the brief's STRUCTURE — never a
+ * genre/keyword table. The owner's rule: a short-form deliverable ("make a
+ * short / reel / highlight") is vertical; assembling whole videos into one
+ * ("merge these videos") is horizontal; anything genuinely ambiguous returns
+ * null so the caller ASKS the user instead of guessing.
+ *
+ * We only read intentKind / outputType here — both were already derived
+ * generically upstream (inferIntent), so no new lexical rules are introduced.
+ */
+export function inferOrientationFromIntent(brief: EditBrief): OutputFormat | null {
+  // Output structure is the strongest signal when present.
+  const ot = brief.output.outputType;
+  if (ot === "as_is_merge") return "horizontal"; // stitching whole clips → a video
+  if (ot === "multi_clip" || ot === "single_continuous") return "vertical"; // a short
+
+  switch (brief.intentKind) {
+    case "highlight_reel":
+    case "continuous_clip":
+    case "specific_moment":
+    case "compose_montage":
+      return "vertical"; // short-form deliverable
+    case "merge_sources":
+      return "horizontal"; // making one video out of several
+    default:
+      // create_short (generic "make a video/something"), extract_range,
+      // unknown, and edit/describe intents are NOT a clear short-vs-video
+      // signal → leave it for the user to choose.
+      return null;
+  }
+}
+
 // ---------------------------------------------------------------------
 // Source scope inference
 // ---------------------------------------------------------------------
@@ -458,6 +490,23 @@ export function computeMissing(brief: EditBrief, ctx: InferContext): MissingFiel
     missing.push("content_focus");
   }
 
+  // 4) Orientation (vertical vs horizontal) — ask ONLY when it's a creation
+  //    intent, the user didn't state a format, no platform implied one, AND we
+  //    couldn't infer it from the deliverable. Clearly short-form ("make a
+  //    reel" → vertical) and clearly whole-video ("merge these" → horizontal)
+  //    requests are inferred in finalizeBrief and never reach here; this fires
+  //    only for a genuinely ambiguous "make a video / make something".
+  const isCreationIntent =
+    kind === "create_short" ||
+    kind === "highlight_reel" ||
+    kind === "continuous_clip" ||
+    kind === "compose_montage" ||
+    kind === "merge_sources" ||
+    kind === "specific_moment";
+  if (isCreationIntent && !brief.output.format && brief.confidence.format === 0) {
+    missing.push("format");
+  }
+
   return missing;
 }
 
@@ -487,6 +536,19 @@ export function finalizeBrief(brief: EditBrief, ctx: InferContext = DEFAULT_CTX)
     if (fmt) {
       out.output = { ...out.output, format: fmt };
       out.confidence = { ...out.confidence, format: Math.max(out.confidence.format, 0.7) };
+    }
+  }
+
+  // No explicit format and no platform default → infer orientation from the
+  // deliverable type (short-form → vertical; whole-video assembly →
+  // horizontal). LOW confidence so it reads as an inference the user can
+  // override, and so a genuinely ambiguous request (inferOrientationFromIntent
+  // returns null) still surfaces as a missing field below and gets asked.
+  if (!out.output.format) {
+    const inferred = inferOrientationFromIntent(out);
+    if (inferred) {
+      out.output = { ...out.output, format: inferred };
+      out.confidence = { ...out.confidence, format: Math.max(out.confidence.format, 0.5) };
     }
   }
 
