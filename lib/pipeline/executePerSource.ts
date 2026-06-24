@@ -465,23 +465,31 @@ async function sampleAndScore(args: {
   );
 
   // Scene-analysis backend selection:
-  //   - "cloud"        → POST /api/vision/frame (OpenRouter free analysis
-  //                       model, with Gemini fallback via the dispatcher).
-  //   - "siglip-local" → fully on-device SigLIP worker.
-  // The cloud path is used when the user enabled the cloud-analysis toggle
-  // (NEXT_PUBLIC_CLOUD_ANALYSIS / runtime override) OR when the device is too
-  // low-tier to run SigLIP locally. Otherwise we stay fully offline.
-  const tier: "siglip-local" | "cloud" =
-    cloudAnalysisEnabled() || capTier === "low" ? "cloud" : "siglip-local";
-  progress.setStatus(
-    "scoring",
-    `Scoring ${frames.length} frames (${tier === "cloud" ? "cloud" : capTier})`
-  );
+  //   - "cloud"        → POST /api/vision/frame (free OpenRouter analysis
+  //                       model, Gemini fallback via the dispatcher). ONLINE.
+  //   - "siglip-local" → on-device SigLIP. Runs on WebGPU when present and on
+  //                       CPU (wasm) when not, so a GPU-less / low-tier device
+  //                       still UNDERSTANDS frames instead of guessing.
+  // Cloud is used only when the user turned on the cloud-analysis toggle.
+  // (Previously low-tier devices force-routed to cloud, which silently became
+  // the motion guess whenever cloud was unconfigured — that's the bug behind
+  // "visual AI unavailable". On-device now covers those devices, and the
+  // scorer itself falls cloud→on-device→motion so neither path dead-ends.)
+  const tier: "siglip-local" | "cloud" = cloudAnalysisEnabled() ? "cloud" : "siglip-local";
+  progress.setStatus("scoring", `Scoring ${frames.length} frames\u2026`);
   const tB = Date.now();
   const visualScores = await scoreFrames({
     frames,
     plan,
     tier,
+    onBackend: (device) => {
+      if (device === "wasm") {
+        progress.setStatus(
+          "scoring",
+          `Understanding ${frames.length} frames on CPU (slower \u2014 no GPU)\u2026`
+        );
+      }
+    },
     onProgress: (done, total) => progress.setProgress(0.25 + (done / total) * 0.35)
   });
   const scored = applyTranscriptGrounding(visualScores, plan, transcript);

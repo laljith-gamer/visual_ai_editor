@@ -14,6 +14,7 @@
  *   { id, payload?: ..., error?: string }
  */
 import { pipeline, env } from "@huggingface/transformers";
+import { VISION } from "../config";
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
@@ -32,30 +33,62 @@ interface ScoreMessage {
 }
 type Incoming = InitMessage | ScoreMessage;
 
+type PipeOptions = { device: string; dtype: string };
+
 let classifier: ((
   image: Blob,
   labels: string[]
 ) => Promise<Array<{ label: string; score: number }>>) | null = null;
+/** Which backend actually loaded ("webgpu" | "wasm"). Reported back on init so
+ *  the UI can honestly say "analyzing on CPU (slower)" vs GPU. */
+let activeDevice: string | null = null;
 let scenarioLabels: string[] = [];
 let scenarioIds: string[] = [];
 /** Precomputed label -> id lookup, built once per init. Keeps first-match
  *  semantics identical to the previous `scenarioLabels.indexOf(label)`. */
 let labelToId = new Map<string, string>();
 
+/** True when this worker can reach a WebGPU adapter. WASM is always available
+ *  as the CPU fallback, so visual understanding runs even without a GPU. */
+function workerHasWebGPU(): boolean {
+  try {
+    return typeof navigator !== "undefined" && "gpu" in navigator && Boolean(navigator.gpu);
+  } catch {
+    return false;
+  }
+}
+
 async function ensureClassifier() {
   if (classifier) return;
-  const pipe = (await pipeline(
-    "zero-shot-image-classification",
-    "Xenova/siglip-base-patch16-224",
-    // Preserve the previous default precision explicitly so Transformers.js no
-    // longer warns that dtype was unspecified. Do not switch to fp16/q8 without
-    // browser-runtime testing that the model variant exists and scores well.
-    { device: "webgpu", dtype: "fp32" } as Parameters<typeof pipeline>[2]
-  )) as unknown as (
-    image: Blob,
-    labels: string[]
-  ) => Promise<Array<{ label: string; score: number }>>;
-  classifier = pipe;
+  // Build the load ladder: WebGPU first when available, then CPU/wasm so a
+  // GPU-less device still UNDERSTANDS frames instead of guessing from motion.
+  const plan: PipeOptions[] = [
+    ...(workerHasWebGPU() ? (VISION.devicePlan.webgpu as readonly PipeOptions[]) : []),
+    ...(VISION.devicePlan.cpu as readonly PipeOptions[])
+  ];
+  let lastErr: unknown = null;
+  for (const opt of plan) {
+    try {
+      const pipe = (await pipeline(
+        "zero-shot-image-classification",
+        VISION.model,
+        opt as unknown as Parameters<typeof pipeline>[2]
+      )) as unknown as (
+        image: Blob,
+        labels: string[]
+      ) => Promise<Array<{ label: string; score: number }>>;
+      classifier = pipe;
+      activeDevice = opt.device;
+      return;
+    } catch (err) {
+      // This device/precision combo isn't available here (no WebGPU, missing
+      // quantized weights, OOM, …) — try the next rung of the ladder.
+      lastErr = err;
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("No vision backend could be loaded");
 }
 
 self.onmessage = async (e: MessageEvent<Incoming>) => {
@@ -72,7 +105,10 @@ self.onmessage = async (e: MessageEvent<Incoming>) => {
         }
       }
       await ensureClassifier();
-      (self as unknown as Worker).postMessage({ id: msg.id, payload: true });
+      (self as unknown as Worker).postMessage({
+        id: msg.id,
+        payload: { ready: true, device: activeDevice }
+      });
       return;
     }
     if (msg.type === "score") {

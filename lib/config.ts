@@ -27,6 +27,37 @@ export const CLOUD_FRAME = {
   batchSize: 8
 } as const;
 
+// =====================================================================
+// On-device semantic frame scorer (zero-shot image classification).
+//
+// WHY SigLIP (not CLIP/MobileCLIP): SigLIP's sigmoid head gives a
+// well-calibrated ABSOLUTE per-label match score (each label independent,
+// 0..1), which is exactly what the quality-floor selection needs. CLIP /
+// MobileCLIP use a softmax that is only RELATIVE across the labels in one
+// call — for a single-scenario query ("combat scene") that collapses to ~1.0
+// for every frame, which is useless for ranking. So the right move for
+// "understand instead of guess" is to keep SigLIP and make it run on EVERY
+// device, not to swap the model.
+//
+// DEVICE LADDER: WebGPU is fastest; WASM (CPU) is the offline fallback so
+// visual understanding still runs without a GPU instead of dropping to the
+// motion/saliency guess. Entries are tried in order until one loads — so a
+// missing quantization variant degrades to fp32 rather than failing.
+// =====================================================================
+export const VISION = {
+  /** Zero-shot scorer model id (ONNX / Transformers.js). Swappable. */
+  model: "Xenova/siglip-base-patch16-224",
+  /** Load attempts, in priority order. The worker probes WebGPU first and,
+   *  when absent or failing, walks the CPU (wasm) entries. */
+  devicePlan: {
+    webgpu: [{ device: "webgpu", dtype: "fp32" }],
+    cpu: [
+      { device: "wasm", dtype: "q8" },
+      { device: "wasm", dtype: "fp32" }
+    ]
+  }
+} as const;
+
 /** Contact-sheet temporal pass dimensions. */
 export const CONTACT_SHEET = {
   cols: 4,
