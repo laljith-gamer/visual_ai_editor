@@ -76,8 +76,19 @@ export async function runQuickScan(args: RunQuickScanArgs): Promise<RunQuickScan
     onProgress
   });
 
+  const { captionFrames } = await import("@/lib/vision/caption");
+  const captionResult = await captionFrames(frames, {
+    tier: deviceTier === "unknown" ? "low" : deviceTier,
+    enabled: true,
+  });
+
   const summary = summarizeQuickScan(
-    frames.map((f) => ({ t: f.t, motion: f.motion, saliency: f.saliency })),
+    captionResult.frames.map((f) => ({
+      t: f.t,
+      motion: f.motion,
+      saliency: f.saliency,
+      caption: (f as any).caption
+    })),
     duration
   );
 

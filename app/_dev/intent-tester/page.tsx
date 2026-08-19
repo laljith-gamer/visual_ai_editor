@@ -6,54 +6,33 @@ import { useEditorStore } from "@/hooks/useEditorStore";
 import type { QuickMatch, QuickMatchContext } from "@/lib/intent/types";
 
 /**
- * v1.7.5 — Dev-only intent tester.
+ * v1.8.0 — Dev-only intent tester.
  *
- * Live-evaluates the grammar matcher against arbitrary phrases using
- * the current editor state as the context (sources, highlights,
- * lastBriefing, etc.). Useful for tuning patterns + thresholds without
- * spinning up the full chat flow.
+ * AI-powered intent understanding using system prompts (NO hardcoded patterns).
+ * Toggle between "Pattern Matcher" (legacy) and "AI Intent" (new).
  *
- * Gated by NODE_ENV: production builds short-circuit to a 404-style
- * card. Dev navigation is /\_dev/intent-tester.
- *
- * No styling beyond inline because this is a contributor tool, not a
- * user-facing surface. Keeps the bundle hit minimal.
+ * Gated by NODE_ENV: production builds short-circuit to a 404-style card.
+ * Dev navigation is /\_dev/intent-tester.
  */
 
-const SAMPLES = [
-  "merge the videos",
-  "just merge them",
-  "merge whole videos no edit",
-  "stitch the podcast then the b-roll",
-  "concatenate them",
-  "first 30 seconds",
-  "last 10s",
-  "from 0:30 to 1:45",
-  "give me the first minute",
-  "trim first 30 seconds",
-  "drop 0:30 to 0:45",
-  "split this clip",
-  "split at 1:00",
-  "reset video 1",
-  "clip those",
-  "use the briefing",
-  "make a 15s reel of these",
-  "use the second one",
-  "yes",
-  "go ahead",
-  "do it",
-  "cancel",
-  "never mind",
-  "best parts",
-  "highlights please",
-  "the funny moments",
-  "describe the video",
-  "make it 30s"
-];
+interface AIIntentResult {
+  action: string;
+  target: string;
+  parameters: Record<string, any>;
+  confidence: number;
+  needs_clarification: boolean;
+  question?: string;
+  reasoning?: string;
+}
 
 export default function IntentTesterPage() {
   const isDev = process.env.NODE_ENV !== "production";
-  const [text, setText] = useState("merge the videos");
+  const [text, setText] = useState("");
+  const [mode, setMode] = useState<"pattern" | "ai">("ai");
+  const [aiResult, setAiResult] = useState<AIIntentResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
   const sources = useEditorStore((s) => s.sources);
   const selectedSourceIds = useEditorStore((s) => s.selectedSourceIds);
   const highlights = useEditorStore((s) => s.highlights);
@@ -63,9 +42,6 @@ export default function IntentTesterPage() {
   const pendingClarify = useEditorStore((s) => s.pendingClarify);
   const messages = useEditorStore((s) => s.messages);
 
-  // Build the QuickMatchContext in the same shape lib/intent/dispatch.ts
-  // does. We deliberately don't import buildContext from there to keep
-  // dispatch.ts free of React concerns.
   const ctx = useMemo<QuickMatchContext>(() => {
     const prev = [...messages].reverse().find((m) => m.role === "assistant");
     return {
@@ -110,6 +86,48 @@ export default function IntentTesterPage() {
 
   const result = useMemo(() => quickMatch(text, ctx), [text, ctx]);
 
+  const analyzeWithAI = async () => {
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const response = await fetch("/api/agent/intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: "understand",
+          userMessage: text,
+          context: {
+            uploadedVideos: sources.length,
+            selectedVideos: selectedSourceIds.length,
+            timelineClips: highlights.length,
+            timelineEmpty: highlights.length === 0,
+            hasPendingAction: !!pendingExecution
+          }
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      setAiResult(data);
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (mode === "ai" && text.trim()) {
+      const timer = setTimeout(() => {
+        analyzeWithAI();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [text, mode]);
+
   if (!isDev) {
     return (
       <main style={notFoundStyle}>
@@ -127,9 +145,33 @@ export default function IntentTesterPage() {
     <main style={shellStyle}>
       <header style={headerStyle}>
         <h1 style={{ margin: 0, fontSize: 18 }}>Intent Tester</h1>
-        <span style={{ color: "#888", fontSize: 12 }}>
-          dev-only · client-side matcher · threshold 0.85
-        </span>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <span style={{ color: "#888", fontSize: 12 }}>dev-only · no hardcoded patterns</span>
+          <div style={{ display: "flex", gap: 4, background: "rgba(0,0,0,0.3)", borderRadius: 6, padding: 2 }}>
+            <button
+              type="button"
+              style={{
+                ...modeBtnStyle,
+                background: mode === "pattern" ? "rgba(99, 216, 149, 0.15)" : "transparent",
+                color: mode === "pattern" ? "var(--accent, #63d895)" : "#888"
+              }}
+              onClick={() => setMode("pattern")}
+            >
+              Pattern Matcher
+            </button>
+            <button
+              type="button"
+              style={{
+                ...modeBtnStyle,
+                background: mode === "ai" ? "rgba(99, 216, 149, 0.15)" : "transparent",
+                color: mode === "ai" ? "var(--accent, #63d895)" : "#888"
+              }}
+              onClick={() => setMode("ai")}
+            >
+              AI Intent
+            </button>
+          </div>
+        </div>
       </header>
 
       <section style={panelStyle}>
@@ -139,55 +181,64 @@ export default function IntentTesterPage() {
           onChange={(e) => setText(e.target.value)}
           rows={3}
           style={inputStyle}
-          placeholder="Type a phrase to test..."
+          placeholder="Type what you want to do... (e.g., 'merge the podcast then trim the first 30 seconds')"
         />
-
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          {SAMPLES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              style={sampleBtnStyle}
-              onClick={() => setText(s)}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
       </section>
 
-      <section style={panelStyle}>
-        <h2 style={sectionTitleStyle}>Result</h2>
-        <ResultBox match={result.match} />
-      </section>
+      {mode === "pattern" ? (
+        <>
+          <section style={panelStyle}>
+            <h2 style={sectionTitleStyle}>Result</h2>
+            <ResultBox match={result.match} />
+          </section>
 
-      <section style={panelStyle}>
-        <h2 style={sectionTitleStyle}>All candidates ({result.candidates.length})</h2>
-        {result.candidates.length === 0 ? (
-          <p style={{ color: "#888" }}>No pattern fired.</p>
-        ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-            {result.candidates.map((c, i) => (
-              <li
-                key={`${c.kind}-${i}`}
-                style={{
-                  ...candidateRowStyle,
-                  background:
-                    c.confidence >= 0.85
-                      ? "rgba(99, 216, 149, 0.08)"
-                      : "rgba(255, 255, 255, 0.02)"
-                }}
-              >
-                <strong>{c.kind}</strong>{" "}
-                <span style={{ color: "#888" }}>({c.patternId})</span>
-                <span style={{ marginLeft: "auto", fontFamily: "monospace" }}>
-                  {(c.confidence * 100).toFixed(0)}%
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+          <section style={panelStyle}>
+            <h2 style={sectionTitleStyle}>All candidates ({result.candidates.length})</h2>
+            {result.candidates.length === 0 ? (
+              <p style={{ color: "#888" }}>No pattern fired.</p>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {result.candidates.map((c, i) => (
+                  <li
+                    key={`${c.kind}-${i}`}
+                    style={{
+                      ...candidateRowStyle,
+                      background:
+                        c.confidence >= 0.85
+                          ? "rgba(99, 216, 149, 0.08)"
+                          : "rgba(255, 255, 255, 0.02)"
+                    }}
+                  >
+                    <strong>{c.kind}</strong>{" "}
+                    <span style={{ color: "#888" }}>({c.patternId})</span>
+                    <span style={{ marginLeft: "auto", fontFamily: "monospace" }}>
+                      {(c.confidence * 100).toFixed(0)}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </>
+      ) : (
+        <section style={panelStyle}>
+          <h2 style={sectionTitleStyle}>AI Intent Understanding</h2>
+          {aiLoading ? (
+            <div style={{ color: "#888", padding: 14 }}>Analyzing...</div>
+          ) : aiError ? (
+            <div style={{ ...resultBoxStyle, borderColor: "rgba(255, 99, 71, 0.5)" }}>
+              <strong style={{ color: "#ff6347" }}>Error</strong>
+              <p style={{ margin: "8px 0 0", color: "#888" }}>{aiError}</p>
+            </div>
+          ) : aiResult ? (
+            <AIResultBox result={aiResult} />
+          ) : (
+            <div style={{ color: "#888", padding: 14, fontStyle: "italic" }}>
+              Type a command to see AI understanding...
+            </div>
+          )}
+        </section>
+      )}
 
       <section style={panelStyle}>
         <h2 style={sectionTitleStyle}>Context snapshot</h2>
@@ -245,15 +296,67 @@ function ResultBox({ match }: { match: QuickMatch | null }) {
   );
 }
 
-// ---- Inline styles (dev tool, not user-facing) ----
+function AIResultBox({ result }: { result: AIIntentResult }) {
+  return (
+    <div
+      style={{
+        ...resultBoxStyle,
+        borderColor: result.confidence >= 0.7 ? "rgba(99, 216, 149, 0.5)" : "rgba(255, 193, 7, 0.5)"
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12 }}>
+        <strong style={{ fontSize: 16 }}>{result.action}</strong>
+        {result.target && (
+          <span style={{ color: "#888" }}>→ {result.target}</span>
+        )}
+        <span style={{ marginLeft: "auto", color: result.confidence >= 0.7 ? "var(--accent, #63d895)" : "#ffc107" }}>
+          {(result.confidence * 100).toFixed(0)}%
+        </span>
+      </div>
 
+      {result.needs_clarification && result.question && (
+        <div style={{
+          padding: 10,
+          background: "rgba(255, 193, 7, 0.1)",
+          border: "1px solid rgba(255, 193, 7, 0.3)",
+          borderRadius: 6,
+          marginBottom: 12
+        }}>
+          <strong style={{ color: "#ffc107", fontSize: 12 }}>NEEDS CLARIFICATION</strong>
+          <p style={{ margin: "6px 0 0", color: "#f4f2ed" }}>{result.question}</p>
+        </div>
+      )}
+
+      {result.reasoning && (
+        <div style={{
+          padding: 10,
+          background: "rgba(99, 216, 149, 0.05)",
+          border: "1px solid rgba(99, 216, 149, 0.15)",
+          borderRadius: 6,
+          marginBottom: 12
+        }}>
+          <strong style={{ color: "#63d895", fontSize: 11, letterSpacing: "0.1em" }}>REASONING</strong>
+          <p style={{ margin: "6px 0 0", color: "#b3ad9f", fontSize: 13 }}>{result.reasoning}</p>
+        </div>
+      )}
+
+      {Object.keys(result.parameters).length > 0 && (
+        <>
+          <strong style={{ fontSize: 11, color: "#888", letterSpacing: "0.1em", display: "block", marginBottom: 8 }}>PARAMETERS</strong>
+          <pre style={preStyle}>{JSON.stringify(result.parameters, null, 2)}</pre>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Inline styles
 const shellStyle: React.CSSProperties = {
   background: "var(--bg-0, #0b0d10)",
   color: "var(--text, #f4f2ed)",
   minHeight: "100dvh",
   padding: 24,
-  fontFamily:
-    "ui-sans-serif, system-ui, -apple-system, sans-serif"
+  fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif"
 };
 const headerStyle: React.CSSProperties = {
   display: "flex",
@@ -290,14 +393,14 @@ const inputStyle: React.CSSProperties = {
   resize: "vertical",
   boxSizing: "border-box"
 };
-const sampleBtnStyle: React.CSSProperties = {
-  padding: "5px 10px",
+const modeBtnStyle: React.CSSProperties = {
+  padding: "6px 12px",
   fontSize: 11,
-  background: "rgba(255,255,255,0.04)",
-  color: "var(--text-muted, #b3ad9f)",
-  border: "1px solid rgba(255,255,255,0.06)",
-  borderRadius: 999,
-  cursor: "pointer"
+  fontWeight: 500,
+  border: "none",
+  borderRadius: 4,
+  cursor: "pointer",
+  transition: "all 0.2s"
 };
 const sectionTitleStyle: React.CSSProperties = {
   margin: "0 0 12px",

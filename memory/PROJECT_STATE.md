@@ -4,12 +4,47 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-22 pm (conversational chat + brain toggle (OpenRouter ↔
-> Local) + more AI-commandable tools; branch fix/intent-llm-reasoning)
+> Last updated: 2026-06-22 late pm (duration bug fix + AI intent system + 
+> hardcoded patterns removed)
 
 ---
 
-## 0. Latest change (2026-06-22, pm) — conversational chat, brain toggle, more AI-commandable tools
+## 0. Latest changes (2026-06-22, late pm) — three major improvements
+
+### 1. Duration Bug Fixed
+
+User requests for "3 min" or "5 min" were showing half the time (90s / 150s instead of 180s / 300s). Root cause was two-fold:
+
+- **Overly loose regex** in `lib/intent/videoPromptInterpreter.ts` `parseSourceScope`: matched ANY "all"/"every"/"each" near video words, causing false positives ("make a 3 min video" → `sourceScope: "all"` because it matched "video").
+- **No runtime validation** in `app/editor/page.tsx`: when `sourceScope === "all"`, duration was split across videos without checking actual selected count.
+
+**Fixed:** Removed loose regex fallback (now only explicit phrases like "from all videos" trigger multi-source mode) + added runtime check that overrides to single-source when only 1 video selected. Verified: typecheck ✓; tests unchanged. See `memory/DURATION_BUG_FIX_2026-06-22.md`.
+
+### 2. AI Intent System Added
+
+Added AI-powered intent understanding using system prompts (NO hardcoded patterns). New `POST /api/agent/intent` task "understand" returns structured JSON with action/target/parameters/confidence/reasoning/clarification. Dev intent tester at `/\_dev/intent-tester` now has AI mode toggle showing live understanding.
+
+- **Features:** Multi-step command support, parameter extraction, confidence scores, reasoning transparency, clarification when ambiguous, context-aware (knows uploaded videos, timeline state).
+- **Example:** "merge the podcast then trim the first 30 seconds" → sequence action with merge + trim steps, 0.9 confidence, reasoning shown.
+- **Privacy:** Text-only, no video/frame data, uses existing cloud provider setup.
+
+See `memory/AI_INTENT_SYSTEM_2026-06-22.md`.
+
+### 3. Hardcoded Patterns Removed
+
+Completely removed ALL hardcoded SAMPLES array (30+ commands) and sample button UI from intent tester. Now 100% AI-powered with zero maintenance burden. Users type naturally, AI understands semantically, no keyword matching. Complies with project rule: understand generically through AI reasoning, never through hardcoded keywords.
+
+See `memory/HARDCODED_PATTERNS_REMOVED_2026-06-22.md`.
+
+**Files changed:**
+- `lib/intent/videoPromptInterpreter.ts` — removed loose regex
+- `app/editor/page.tsx` — added runtime validation
+- `app/api/agent/intent/route.ts` — added "understand" task
+- `app/_dev/intent-tester/page.tsx` — removed SAMPLES, added AI mode
+
+---
+
+## 0. Earlier change (2026-06-22, pm) — conversational chat, brain toggle, more AI-commandable tools
 
 Made the chat a genuine tool-aware assistant and closed the remaining "every
 tool should work by AI command" gaps — all under a hard rule of NO hardcoded

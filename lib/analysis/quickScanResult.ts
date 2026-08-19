@@ -21,6 +21,7 @@ export interface QuickScanFrame {
   t: number;
   motion: number;
   saliency: number;
+  caption?: string;
 }
 
 export interface QuickScanSummary {
@@ -112,11 +113,15 @@ export function summarizeQuickScan(
 
   // Compact keyframe memory (NO image — t + signals only), evenly thinned to
   // the cap so a long scan doesn't bloat storage.
-  const keyframes: KeyframeMemory[] = thin(sorted, QUICK_SCAN.maxKeyframes).map((f) => ({
-    t: round2(f.t),
-    motion: round2(clamp01(f.motion)),
-    saliency: round2(clamp01(f.saliency))
-  }));
+  const keyframes: KeyframeMemory[] = thin(sorted, QUICK_SCAN.maxKeyframes).map((f) => {
+    const kf: KeyframeMemory = {
+      t: round2(f.t),
+      motion: round2(clamp01(f.motion)),
+      saliency: round2(clamp01(f.saliency))
+    };
+    if (f.caption) kf.caption = f.caption;
+    return kf;
+  });
 
   // Distinct structural content types (NOT genre): does the video have real
   // motion, and does it have clearly static stretches?

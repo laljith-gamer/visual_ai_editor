@@ -140,11 +140,79 @@ export async function tryAgentCommand(
   userText: string,
   deps: AgentCommandDeps
 ): Promise<AgentCommandOutcome> {
+  // ---- Phase 0: Tiny safe control commands (4 patterns, instant) -----
+  // These NEVER need AI: undo, redo, render, export. Checked first so
+  // they work even when AI is completely unavailable.
+  const { classifyControlCommand } = await import("@/lib/intent/controlCommand");
+  const control = classifyControlCommand(userText);
+  if (control) {
+    deps.logSession.ai("agent.control", { action: control.action }, `Control: ${control.action}`);
+    return handleControlAction(control.action, deps);
+  }
+
+  // ---- Phase 1: AI Intent Router (PRIMARY brain) --------------------
+  // The AI router is the FIRST thing tried for everything except tiny
+  // control commands. It replaces the 15+ regex classifiers with a
+  // single LLM call that returns structured, typed intent.
+  //
+  // When AI is unavailable (no API key, offline, rate-limited), the
+  // result has action="unavailable" and we fall through to the legacy
+  // regex cascade below (backward compatibility).
+  try {
+    const { routeIntent, buildRouterContext } = await import("@/lib/intent/aiRouter");
+    const { executeAIIntent } = await import("@/lib/intent/aiIntentExecutor");
+
+    const storeState = useEditorStore.getState();
+    const context = buildRouterContext(storeState as Parameters<typeof buildRouterContext>[0]);
+    const intent = await routeIntent(userText, context);
+
+    if (intent.action !== "unavailable" && intent.action !== "passthrough") {
+      deps.logSession.ai("ai.router", {
+        action: intent.action,
+        confidence: intent.confidence,
+        topics: intent.topics
+      }, intent.reasoning?.slice(0, 120) || `AI route: ${intent.action}`);
+
+      const outcome = executeAIIntent(intent, {
+        pushMessage: deps.pushMessage,
+        setStatus: deps.setStatus as (s: string, d?: string) => void,
+        setProgress: deps.setProgress,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        setPendingClarify: (q: any) => useEditorStore.getState().setPendingClarify(q),
+        setActiveTargetSeconds: (s) => {
+          const store = useEditorStore.getState();
+          if ("setActiveTargetSeconds" in store) (store as any).setActiveTargetSeconds(s);
+        },
+        onRender: deps.onRender,
+        onExport: deps.onExport,
+        logSession: deps.logSession
+      });
+
+      if (outcome.handled) {
+        return { handled: true };
+      }
+      if (outcome.needsVisualPipeline) {
+        return { handled: false, needsVisual: true };
+      }
+      // AI classified but executor deferred — fall through to legacy
+    }
+    // action === "unavailable" or "passthrough" → fall through to legacy
+  } catch (err) {
+    deps.logSession.system(
+      "ai.router.failed",
+      { message: (err as Error).message },
+      `AI router errored, falling back: ${(err as Error).message?.slice(0, 80)}`
+    );
+    // Non-fatal — fall through to the legacy regex cascade
+  }
+
+  // ---- LEGACY FALLBACK: regex-based classifiers ---------------------
+  // These run ONLY when the AI router is unavailable, returns
+  // "passthrough", or the executor deferred to the existing handlers.
+  // This entire block is deprecated and will be removed once AI
+  // routing is proven stable.
+
   // ---- Read-only conversation guard (double safety) -----------------
-  // The editor already runs the (richer, async) conversation lane before
-  // tryAgentCommand. This synchronous Layer-A check means ANY caller (e.g.
-  // the dev intent tester) can never mutate the timeline on an explanation
-  // question. Read-only: it only pushes a deterministic answer from state.
   const convo = classifyTurnSync(userText);
   if (convo.kind === "read_only_meta" && convo.confidence >= 0.6) {
     const answer = respondReadOnlySync(convo, userText);
@@ -161,10 +229,7 @@ export async function tryAgentCommand(
     return { handled: true };
   }
 
-  // ---- Phase 1: fast control commands (never reach the planner) -----
-  // Confirmations, undo/redo, and render are resolved instantly here.
-  // Anchored matching means partial commands ("go to clip 2", "render
-  // the part where he scores") are NOT caught and flow on to parsing.
+  // ---- Phase 1 (legacy): fast control commands ----------------------
   const fast = classifyFastCommand(userText);
   if (fast) {
     const outcome = await handleFastCommand(fast, deps);
@@ -174,9 +239,6 @@ export async function tryAgentCommand(
       }
       return outcome;
     }
-    // outcome === null → intentionally fall through (e.g. affirm/cancel
-    // WITH a pending action, which the existing quick-shortcut gate
-    // handles end-to-end).
   }
 
   // ---- Transition commands (deterministic, before the planner) ------
@@ -192,11 +254,6 @@ export async function tryAgentCommand(
     deps.logSession.ai("agent.format", { format: formatCmd.format }, `Output format → ${formatCmd.format}`);
     return handleFormatCommand(formatCmd.format, deps);
   }
-  // Gate source-control parsing while a clarify is pending. Otherwise a
-  // bare "both" / "all" reply to "Which video should I use?" gets eaten as a
-  // selection toggle and the clarify never resolves (the "Which video?" loop).
-  // When a clarify is pending we let the turn fall through to the editor's
-  // pending-answer resolver, which knows how to map "both"/"all" to sources.
   const sourceCmd = useEditorStore.getState().pendingClarify
     ? null
     : parseSourceControlCommand(userText);
@@ -205,7 +262,7 @@ export async function tryAgentCommand(
     return handleSourceCommand(sourceCmd, deps);
   }
 
-  // ---- Reframe / framing talk (acknowledge; reframe is automatic) ---
+  // ---- Reframe / framing talk ----
   const reframe = parseReframeIntent(userText);
   if (reframe) {
     deps.logSession.ai("agent.reframe", { wants: reframe.wants }, `Reframe intent: ${reframe.wants}`);
@@ -224,9 +281,6 @@ export async function tryAgentCommand(
     return { handled: false };
   }
 
-  // Persist memory after any turn that may have mutated it (the orchestrator
-  // observes the message + applies reinforcement). Fire-and-forget so a
-  // storage hiccup never blocks editing.
   if (decision.kind !== "fallthrough") {
     void saveAgentMemory(deps.sessionId, memory);
   }
@@ -236,8 +290,6 @@ export async function tryAgentCommand(
       return { handled: false };
 
     case "needs_visual":
-      // Honest hand-off: let the cloud planner + pipeline do the visual
-      // search. Memory (incl. reinforcement) is already updated for it.
       deps.logSession.ai("agent.command.needs_visual", { concept: decision.concept }, decision.reason);
       return { handled: false, needsVisual: true };
 
@@ -268,14 +320,10 @@ export async function tryAgentCommand(
     case "operations": {
       const applied = applyOps(decision.ops, memory, deps, userText);
       if (applied.asked) {
-        // We parked an ambiguous overlap and asked the user — the turn is
-        // fully handled (the question + pendingClarify were already pushed).
         deps.logSession.ai("agent.overlap.ask", {}, "Asked the user how to resolve an overlapping clip.");
         return { handled: true };
       }
       if (!applied.anyChange && decision.ops.every((o) => o.type !== "render")) {
-        // Nothing actually changed (e.g. clip vanished) — be honest and
-        // fall through so the cloud planner can try.
         return { handled: false };
       }
       const lines = [decision.message, ...decision.assumptions];
@@ -297,7 +345,85 @@ export async function tryAgentCommand(
 }
 
 // ---------------------------------------------------------------------
-// Fast control commands (Phase 1)
+// Phase 0: minimal control commands (AI-first path)
+// ---------------------------------------------------------------------
+
+/** Execute a bare control action from the tiny safe regex (4 patterns). */
+async function handleControlAction(
+  action: "undo" | "redo" | "render" | "export",
+  deps: AgentCommandDeps
+): Promise<AgentCommandOutcome> {
+  const store = useEditorStore.getState();
+  const refreshStatus = () => {
+    const n = useEditorStore.getState().highlights.length;
+    deps.setStatus(n > 0 ? "ready" : "idle", n > 0 ? "Ready to render" : undefined);
+    deps.setProgress(n > 0 ? 1 : 0);
+  };
+
+  switch (action) {
+    case "undo": {
+      const r = store.undoTimeline();
+      deps.pushMessage({
+        role: "assistant",
+        content: r.restored ? "Undone — restored the previous timeline." : "Nothing to undo yet.",
+        attachment: { mode: "agent", kind: "undo" }
+      });
+      refreshStatus();
+      return { handled: true };
+    }
+    case "redo": {
+      const r = store.redoTimeline();
+      deps.pushMessage({
+        role: "assistant",
+        content: r.restored ? "Redone — reapplied that change." : "Nothing to redo.",
+        attachment: { mode: "agent", kind: "redo" }
+      });
+      refreshStatus();
+      return { handled: true };
+    }
+    case "render": {
+      if (store.highlights.length === 0) {
+        deps.pushMessage({
+          role: "assistant",
+          content: "There are no clips on the timeline yet. Add some clips first, then I can render.",
+          attachment: { mode: "agent", kind: "render_empty" }
+        });
+        return { handled: true };
+      }
+      if (deps.onRender) deps.onRender();
+      deps.pushMessage({
+        role: "assistant",
+        content: "Rendering your video now…",
+        attachment: { mode: "agent", kind: "render" }
+      });
+      return { handled: true };
+    }
+    case "export": {
+      if (!store.renderedBlob) {
+        deps.pushMessage({
+          role: "assistant",
+          content: "Nothing rendered yet. Say \"render\" first, then I can export.",
+          attachment: { mode: "agent", kind: "export_no_render" }
+        });
+        return { handled: true };
+      }
+      if (deps.onExport) {
+        const r = await deps.onExport();
+        deps.pushMessage({
+          role: "assistant",
+          content: r.message,
+          attachment: { mode: "agent", kind: "export" }
+        });
+      }
+      return { handled: true };
+    }
+    default:
+      return { handled: false };
+  }
+}
+
+// ---------------------------------------------------------------------
+// Fast control commands (Phase 1 — legacy)
 // ---------------------------------------------------------------------
 
 /**

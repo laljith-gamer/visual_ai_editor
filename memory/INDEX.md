@@ -2,10 +2,11 @@
 
 > **Read this first.** This folder is the handoff brain for the repo. A fresh AI/helper session should read this file before making changes, then follow the reading order below.
 >
-> Last organized: **2026-06-22 pm** — conversational chat + brain toggle
-> (OpenRouter ↔ Local) + AI-commandable format/source tools indexed
-> (`AI_BRAIN_TOGGLE_AND_TOOL_COMMANDS_2026-06-22.md`). Previous editor-stage
-> scroll-layout + issue #64/#62 notes remain indexed below.
+> Last organized: **2026-07-05** — Comprehensive chronological table of all memory files created.
+> See `MEMORY_FILES_ORGANIZED_BY_DATE.md` for day-by-day breakdown with summaries and files changed.
+>
+> Previous updates: 2026-06-22 late pm (Duration bug fixed, AI intent system added, hardcoded patterns removed).
+> Previous conversational chat + brain toggle + tool commands from earlier pm remain indexed below.
 
 ---
 
@@ -34,7 +35,8 @@ Read these in sequence:
 4. **[ROADMAP.md](./ROADMAP.md)** — larger phased direction.
 5. **[DECISIONS.md](./DECISIONS.md)** — why previous technical/product choices were made.
 6. **[CHANGELOG.md](./CHANGELOG.md)** — detailed historical log of earlier project/memory changes.
-7. Dated context notes below — use these for background after reading the active source-of-truth files.
+7. **[MEMORY_FILES_ORGANIZED_BY_DATE.md](./MEMORY_FILES_ORGANIZED_BY_DATE.md)** — comprehensive chronological table of ALL 45+ memory files (2026-06-14 to 2026-06-22) with summaries, files changed, and key changes organized by date.
+8. Dated context notes below — use these for background after reading the active source-of-truth files.
 
 ---
 
@@ -88,8 +90,17 @@ These files are snapshots. They explain how the project reached the current stat
 
 | File | Use when you need |
 |------|-------------------|
+| `AI_INTENT_SYSTEM_2026-06-22.md` | AI-powered intent understanding with system prompts (NO hardcoded patterns). LLM-based command interpretation with action/target/parameters extraction, confidence scores, reasoning, and multi-step command support. Dev intent tester at `/\_dev/intent-tester` with AI mode toggle. API endpoint `POST /api/agent/intent` task "understand". |
+| `HARDCODED_PATTERNS_REMOVED_2026-06-22.md` | Complete removal of all hardcoded SAMPLES array from intent tester. Pure AI understanding, zero maintenance burden. Intent tester now 100% system prompt-based with no keyword matching, no sample buttons, handles any natural language command. |
 | `AGENTIC_INTENT_LAYER_2026-06-17.md` | Deterministic agent: natural-command parsing (`lib/intent`), agent memory + reinforcement (`lib/agent-memory`), timeline ops (`lib/timeline`), orchestrator + concept/OCR resolution (`lib/agent`, `lib/ocr`), and how it's wired before the cloud planner. |
 | `AGENTIC_INTAKE_LAYER_2026-06-19.md` | Universal agentic INTAKE layer (`lib/agentic-intake/*`): EditBrief + inferBrief + questionEngine + promptCompiler + routeDecision + capabilityMatrix + intake/runIntake. Turns vague/messy requests into guided option-chip questions, builds a stable brief across turns, compiles a clean capability-honest prompt, and feeds it to the local/cloud planner. Conservative integration in `app/editor/page.tsx` (reuses pendingClarify/QuickReplies). No genre tables; no fake effect claims. |
+
+### Bug fixes & optimizations
+
+| File | Use when you need |
+|------|-------------------|
+| `DURATION_BUG_FIX_2026-06-22.md` | Duration bug fix: requests for "3 min" or "5 min" were showing half the time. Root cause: overly loose regex in `parseSourceScope` matched any "all"/"every"/"each" near video words (false positives) + no runtime validation of actual selected video count. Fixed by removing loose fallback regex and adding runtime check for selected sources. Files: `lib/intent/videoPromptInterpreter.ts`, `app/editor/page.tsx`. |
+| `AI_BRAIN_TOGGLE_AND_TOOL_COMMANDS_2026-06-22.md` | Conversational chat + brain toggle (OpenRouter ↔ Local) + AI-commandable format/source tools. Keyword-soup killed generically, WebLLM as PRIMARY brain, brain toggle with self-diagnosing status, conversational lane for greetings/questions, more tools AI-commandable (format/aspect/library/source control). |
 | `PROJECT_HISTORY_RESTORE_2026-06-19.md` | Full project/session restore (`lib/store/projectRestore.ts` pure helpers + `hooks/useEditorStore.ts` `missingSources`/`hydrateRestoredSource`/`canRenderCurrentTimeline`). Persists a hash-keyed `PersistedSourceManifest[]` (NO blobs); restores sources as missing placeholders that keep their ids; a re-upload reconnects by hash to the original id so the saved timeline becomes renderable again. ProjectRail placeholders + banner + richer history; Timeline missing-clip markers; render guard. `Session` extended (schemaVersion 2, backward compatible). |
 | `DYNAMIC_LOCAL_ANALYSIS_2026-06-20.md` | Dynamic progressive LOCAL analysis (`lib/analysis/*` + `lib/timeline/overlapResolver` + `lib/agent/describeResponder`). Replaces the fixed ~240-frame cap with `planAnalysisBudget` (purpose + duration + device tier + cache); compact hash-keyed video memory (`videoMemory`/`videoMemoryStore`, no raw bytes); `clarificationPolicy`; multi-video `globalVideoPlanner` (roles/order/shares, no genre table); ask-by-default overlap resolver. Fixes the describe-intent bug (`visual_question` → honest instant local answer, never the highlight pipeline). Config: `ANALYSIS`/`DEVICE_TIER`/`CLARIFY_POLICY`/`OVERLAP`/`GLOBAL_PLAN`. Foundation tested; only describe fix + dynamic cap wired live (rest = documented follow-ups). |
 | `OFFLINE_FAST_EDITOR_2026-06-18.md` | Offline fast-editor pass: fast control-command routing (`lib/intent/fastCommands`), store redo, agent-memory IndexedDB persistence (`lib/agent-memory/persistence`, `getRelevantMemory`), storage budget+manager (`lib/storage/*`), and explicit transcription errors. |

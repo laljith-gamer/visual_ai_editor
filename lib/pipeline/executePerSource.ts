@@ -36,6 +36,7 @@ import { PLAN_DEFAULTS, REFRAME } from "@/lib/config";
 import { cloudAnalysisEnabled } from "@/lib/ai/cloudAnalysisPreference";
 import { planAnalysisBudget } from "@/lib/analysis/budget";
 import type { AnalysisBudget, DeviceTier } from "@/lib/analysis/types";
+import { captionFrames } from "@/lib/vision/caption";
 
 /**
  * Fallback first-pass frame cap, used ONLY when no dynamic analysis budget is
@@ -463,6 +464,27 @@ async function sampleAndScore(args: {
       : `Sampled ${frames.length} frames from ${sourceName}`,
     Date.now() - tA
   );
+
+  // v3.0 — Optional Semantic Captioning (Phase 2)
+  // Runs if device capability allows it (mid/high tier). If it fails or is disabled, 
+  // it gracefully returns the frames unchanged. The output frames are mutated 
+  // with a `.caption` property on the strided subset.
+  progress.setStatus("captioning", `Understanding footage...`);
+  const tCaption = Date.now();
+  const captionResult = await captionFrames(frames, {
+    tier: capTier,
+    enabled: true, // We default to true; the capability gate inside decides support.
+    onProgress: (done, total) => progress.setProgress(0.20 + (done / Math.max(total, 1)) * 0.05)
+  });
+  
+  if (captionResult.ran) {
+    log.ai(
+      "frames.captioned",
+      { count: captionResult.captionedCount, note: captionResult.note },
+      `Captioned ${captionResult.captionedCount} frames`,
+      Date.now() - tCaption
+    );
+  }
 
   // Scene-analysis backend selection:
   //   - "cloud"        → POST /api/vision/frame (free OpenRouter analysis

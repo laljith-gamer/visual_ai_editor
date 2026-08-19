@@ -75,6 +75,15 @@ export function buildDescribeResponse(state: DescribeState): DescribeResponse {
       lines.push(
         "That's a structural read (scenes, motion, strong windows) — I haven't run on-device captioning, so I can't reliably name the subjects on screen yet."
       );
+    } else {
+      const uniqueCaptions = Array.from(
+        new Set(mem.keyframes.map((k) => (k.caption ?? "").trim()).filter((c) => c.length > 0))
+      );
+      if (uniqueCaptions.length > 0) {
+        lines.push(
+          `I also ran semantic captioning. Subjects on screen include: ${uniqueCaptions.slice(0, 3).join("; ")}.`
+        );
+      }
     }
     const suggestions = [REEL_CHIP, FIND_CHIP];
     if (mem.level < 3) suggestions.unshift("Run a deeper local scan");

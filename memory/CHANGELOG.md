@@ -17,6 +17,59 @@
 
 ---
 
+### 2026-08-19 — AI-first intent router (Phase 1 core)
+- **Change made:** (1) Created a unified AI intent router (`lib/intent/aiRouter.ts`)
+  that replaces ~15 regex/keyword classifiers with a single LLM call returning
+  structured, typed JSON (`AIIntentResult`). (2) Reduced the deterministic regex
+  layer to ONLY 4 bare control patterns (undo/redo/render/export) in
+  `lib/intent/controlCommand.ts`. (3) Enhanced `/api/agent/intent` with a new
+  `"route"` task containing a comprehensive ~120-line system prompt covering ALL
+  editor actions (timeline, creation, multi-source, transitions, format, source
+  control, conversation). (4) Built `lib/intent/aiIntentExecutor.ts` that maps AI
+  intent to store mutations with no regex. (5) Wired AI router as PRIMARY path in
+  `runAgentCommand.ts` — it tries AI first, falls back to legacy regex cascade
+  when AI is unavailable. (6) Fixed pre-existing type errors in the "understand"
+  task. (7) Added 26 unit tests for control command classifier.
+- **Files affected:** `lib/intent/aiIntentTypes.ts` [NEW], `lib/intent/controlCommand.ts` [NEW],
+  `lib/intent/aiRouter.ts` [NEW], `lib/intent/aiIntentExecutor.ts` [NEW],
+  `lib/intent/controlCommand.test.ts` [NEW], `app/api/agent/intent/route.ts` [MODIFIED],
+  `lib/agent/runAgentCommand.ts` [MODIFIED].
+- **Reason:** Remove hardcoded intent routing patterns per `.kiro/steering/no-hardcoded-intent.md`
+  and the user's directive. The AI router handles typos, multi-step commands, context
+  awareness, and topic extraction — things regex can never do well. Legacy regex cascade
+  is preserved as a fallback for backward compatibility when cloud AI is unavailable.
+  Verified: typecheck ✓; `npm test` 659/0 + 26 new; build ✓.
+
+### 2026-08-19 (b) — Simplify handleAgent routing (Phase 1b)
+- **Change made:** Removed 275 lines of hardcoded routing from `app/editor/page.tsx`:
+  (1) Removed the "render anyway" regex.
+  (2) Removed the 100-line `resolveCloudBrainIntent` block.
+  (3) Removed the 30-line `classifyEditorTurn` block.
+  (4) Removed the 100-line conversation-intent guard.
+  (5) Removed the 50-line `tryQuickShortcut` + compromise.js NLP dispatch.
+  (6) Removed `cloudPlanDirect` variable and all downstream guards.
+- **Files affected:** `app/editor/page.tsx` [3940→3665 lines].
+- **Reason:** All superseded by the AI router. Editor page bundle: 107kB→89.4kB (-17.6kB).
+  Verified: typecheck ✓; `npm test` 659/0; build ✓.
+
+### 2026-08-19 (c) — Wire real video understanding (Phase 2)
+- **Change made:** 
+  (1) Wired `captionFrames` into `executePerSource` (inside `sampleAndScore`) so frames get semantically captioned before caching and scoring.
+  (2) Wired `captionFrames` into `runQuickScan` to augment the structural scan with semantic captions.
+  (3) Extended the `FrameScore`, `FrameInput`, `KeyframeMemory`, and `QuickScanFrame` types to natively carry an optional `caption`.
+  (4) Updated `lib/store/cache.ts` to copy captions when converting to `FrameInput`, ensuring the deterministic frame tree persists them into `VideoMemoryIndex`.
+  (5) Enhanced `describeResponder.ts` to surface the real semantic captions directly in the chat when they are present in the cached memory.
+- **Files affected:** `lib/pipeline/executePerSource.ts` [MODIFIED], `lib/analysis/quickScan.ts` [MODIFIED], `lib/analysis/quickScanResult.ts` [MODIFIED], `lib/agent/describeResponder.ts` [MODIFIED], `lib/types.ts` [MODIFIED], `lib/store/cache.ts` [MODIFIED].
+- **Reason:** Upgrades the video memory and agent responses from pure structural metrics (motion/saliency) to true semantic understanding, enabling the agent to honestly answer "describe what's in this video".
+
+### 2026-08-19 (d) — Modularize system prompt (Phase 3)
+- **Change made:** Split the monolithic 1300-line `PLANNER_SYSTEM_PROMPT` in `lib/plan/prompt.ts` into 20 modular sub-prompts in `lib/plan/prompts/`. Created an assembler in `lib/plan/prompts/index.ts` to stitch them back together dynamically.
+- **Files affected:** `lib/plan/prompt.ts` [MODIFIED], `lib/plan/prompts/*` [NEW].
+- **Reason:** Massively improves maintainability of the agent's core instructions. Each intent mode (plan, extract, describe, edit, clarify) now has its own isolated prompt module.
+
+---
+
+
 ### 2026-06-22 (pm) — Conversational chat + brain toggle + more AI-commandable tools
 - **Change made:** (1) Killed keyword-soup generically — adjacent content words
   group into phrases (`buildSubjectPhrases`), no per-word searches, no hardcoded

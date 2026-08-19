@@ -373,6 +373,10 @@ const ALL_SCOPE_RE =
 /**
  * Decide which sources the request targets. "all" wins on explicit
  * all-scope phrasing; otherwise we report ambiguous and let callers default.
+ * 
+ * FIXED: Removed the loose fallback that matched any "all"/"every"/"each"
+ * near video/clip nouns, which caused false positives (e.g., "make a 3 min
+ * video" would incorrectly trigger multi-source mode and split duration).
  */
 export function parseSourceScope(text: string): SourceScopeSlot {
   const t = (text || "").toLowerCase();
@@ -380,10 +384,8 @@ export function parseSourceScope(text: string): SourceScopeSlot {
   if (ALL_SCOPE_RE.test(t)) {
     return { type: "all", reason: "request references all videos/uploads" };
   }
-  // Bare "all"/"every"/"each" near a source/clip noun, looser signal.
-  if (/\b(all|every|each)\b/.test(t) && /\b(video|videos|upload|uploads|source|sources|clip|clips|footage)\b/.test(t)) {
-    return { type: "all", reason: "all/every/each over videos" };
-  }
+  // REMOVED: Bare "all"/"every"/"each" near a source/clip noun fallback.
+  // This was too loose and caused duration-splitting bugs.
   return { type: "ambiguous", reason: "no explicit source scope stated" };
 }
 

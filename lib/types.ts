@@ -109,6 +109,8 @@ export interface FrameScore {
    *  crop position. Defaults to 0.5 (center) when absent. */
   focusX?: number;
   focusY?: number;
+  /** Optional caption populated by the local captioner. */
+  caption?: string;
   /** Per-label raw scores (debug + UI). */
   labels: Record<string, number>;
 }

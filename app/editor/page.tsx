@@ -1108,13 +1108,10 @@ export default function Home() {
       if (!agentOpts?.silent) pushMessage({ role: "user", content: userRequest });
       const previousPlan = useEditorStore.getState().plan;
 
-      // Compiled planner brief + cloud-authoritative flag. Hoisted to the top
-      // so the early cloud-brain block (below) can populate them and the
-      // deterministic interceptors can be skipped when OpenRouter has decided
-      // this is a create/refine turn. `cloudPlanDirect` stays false on the
-      // local/offline path, so that path is completely unchanged.
+      // v3.0 — intakeCompiledPrompt: when the pending-question resolver or
+      // agentic intake builds a clean, structured brief, it sets this so
+      // the local planner uses the compiled prompt instead of raw text.
       let intakeCompiledPrompt: string | undefined;
-      let cloudPlanDirect = false;
 
       // ---- Conversation memory: resolve a back-reference ----------------
       // "do what I said before" / "same as before" / "whatever I asked" →
@@ -1206,148 +1203,22 @@ export default function Home() {
         useEditorStore.getState().setPendingOverlap(null);
       }
 
-      // ---- v2.3 — "render anyway" override -------------------------------
-      // Plain "render" respects the needs_review guard (weak/underfilled
-      // results aren't shipped silently). An explicit "render anyway" forces
-      // it through. Must run before the planner so it never becomes a search.
-      if (/^\s*render\s+(?:it\s+)?(?:anyway|regardless|now|as[\s-]?is)\b[\s.!?]*$/i.test(userRequest)) {
-        handleRenderRef.current?.({ force: true });
-        setBusy(false);
-        return;
-      }
+      // v3.0 — "render anyway" is now handled by the AI router in
+      // tryAgentCommand (classifies as action: "render" with force context).
+      // The tiny controlCommand regex also catches bare "render".
 
-      // ---- OpenRouter-authoritative intent (CLOUD brain only) ------------
-      // When the user has selected the cloud brain, let the OpenRouter model
-      // decide the route FIRST — instead of the deterministic regex/keyword
-      // parsers (which produced keyword soup, the "Which video?" loop, and
-      // mis-parsed subjects). For a create/refine turn we set cloudPlanDirect
-      // so the deterministic interceptors below are skipped and the OpenRouter
-      // planner builds the edit. describe/ask are answered here; everything
-      // else passes through to the existing reliable handlers. When OpenRouter
-      // isn't configured/reachable the resolve call returns null and we fall
-      // straight through to the local/offline pipeline (default, unchanged).
-      if (!agentOpts?.silent && getAIBrain() === "cloud") {
-        try {
-          const stc = useEditorStore.getState();
-          let prevAssistant: string | undefined;
-          for (let i = stc.messages.length - 1; i >= 0; i--) {
-            if (stc.messages[i].role === "assistant") {
-              prevAssistant = stc.messages[i].content;
-              break;
-            }
-          }
-          const pendingQ = stc.pendingClarify?.questions?.[0];
-          const activeSrc =
-            stc.sources.find((s) => s.id === stc.activeSourceId) ?? stc.sources[0];
-          const { resolveCloudBrainIntent, planCloudAction } = await import(
-            "@/lib/agent/cloudBrainRouter"
-          );
-          const cloudIntent = await resolveCloudBrainIntent({
-            userMessage: userRequest,
-            previousAssistantMessage: prevAssistant ?? stc.pendingClarify?.message ?? null,
-            pendingQuestion: pendingQ
-              ? { id: pendingQ.id, prompt: pendingQ.prompt, suggestions: pendingQ.suggestions }
-              : null,
-            pendingActionKind: stc.pendingAction?.kind ?? null,
-            activeTargetSeconds: stc.activeTargetSeconds ?? null,
-            activeSubject: stc.plan?.scenarios?.[0]?.prompt ?? null,
-            timelineClipCount: stc.highlights.length,
-            selectedSourceCount: stc.selectedSourceIds.length,
-            sourceName: activeSrc?.meta.name ?? null
-          });
-          if (cloudIntent) {
-            const action = planCloudAction(cloudIntent);
-            logSession.ai(
-              "cloud.intent.routed",
-              { route: cloudIntent.route, confidence: cloudIntent.confidence, action: action.kind },
-              cloudIntent.reason || `OpenRouter route: ${cloudIntent.route}`
-            );
-            if (action.kind === "describe") {
-              const d = respondDescribe();
-              pushMessage({
-                role: "assistant",
-                content: d.message,
-                attachment: { mode: "describe", suggestions: d.suggestions }
-              });
-              if (d.suggestions.length > 0) {
-                setPendingClarify({
-                  message: d.message,
-                  questions: [
-                    { id: "describe-next", prompt: d.message, suggestions: d.suggestions, kind: "single-choice" }
-                  ]
-                });
-              }
-              setBusy(false);
-              return;
-            }
-            if (action.kind === "ask") {
-              pushMessage({
-                role: "assistant",
-                content: action.message,
-                attachment: { mode: "intake", field: "cloud-clarify" }
-              });
-              setPendingClarify({
-                message: action.message,
-                questions: [
-                  {
-                    id: "cloud-clarify",
-                    prompt: action.message,
-                    suggestions: action.suggestions ?? [],
-                    kind: "single-choice"
-                  }
-                ]
-              });
-              setBusy(false);
-              return;
-            }
-            if (action.kind === "plan") {
-              // OpenRouter owns this create/refine turn: build the clean brief,
-              // skip the deterministic interceptors, and (for a fresh build)
-              // replace the timeline. The planner below runs on OpenRouter.
-              intakeCompiledPrompt = action.compiledPrompt || userRequest;
-              if (action.replace) useEditorStore.getState().setPendingTimelineOp("replace");
-              cloudPlanDirect = true;
-            }
-            // action.kind === "passthrough" → fall through to deterministic.
-          }
-        } catch (err) {
-          logSession.system(
-            "cloud.intent.failed",
-            { message: (err as Error).message },
-            `Cloud intent router errored, falling back: ${(err as Error).message.slice(0, 80)}`
-          );
-        }
-      }
+      // ---- v3.0 — Cloud brain intent + editor turn routing removed ---------
+      // The AI intent router in tryAgentCommand now handles ALL intent
+      // classification: describe, clarify, confirm/cancel, read-only questions,
+      // format changes, source selection, transitions, and chat. The old
+      // resolveCloudBrainIntent + classifyEditorTurn regex layers are
+      // superseded. The tryAgentCommand call below (line ~1457) is the
+      // primary entry point.
+      //
+      // Duration extraction: the AI router extracts durationSeconds in the
+      // structured intent result, which the executor sets via
+      // setActiveTargetSeconds — no regex parsing needed.
 
-      // ---- v2.3 — Editor-first turn routing (BEFORE the planner) ---------
-      // Classify the turn like an editor: confirm/cancel a pending action,
-      // refine/filter the current timeline, trim to the active target,
-      // resolve a scope answer, or ask what moment. Refinement/control turns
-      // must NEVER fall through to a random visual search. Anything this does
-      // not recognise returns "passthrough" and the existing read-only /
-      // describe / agent-command / intake / planner paths run unchanged.
-      if (!cloudPlanDirect) {
-        const st0 = useEditorStore.getState();
-        const turn = classifyEditorTurn(userRequest, {
-          hasTimeline: st0.highlights.length > 0,
-          clipCount: st0.highlights.length,
-          hasPendingAction: Boolean(st0.pendingAction),
-          hasPendingExecution: st0.pendingExecution,
-          hasPendingClarify: Boolean(st0.pendingClarify),
-          sourceCount: st0.sources.length,
-          priorTargetSeconds: st0.activeTargetSeconds
-        });
-
-        // Latest explicit duration always wins — keep the active target in
-        // sync even on passthrough turns.
-        if (turn.durationChanged) setActiveTargetSeconds(turn.latestDurationSeconds);
-
-        const handled = await routeEditorTurn(turn);
-        if (handled) {
-          setBusy(false);
-          return;
-        }
-      }
 
       // v2.1 — Agentic intake may compile a clean, structured brief for this
       // turn. When it does, the local-planner fallback (below) plans from the
@@ -1355,116 +1226,16 @@ export default function Home() {
       // passthrough turns so behaviour is unchanged there.
       // (intakeCompiledPrompt is declared at the top of handleAgent.)
 
-      // ---- Conversation-intent guard (READ-ONLY lane) ---------------
-      // Runs BEFORE every mutation path (agent command parser, transition
-      // parser, agentic intake, quick-shortcut, cloud planner, local
-      // planner, runPipeline). A semantic classifier (grammar-level Layer A
-      // + optional already-loaded local LLM for ambiguous turns) decides if
-      // this turn is a read-only question ("why did you arrange it like
-      // this", "what will happen if I render", "did you change my original
-      // video"). If so we ANSWER from current state and return — never
-      // touching highlights / plan / transitions / selection / status.
-      if (!cloudPlanDirect) try {
-        const intent = await classifyTurn(userRequest);
-        if (intent.kind === "read_only_meta" && intent.confidence >= 0.6) {
-          const answer = await respondReadOnly(intent, userRequest);
-          pushMessage({
-            role: "assistant",
-            content: answer,
-            attachment: { mode: "meta", kind: intent.kind, target: intent.target }
-          });
-          logSession.ai(
-            "meta.explained",
-            { target: intent.target, confidence: intent.confidence, ambiguous: Boolean(intent.ambiguous) },
-            answer.slice(0, 140)
-          );
-          setBusy(false);
-          return;
-        }
 
-        // ---- Describe guard (Core 4 — the reported-bug fix) -----------
-        // "Describe what's in this video" / "what's happening" must NOT be
-        // routed into the highlight pipeline (which used to interpret it as
-        // "build a short" and get stuck in frame scoring). Answer honestly
-        // and instantly from local metadata, offer next steps, and STOP.
-        // No timeline mutation, no analysis, no planner.
-        if (intent.kind === "visual_question" && intent.confidence >= 0.6) {
-          const d = respondDescribe();
-          pushMessage({
-            role: "assistant",
-            content: d.message,
-            attachment: { mode: "describe", suggestions: d.suggestions }
-          });
-          if (d.suggestions.length > 0) {
-            setPendingClarify({
-              message: d.message,
-              questions: [
-                {
-                  id: "describe-next",
-                  prompt: d.message,
-                  suggestions: d.suggestions,
-                  kind: "single-choice"
-                }
-              ]
-            });
-          }
-          logSession.ai(
-            "describe.quick",
-            { needsMore: d.needsMore, confidence: intent.confidence },
-            d.message.slice(0, 140)
-          );
-          setBusy(false);
-          return;
-        }
-
-        // ---- Conversational lane (ChatGPT-style, tool-aware) ----------
-        // Greetings / open questions / anything that isn't a concrete edit
-        // get a NATURAL reply from the selected brain instead of the rigid
-        // "What should I make?". Only fires when an LLM is actually available
-        // (OpenRouter configured, or WebLLM already loaded) — so when there's
-        // no model the deterministic flow below is unchanged. Never mutates.
-        const st = useEditorStore.getState();
-        if (
-          intent.kind === "unknown" &&
-          !st.pendingClarify &&
-          !st.pendingExecution &&
-          !parseFormatCommand(userRequest) &&
-          !parseSourceControlCommand(userRequest) &&
-          !parseReframeIntent(userRequest)
-        ) {
-          const chat = await tryConversationalReply(userRequest);
-          if (chat) {
-            pushMessage({ role: "assistant", content: chat.text });
-            logSession.ai(
-              "chat.reply",
-              { brain: chat.brain },
-              chat.text.slice(0, 140)
-            );
-            setStatus(st.highlights.length > 0 ? "ready" : "idle", undefined);
-            setProgress(0);
-            setBusy(false);
-            return;
-          }
-        }
-      } catch (err) {
-        logSession.system(
-          "meta.path.failed",
-          { message: (err as Error).message, userRequest },
-          `Conversation guard errored, falling back: ${(err as Error).message.slice(0, 80)}`
-        );
-      }
-
-      // ---- Agentic command layer (deterministic-first) ---------------
-      // Resolve natural editing commands (source/clip/range/concept/
-      // placement references, append-vs-replace-vs-move-vs-remove,
-      // reinforcement) into structured timeline operations BEFORE the
-      // older quick-shortcut gate and the cloud planner. It is additive
-      // and reversible: `handled === false` falls straight through to the
-      // unchanged paths below; `needsVisual` means the concept needs the
-      // frame pipeline, so we also fall through to the cloud planner that
-      // builds scenarios + runs it. Lazy-imported so its weight stays out
-      // of the initial /editor bundle.
-      if (!cloudPlanDirect) try {
+      // ---- v3.0 — AI-first agent command layer ---------------------------
+      // The AI intent router in tryAgentCommand now handles ALL intent
+      // classification: read-only questions, describe requests, chat,
+      // format/source commands, transitions, and all editing actions.
+      // The old classifyTurn/respondReadOnly/respondDescribe/conversational
+      // lane blocks have been removed — the AI router is more accurate
+      // because it understands context (pending questions, active subject,
+      // clip count) and handles typos/multi-step commands.
+      try {
         const { tryAgentCommand } = await import("@/lib/agent/runAgentCommand");
         const outcome = await tryAgentCommand(userRequest, {
           pushMessage,
@@ -1491,6 +1262,7 @@ export default function Home() {
         );
       }
 
+
       // ---- v2.4 — Pending-question answer resolver -------------------------
       // When a pendingClarify exists (the intake asked "What should I make?"
       // etc.), the user's NEXT message is first checked as a FREE-TEXT answer
@@ -1498,7 +1270,7 @@ export default function Home() {
       // contextual inference. This prevents the "What should I make?" infinite
       // loop: the user can type naturally instead of picking exact chips.
       // The resolver ONLY fires when there IS a pending question.
-      if (!cloudPlanDirect) try {
+      try {
         const st1 = useEditorStore.getState();
         if (st1.pendingClarify && st1.pendingClarify.questions.length > 0) {
           const { resolvePendingAnswerWithBrain } = await import("@/lib/agentic-intake/llmPendingAnswerResolver");
@@ -1636,7 +1408,7 @@ export default function Home() {
       // ADDITIVE: it only shepherds fresh creation requests, never refinements
       // (a plan already exists), describe/vision asks, or fast commands — all
       // of which it passes straight through to the unchanged paths below.
-      if (!cloudPlanDirect) try {
+      try {
         const { runIntake } = await import("@/lib/agentic-intake/runIntake");
         const intake = runIntake(userRequest, {
           // WebLLM-only build: the on-device text planner is the brain. There
@@ -1685,55 +1457,9 @@ export default function Home() {
         );
       }
 
-      // ---- v1.7.5 — Client-side intent shortcut gate -----------------
-      // Try to dispatch the turn locally before paying for a cloud
-      // planner round-trip. The grammar-based matcher only fires on
-      // high-confidence patterns (>= 0.85); everything else falls
-      // through to the cloud path below. See lib/intent/quickMatch.ts
-      // for the boundary docblock — this does NOT bypass the planner's
-      // "no keyword heuristics" rule because the cloud planner is
-      // unchanged; this is purely a fast path on top of it.
-      //
-      // The intent module (compromise + dispatch + patterns) is
-      // dynamic-imported so the ~140 KB compromise weight lives in a
-      // separate chunk loaded on first chat turn rather than on the
-      // initial /editor visit.
-      if (!cloudPlanDirect) try {
-        const { tryQuickShortcut } = await import("@/lib/intent/dispatch");
-        const fast = await tryQuickShortcut(userRequest, {
-          pushMessage,
-          setStatus,
-          setProgress,
-          setInferred,
-          setHighlights,
-          setPendingClarify,
-          setPendingExecution,
-          handleRunPipeline: () =>
-            void handleRunPipelineRef.current?.(),
-          logSession,
-          sessionId
-        });
-        if (fast) {
-          // The shortcut handled the turn end-to-end. Skip the cloud
-          // call entirely. Activity log already recorded by the
-          // shortcut path.
-          //
-          // v1.7.8 — IMPORTANT: clear the busy flag here. The cloud
-          // path's `finally` block does not run on this early return,
-          // so without this call the chat stayed stuck on "Working…"
-          // indefinitely after every successful quick-shortcut.
-          setBusy(false);
-          return;
-        }
-      } catch (err) {
-        // Quick-match failures are benign; fall through to cloud.
-        // We log so the dev tester / activity drawer surface the issue.
-        logSession.system(
-          "intent.shortcut.failed",
-          { message: (err as Error).message, userRequest },
-          `Shortcut path errored, falling back to cloud: ${(err as Error).message.slice(0, 80)}`
-        );
-      }
+      // v3.0 — tryQuickShortcut removed. The AI router in tryAgentCommand
+      // now handles ALL intent-based dispatch. The compromise.js NLP
+      // library (140KB) is no longer loaded on chat turns.
       // ---- On-device planner (WebLLM-only brain) ---------------------
       // This is a local-first build: the AI brain is the on-device WebLLM
       // planner with a deterministic safety net (no cloud planner). The
@@ -2816,6 +2542,17 @@ export default function Home() {
             active: s.id === composeStore.activeSourceId
           }));
 
+          // FIX: Override sourceScope when only one video is selected/active.
+          // The AI might incorrectly detect "all" from phrases like "make a
+          // 3 min video" (loose word matching), but if the user only has one
+          // video active, they clearly want a single-source plan, not multi-
+          // source compose that splits the duration.
+          const selectedSources = resolvable.filter((r) => r.selected);
+          const effectiveScope = 
+            compose.sourceScope === "all" && selectedSources.length === 1
+              ? "explicit"  // Treat as single-source explicit plan
+              : compose.sourceScope;
+
           // Issue #64 — ALL-SOURCES compose. The server can't enumerate the
           // library, so for sourceScope "all" we fan out across EVERY eligible
           // upload here, splitting the target duration evenly and using either
@@ -2826,7 +2563,7 @@ export default function Home() {
             source: ResolvableSource;
           }>;
           let unresolved: ComposeSourceSelection[];
-          if (compose.sourceScope === "all") {
+          if (effectiveScope === "all") {
             const eligibleAll = resolvable.slice(0, VIDEO_PROMPT.maxComposeSources);
             const srcById = new Map(allSources.map((s) => [s.id, s]));
 

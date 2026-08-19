@@ -46,7 +46,8 @@ function toFrameInput(frame: FrameScore): FrameInput {
   return {
     t: frame.t,
     motion: frame.motion ?? 0,
-    saliency: frame.saliency ?? frame.score ?? 0
+    saliency: frame.saliency ?? frame.score ?? 0,
+    caption: frame.caption
   };
 }
 
