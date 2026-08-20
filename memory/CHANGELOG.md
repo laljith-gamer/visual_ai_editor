@@ -17,6 +17,11 @@
 
 ---
 
+### 2026-08-20 — E2E Test Fixes for Cloud & Local AI Planners
+- **Change made:** Updated `run_e2e_tests.js` to correctly match the updated success string ("Tap Render") for both Cloud AI and Local AI modes. Cleaned up headless Chrome locking issues. Removed missing placeholder icons from `manifest.webmanifest`.
+- **Files affected:** `run_e2e_tests.js` [MODIFIED], `public/manifest.webmanifest` [MODIFIED].
+- **Reason:** The E2E tests were hanging because they were expecting outdated UI strings ("Plan ready") and were facing `ProcessSingleton` locks from improperly exited browser instances. Both cloud and local fallback offline tests now pass.
+
 ### 2026-08-19 — AI-first intent router (Phase 1 core)
 - **Change made:** (1) Created a unified AI intent router (`lib/intent/aiRouter.ts`)
   that replaces ~15 regex/keyword classifiers with a single LLM call returning

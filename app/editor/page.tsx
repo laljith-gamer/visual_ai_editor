@@ -1410,13 +1410,11 @@ export default function Home() {
       // of which it passes straight through to the unchanged paths below.
       try {
         const { runIntake } = await import("@/lib/agentic-intake/runIntake");
+        const isCloud = window.localStorage.getItem("visual_ai_editor:cloud_analysis") === "true";
         const intake = runIntake(userRequest, {
-          // WebLLM-only build: the on-device text planner is the brain. There
-          // is no cloud planner or cloud frame-vision, so describe/"what's in
-          // the video" asks are routed honestly to the unsupported path.
-          cloudAvailable: false,
+          cloudAvailable: isCloud,
           localPlannerAvailable: true,
-          cloudVisionAvailable: false
+          cloudVisionAvailable: isCloud
         });
         if (intake.kind === "clarify") {
           // Ask ONE focused question with option chips. No raw-text echo.

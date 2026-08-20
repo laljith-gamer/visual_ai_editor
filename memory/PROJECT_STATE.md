@@ -4,14 +4,18 @@
 > code) over any other memory file. Keep it current: update it whenever the
 > status, architecture, or "next best step" changes.
 >
-> Last updated: 2026-06-22 late pm (duration bug fix + AI intent system + 
-> hardcoded patterns removed)
+> Last updated: 2026-08-20 (E2E test suite fixed for Cloud & Local AI)
 
 ---
 
-## 0. Latest changes (2026-06-22, late pm) — three major improvements
+## 0. Latest changes (2026-08-20) — E2E Test Suite Fixed
 
-### 1. Duration Bug Fixed
+### 1. E2E Automation for AI Planners Fixed
+- **Status**: The `run_e2e_tests.js` script correctly handles both the `vae.aiBrain === 'cloud'` and `vae.aiBrain === 'local'` test cases without timing out.
+- **Root Cause**: The test script was waiting for outdated UI chat strings ("Plan ready") which have since been changed to "Tap Render" / "Picked" / "Planned this on your device".
+- **Fix**: Updated success criteria in `waitForFunction` logic to expect the real output. Handled locked `playwright-profile` process collisions by forcefully removing them before sequential test runs.
+
+### 2. Duration Bug Fixed
 
 User requests for "3 min" or "5 min" were showing half the time (90s / 150s instead of 180s / 300s). Root cause was two-fold:
 

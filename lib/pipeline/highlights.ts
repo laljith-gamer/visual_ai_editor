@@ -24,6 +24,7 @@ interface BuildArgs {
   videoDuration: number;
   userTier?: UserTier;
   scoreStats?: ScoreStats;
+  unmeasurable?: boolean;
 }
 
 export interface BuildResult {
@@ -382,7 +383,9 @@ function tryOfflineBestParts(
       score: round2(h.score),
       reason: visualInterest
         ? "Picked for visual interest \u2014 motion, framing, and scene changes"
-        : "Visual AI couldn\u2019t load here, so these are the most active moments by motion. Turn on Fast (cloud) analysis or open in a WebGPU browser for true scene matching.",
+        : args.unmeasurable
+          ? "Visual AI couldn\u2019t load here, so these are the most active moments by motion. Turn on Fast (cloud) analysis or open in a WebGPU browser for true scene matching."
+          : "I couldn\u2019t find enough visually matching footage, so I included this active moment to reach your target length.",
       transition: i === 0 ? "none" : args.plan.transition,
       confidence: assessConfidence(h.score)
     })),

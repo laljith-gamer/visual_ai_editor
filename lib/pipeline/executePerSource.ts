@@ -350,7 +350,8 @@ export async function executeForSource(
     plan,
     videoDuration: videoMeta.duration,
     userTier,
-    scoreStats
+    scoreStats,
+    unmeasurable: constraintUnmeasurable
     // NOTE: for a constraint-driven plan the candidate windows here are
     // ALREADY constraint-filtered (the hard gate ran on the frames above), so
     // the duration-fill / spread fallbacks inside buildHighlights can only ever
