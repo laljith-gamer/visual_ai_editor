@@ -32,10 +32,14 @@ import { useEditorStore } from "@/hooks/useEditorStore";
  *  This is a cheap synchronous capability check (mirrors
  *  hooks/useCapability.ts `hasWebGPU`); it does NOT request an adapter. */
 export function isWebGPUAvailable(): boolean {
-  // Hardcoded to false to disable WebLLM on WebGPU during automated tests,
-  // since a 1B parameter model on a software renderer or iGPU takes too long
-  // and times out the test. This forces the deterministic planner fallback.
-  return false;
+  const isTestMode = typeof window !== 'undefined' && window.localStorage.getItem('DISABLE_WEBLLM') === '1';
+  if (isTestMode) return false;
+
+  return (
+    typeof navigator !== "undefined" &&
+    "gpu" in navigator &&
+    Boolean((navigator as Navigator & { gpu?: unknown }).gpu)
+  );
 }
 
 // Singleton engine promise, keyed by the model actually loaded. A second
@@ -62,7 +66,6 @@ export function isLocalEngineReady(): boolean {
 export async function loadLocalEngine(
   model: string = LOCAL_LLM.defaultModel
 ): Promise<MLCEngineInterface> {
-  throw new Error("WebLLM Bypassed for tests!");
   if (!isWebGPUAvailable()) {
     throw new Error("WebGPU is not available in this browser");
   }
