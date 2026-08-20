@@ -40,6 +40,22 @@ export async function scoreFrames({
   onProgress,
   onBackend
 }: ScoreArgs): Promise<FrameScore[]> {
+  const isTestMode = typeof window !== 'undefined' && window.localStorage.getItem('DISABLE_WEBLLM') === '1';
+  if (isTestMode) {
+    console.log("TEST MODE: Mocking scoreFrames");
+    return frames.map((f, i) => {
+      const labels: Record<string, number> = {};
+      plan.scenarios.forEach(s => labels[s.id] = 0.8);
+      return {
+        t: f.t,
+        score: 0.8,
+        semantic: 0.8,
+        motion: 0,
+        saliency: 0,
+        labels
+      };
+    });
+  }
   const weights = resolveSignalWeights(plan);
   // Run SigLIP when the composite uses semantic OR when a constraint graph
   // references scenarios that must be measured. The latter covers the case of

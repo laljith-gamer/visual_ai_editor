@@ -1471,6 +1471,7 @@ export default function Home() {
       const tryLocalPlannerRecovery = async (
         req: string
       ): Promise<LocalRecovery> => {
+        console.log("tryLocalPlannerRecovery: ENTERED");
         const { LOCAL_LLM } = await import("@/lib/local-llm/config");
         if (!LOCAL_LLM.enabled) {
           return { outcome: "none" };
@@ -1486,9 +1487,11 @@ export default function Home() {
             "planning",
             hasGpu ? "Planning on your device\u2026" : "Planning locally\u2026"
           );
+          console.log("tryLocalPlannerRecovery: dynamically importing localPlanner...");
           const { tryLocalPlannerFallback } = await import(
             "@/lib/local-llm/localPlanner"
           );
+          console.log("tryLocalPlannerRecovery: dynamic import complete!");
           const local = await tryLocalPlannerFallback(req, {
             videoDurationSeconds: videoMeta?.duration,
             compiledPrompt: intakeCompiledPrompt,
@@ -1511,7 +1514,8 @@ export default function Home() {
                 plan: local.plan,
                 message: local.message,
                 inferred: [],
-                warnings: []
+                warnings: [],
+                autoRun: true
               }
             };
           }
@@ -1552,6 +1556,7 @@ export default function Home() {
       try {
         setStatus("planning", "Planning on your device\u2026");
         setProgress(0.05);
+        console.log("LINE 1555 REACHED: setStatus was called!");
 
         const history = [...useEditorStore.getState().messages];
         const recentActivity = summarizeRecentActivity();

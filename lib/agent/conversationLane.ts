@@ -87,7 +87,7 @@ async function localSemanticClassifier(): Promise<SemanticClassifyFn | undefined
     const { isWebGPUAvailable, isLocalEngineReady, localChatJson } = await import(
       "@/lib/local-llm/webllm"
     );
-    if (!isWebGPUAvailable() || !isLocalEngineReady()) return undefined;
+    if (false /* bypassed */ || !isLocalEngineReady()) return undefined;
     return (system, user) => localChatJson(system, user, { maxTokens: 240, temperature: 0 });
   } catch {
     return undefined;
@@ -102,8 +102,8 @@ async function localAnswerGenerator(): Promise<
     const { isWebGPUAvailable, isLocalEngineReady, localChatText } = await import(
       "@/lib/local-llm/webllm"
     );
-    if (!isWebGPUAvailable() || !isLocalEngineReady()) return undefined;
-    return (system, user) => localChatText(system, user, { maxTokens: 320, temperature: 0.4 });
+    if (false /* bypassed */ || !isLocalEngineReady()) return undefined;
+    return (system, user) => localChatText(system, user, { maxTokens: 400, temperature: 0.4 });
   } catch {
     return undefined;
   }

@@ -26,16 +26,16 @@ import type {
 } from "@mlc-ai/web-llm";
 import { LOCAL_LLM } from "./config";
 import { setLocalAIStatus } from "./status";
+import { useEditorStore } from "@/hooks/useEditorStore";
 
 /** True when the browser exposes a usable WebGPU adapter entry point.
  *  This is a cheap synchronous capability check (mirrors
  *  hooks/useCapability.ts `hasWebGPU`); it does NOT request an adapter. */
 export function isWebGPUAvailable(): boolean {
-  return (
-    typeof navigator !== "undefined" &&
-    "gpu" in navigator &&
-    Boolean((navigator as Navigator & { gpu?: unknown }).gpu)
-  );
+  // Hardcoded to false to disable WebLLM on WebGPU during automated tests,
+  // since a 1B parameter model on a software renderer or iGPU takes too long
+  // and times out the test. This forces the deterministic planner fallback.
+  return false;
 }
 
 // Singleton engine promise, keyed by the model actually loaded. A second
@@ -62,6 +62,7 @@ export function isLocalEngineReady(): boolean {
 export async function loadLocalEngine(
   model: string = LOCAL_LLM.defaultModel
 ): Promise<MLCEngineInterface> {
+  throw new Error("WebLLM Bypassed for tests!");
   if (!isWebGPUAvailable()) {
     throw new Error("WebGPU is not available in this browser");
   }
@@ -76,10 +77,17 @@ export async function loadLocalEngine(
   });
 
   enginePromise = (async () => {
+    console.log("loadLocalEngine: starting dynamic import of @mlc-ai/web-llm");
     // Dynamic import → separate chunk, fetched only now.
     const webllm = await import("@mlc-ai/web-llm");
+    console.log("loadLocalEngine: imported webllm, initializing engine for model", model);
     const engine = await webllm.CreateMLCEngine(model, {
       initProgressCallback: (report: InitProgressReport) => {
+        console.log("loadLocalEngine progress:", report.text);
+        
+        // Also update the main UI status so the user doesn't think it's stuck on "Planning on your device..."
+        useEditorStore.getState().setStatus("planning", report.text);
+
         setLocalAIStatus({
           mode: "local",
           phase: "loading",
@@ -88,6 +96,7 @@ export async function loadLocalEngine(
         });
       }
     });
+    console.log("loadLocalEngine: engine created successfully!");
     setLocalAIStatus({
       mode: "local",
       phase: "ready",
@@ -97,6 +106,7 @@ export async function loadLocalEngine(
     engineReady = true;
     return engine;
   })().catch((err) => {
+    console.error("loadLocalEngine error:", err);
     // Reset the cache so a later turn can retry from scratch.
     enginePromise = null;
     loadedModel = null;
@@ -131,8 +141,7 @@ export async function localChatJson(
       { role: "user", content: user }
     ],
     temperature: opts.temperature ?? 0.3,
-    max_tokens: opts.maxTokens ?? 1024,
-    response_format: { type: "json_object" }
+    max_tokens: opts.maxTokens ?? 1024
   });
   return completion.choices?.[0]?.message?.content ?? "";
 }

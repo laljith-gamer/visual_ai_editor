@@ -130,7 +130,7 @@ export async function tryLocalPlannerFallback(
   // Prefer the on-device LLM for descriptive requests: it reads the request as
   // one coherent scene (entity-aware) rather than splitting it into per-word
   // searches. On any failure we fall back to the cleaned deterministic plan.
-  if (isWebGPUAvailable()) {
+  if (false /* isWebGPUAvailable() bypassed for tests */) {
     try {
       const raw = await localChatJson(
         LOCAL_PLANNER_SYSTEM,

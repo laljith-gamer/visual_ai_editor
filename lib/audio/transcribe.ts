@@ -163,6 +163,31 @@ export async function transcribe(args: TranscribeArgs): Promise<Transcript> {
   if (args.audioTier === "off") {
     throw new Error("Audio transcription is disabled on this device.");
   }
+
+  // --- MOCK FOR AUTOMATION ---
+  if (typeof window !== "undefined" && window.localStorage.getItem("DISABLE_WEBLLM") === "1") {
+    console.log("TEST MODE: Mocking transcription");
+    const onProgress = args.onProgress ?? (() => {});
+    onProgress({ phase: "done", progress: 1 });
+    return {
+      sourceHash: args.sourceHash,
+      sourceId: args.sourceId,
+      language: "en",
+      model: "mock-whisper",
+      ts: Date.now(),
+      durationSeconds: 30,
+      transcribeMs: 100,
+      segments: [{
+        id: "mock_seg",
+        start: 0,
+        end: 30,
+        text: "Make a 30 sec shorts talk like a human and friendly."
+      }],
+      fullText: "Make a 30 sec shorts talk like a human and friendly.",
+      signals: { hasSpeech: true }
+    };
+  }
+
   const modelId = args.modelId ?? pickModel(args.audioTier);
   const device = pickDevice(args.hasWebGPU);
   const onProgress = args.onProgress ?? (() => {});

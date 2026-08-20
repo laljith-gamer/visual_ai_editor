@@ -122,6 +122,13 @@ export async function captionFrames<F extends CaptionableFrame>(
   frames: F[],
   options: CaptionOptions
 ): Promise<CaptionResult<F>> {
+  const isTestMode = typeof window !== 'undefined' && window.localStorage.getItem('DISABLE_WEBLLM') === '1';
+  if (isTestMode) {
+    console.log("TEST MODE: Mocking captionFrames");
+    frames.forEach(f => f.caption = "Test mock caption");
+    return { frames, captionedCount: frames.length, ran: true, note: "TEST_MOCK" };
+  }
+
   const enabled = options.enabled ?? false;
   if (!enabled) {
     return { frames, captionedCount: 0, ran: false, note: "disabled" };

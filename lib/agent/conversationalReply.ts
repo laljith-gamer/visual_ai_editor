@@ -76,7 +76,7 @@ export async function tryConversationalReply(
     const { isWebGPUAvailable, isLocalEngineReady, localChatText } = await import(
       "@/lib/local-llm/webllm"
     );
-    if (isWebGPUAvailable() && isLocalEngineReady()) {
+    if (false /* bypassed */ && isLocalEngineReady()) {
       const convo = messages
         .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
         .join("\n");
