@@ -85,7 +85,7 @@ const LEAD =
 // Verbs that, when a sentence LEADS with them, signal a command (mutate /
 // create / control) rather than a question about the past.
 const EDIT_VERB =
-  "(add|append|insert|put|place|remove|delete|drop|cut|trim|shorten|lengthen|extend|crop|replace|swap|move|reorder|rearrange|change|set|fix|adjust|tweak|mute|unmute|reverse|split|merge|combine|duplicate|speed|slow|apply|turn|convert|flip|rotate|zoom|colou?r|grade|caption|subtitle|overlay|stitch|join|concat|loop|fade|highlight)";
+  "(add|append|insert|put|place|remove|delete|drop|cut|trim|shorten|lengthen|extend|crop|replace|swap|move|reorder|rearrange|change|set|fix|adjust|tweak|mute|unmute|reverse|split|merge|combine|duplicate|speed|slow|apply|turn|convert|flip|rotate|zoom|colou?r|grade|caption|subtitle|overlay|stitch|join|concat|loop|fade|highlight|find|extract|get|show|search|read|scan)";
 const CREATE_VERB = "(make|create|build|generate|produce|compose|assemble|craft)";
 const CONTROL_VERB =
   "(render|export|download|save|undo|redo|play|pause|stop|preview|confirm|cancel|reset|clear)";
