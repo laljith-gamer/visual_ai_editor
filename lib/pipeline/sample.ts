@@ -105,6 +105,10 @@ export async function probeVideo(
   });
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error("No video track found in source");
+  
+  if (track.codec.toLowerCase().includes('prores') || track.codec.toLowerCase().includes('apch')) {
+    throw new Error("ProRes video is not supported by web browsers. Please convert it to MP4 (H.264) before uploading.");
+  }
   const duration = await input.computeDuration();
   return {
     duration,

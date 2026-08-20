@@ -368,7 +368,7 @@ export const SECURITY_HEADERS = {
     "img-src 'self' data: blob: https:; " +
     "font-src 'self' data:; " +
     "media-src 'self' blob:; " +
-    "connect-src 'self' https://*.googleapis.com https://*.groq.com https://huggingface.co https://*.huggingface.co https://raw.githubusercontent.com https://unpkg.com https://cdn.jsdelivr.net; " +
+    "connect-src 'self' https://*.googleapis.com https://*.groq.com https://huggingface.co https://*.huggingface.co https://*.xethub.hf.co https://*.cdn.hf.co https://*.aws.cdn.hf.co https://cdn-lfs.hf.co https://*.hf.co https://raw.githubusercontent.com https://unpkg.com https://cdn.jsdelivr.net; " +
     "worker-src 'self' blob:; " +
     "frame-ancestors 'none'; " +
     "base-uri 'self'; " +
