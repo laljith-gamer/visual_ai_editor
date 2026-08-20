@@ -52,3 +52,7 @@ non-trivial change.**
 > If this file is extended in the future, keep this "Project Memory
 > Instructions" section intact and append new sections below it rather than
 > replacing it.
+
+## Graphify Rule
+
+- **Always use graphify**: Whenever you need to investigate the codebase, understand architecture, find file relationships, or answer any question about project context, you MUST treat it as a `/graphify` query first. Do not blindly search or read random files without consulting the graph if `graphify-out/graph.json` exists.
