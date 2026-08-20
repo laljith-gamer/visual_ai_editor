@@ -48,3 +48,11 @@ logs
 # temporary files
 tmp/
 .tmp/
+
+# Local automation and debug artifacts
+graphify-out/
+playwright-profile/
+automate_*.js
+scratch_test.ts
+*.mp4
+yt-dlp.exe
